@@ -29,15 +29,19 @@ export default function FilterPanel({
   const handleTextChange = (field) => (e) => onFiltersChange({ ...filters, [field]: e.target.value });
   const handleArrayChange = (field) => (_, newValue) => onFiltersChange({ ...filters, [field]: newValue });
 
-  const renderCheckboxOption = (props, option, { selected }) => (
-    <li {...props} style={{ padding: '2px 8px' }}>
-      <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
-      <ListItemText 
-        primary={option?.label ?? option} 
-        primaryTypographyProps={{ fontSize: 13 }} 
-      />
-    </li>
-  );
+  const renderCheckboxOption = (props, option, { selected }) => {
+    // Выдёргиваем item, чтобы он не попал в DOM
+    const { item, ...restProps } = props;
+    return (
+      <li {...restProps} style={{ padding: '2px 8px' }}>
+        <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
+        <ListItemText 
+          primary={option?.label ?? option} 
+          primaryTypographyProps={{ fontSize: 13 }} 
+        />
+      </li>
+    );
+  };
 
   const filterKeys = visibleFilters || Object.keys(filterOptions);
 
@@ -55,56 +59,82 @@ export default function FilterPanel({
       {/* Строка фильтров */}
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
 
+        {/* Годы и месяцы — один проход */}
         {extraFilters.map((filter) => {
+          // Год
           if (filter.type === 'year') {
             return (
-              <TextField key={filter.field} label={filter.label} size="small" type="number"
-                value={filters[filter.field] || ''} onChange={handleTextChange(filter.field)}
-                sx={{ width: 90 }} slotProps={{ htmlInput: { min: 2018, max: 2030 } }} />
+              <TextField 
+                key={filter.field} 
+                label={filter.label} 
+                size="small" 
+                type="number"
+                value={filters[filter.field] || ''} 
+                onChange={handleTextChange(filter.field)}
+                sx={{ width: 90 }} 
+                slotProps={{ htmlInput: { min: 2018, max: 2030 } }} 
+              />
             );
           }
+
+          // Месяцы
+          if (filter.type === 'months') {
+            const selectedMonths = filters[filter.field] || [];
+            const monthOptions = filter.options || DEFAULT_MONTH_OPTIONS;
+            
+            const monthDisplayText = selectedMonths.length === 0 
+              ? '' 
+              : selectedMonths.length === 1 
+                ? monthOptions.find(m => m.value === selectedMonths[0])?.label || ''
+                : `Выбрано: ${selectedMonths.length}`;
+
+            return (
+              <Autocomplete 
+                key={filter.field} 
+                multiple 
+                disableCloseOnSelect 
+                size="small"
+                options={monthOptions}
+                getOptionLabel={(opt) => opt.label}
+                isOptionEqualToValue={(opt, val) => opt.value === val?.value}
+                value={monthOptions.filter(m => selectedMonths.includes(m.value))}
+                onChange={(_, newVal) => {
+                  const values = newVal.map(v => v.value);
+                  onFiltersChange({ ...filters, [filter.field]: values });
+                }}
+                renderTags={() => null}
+                renderOption={renderCheckboxOption}
+                renderInput={(params) => (
+                  <TextField 
+                    {...params} 
+                    label={filter.label} 
+                    placeholder={monthDisplayText}
+                    InputLabelProps={{ shrink: true }} 
+                  />
+                )}
+                slotProps={{ 
+                  listbox: { style: { maxHeight: 300 } }, 
+                  paper: { sx: { minWidth: 300 } } 
+                }}
+                sx={{ minWidth: 170, '& .MuiAutocomplete-tag': { display: 'none' } }} 
+              />
+            );
+          }
+
           return null;
         })}
 
-        {extraFilters.map((filter) => {
-          if (filter.type !== 'months') return null;
-          const selectedMonths = filters[filter.field] || [];
-          const monthOptions = filter.options || DEFAULT_MONTH_OPTIONS;
-          
-          const monthDisplayText = selectedMonths.length === 0 
-            ? '' 
-            : selectedMonths.length === 1 
-              ? monthOptions.find(m => m.value === selectedMonths[0])?.label || ''
-              : `Выбрано: ${selectedMonths.length}`;
-
-          return (
-            <Autocomplete key={filter.field} multiple disableCloseOnSelect size="small"
-              options={monthOptions}
-              getOptionLabel={(opt) => opt.label}
-              isOptionEqualToValue={(opt, val) => opt.value === val?.value}
-              value={monthOptions.filter(m => selectedMonths.includes(m.value))}
-              onChange={(_, newVal) => handleArrayChange(filter.field)(null, newVal.map(v => v.value))}
-              renderTags={() => null}
-              renderOption={renderCheckboxOption}
-              renderInput={(params) => (
-                <TextField 
-                  {...params} 
-                  label={filter.label} 
-                  placeholder={monthDisplayText}
-                  InputLabelProps={{ shrink: true }} 
-                />
-              )}
-              slotProps={{ listbox: { style: { maxHeight: 300 } }, paper: { sx: { minWidth: 300 } } }}
-              sx={{ minWidth: 170, '& .MuiAutocomplete-tag': { display: 'none' } }} />
-          );
-        })}
-
+        {/* Остальные фильтры */}
         {filterKeys.map((key) => {
           const options = filterOptions[key];
           if (!options || options.length === 0) return null;
 
           const selected = filters[key] || [];
-          const displayText = selected.length === 0 ? '' : selected.length === 1 ? selected[0] : `Выбрано: ${selected.length}`;
+          const displayText = selected.length === 0 
+            ? '' 
+            : selected.length === 1 
+              ? selected[0] 
+              : `Выбрано: ${selected.length}`;
 
           return (
             <Autocomplete key={key} multiple disableCloseOnSelect size="small"
@@ -127,7 +157,7 @@ export default function FilterPanel({
         })}
       </Stack>
 
-      {/* Кнопки — отдельная строка, прижаты влево */}
+      {/* Кнопки */}
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         <Button variant="contained" onClick={onSearch} disabled={loading} size="small">
           {loading ? '...' : 'Применить'}
@@ -138,7 +168,13 @@ export default function FilterPanel({
 
         {onPersistChange && (
           <FormControlLabel
-            control={<Checkbox size="small" checked={persistFilters} onChange={(e) => onPersistChange(e.target.checked)} />}
+            control={
+              <Checkbox 
+                size="small" 
+                checked={persistFilters} 
+                onChange={(e) => onPersistChange(e.target.checked)} 
+              />
+            }
             label="Сохранять" 
             sx={{ ml: 1, '& .MuiTypography-root': { fontSize: 13 } }} 
           />

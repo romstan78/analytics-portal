@@ -18,7 +18,9 @@ export function usePromoFilters(initialFilters, storageKey, persistFlagKey) {
   });
 
   const [appliedFilters, setAppliedFilters] = useState(filters);
-  const [persistFilters, setPersistFilters] = useState(() => localStorage.getItem(persistFlagKey) === 'true');
+  const [persistFilters, setPersistFilters] = useState(
+    () => localStorage.getItem(persistFlagKey) === 'true'
+  );
   const debounceRef = useRef(null);
 
   // Загрузка метаданных
@@ -49,8 +51,11 @@ export function usePromoFilters(initialFilters, storageKey, persistFlagKey) {
 
   const handleSearch = useCallback(() => {
     setAppliedFilters({ ...filters });
-    if (persistFilters) sessionStorage.setItem(storageKey, JSON.stringify(filters));
-  }, [filters, persistFilters, storageKey]);
+    // Если галочка включена — сохраняем фильтры в sessionStorage
+    if (localStorage.getItem(persistFlagKey) === 'true') {
+      sessionStorage.setItem(storageKey, JSON.stringify(filters));
+    }
+  }, [filters, persistFlagKey, storageKey]);
 
   const handleReset = useCallback(() => {
     const empty = { ...initialFilters };
@@ -62,7 +67,13 @@ export function usePromoFilters(initialFilters, storageKey, persistFlagKey) {
   const handlePersistChange = useCallback((checked) => {
     setPersistFilters(checked);
     localStorage.setItem(persistFlagKey, String(checked));
-  }, [persistFlagKey]);
+    if (checked) {
+      // Сразу сохраняем текущие фильтры при включении
+      sessionStorage.setItem(storageKey, JSON.stringify(filters));
+    } else {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [persistFlagKey, storageKey, filters]);
 
   return {
     meta, filters, setFilters, appliedFilters,

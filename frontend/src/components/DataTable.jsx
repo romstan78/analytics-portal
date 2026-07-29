@@ -15,7 +15,7 @@ export default function DataTable({
   exportFileName = 'export', onDataLoaded = null, 
   onRowClick = null, refreshKey 
 }) {
-  const [rows, setRows] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const filtersKey = JSON.stringify(filters);
@@ -30,7 +30,15 @@ export default function DataTable({
   });
   const apiRef = useRef(null);
 
-  // Фильтрация по поиску (клиентская)
+  // Уникальные ключи: _rowId = `${оригинальный_id}_${индекс}`
+  const rows = useMemo(() => {
+    return rawRows.map((row, idx) => ({
+      ...row,
+      _rowId: `${row.id ?? 'row'}_${idx}`,
+    }));
+  }, [rawRows]);
+
+  // Фильтрация по поиску
   const filteredRows = useMemo(() => {
     if (!searchText.trim()) return rows;
     const lower = searchText.toLowerCase();
@@ -42,10 +50,11 @@ export default function DataTable({
   }, [rows, searchText]);
 
   // Видимые колонки
-  const visibleCols = useMemo(
-    () => columns.filter(c => visibleColumns[c.field] !== false),
-    [columns, visibleColumns]
-  );
+  const visibleCols = useMemo(() => {
+    // _rowId — служебное поле, не показываем
+    const displayCols = columns.filter(c => visibleColumns[c.field] !== false);
+    return displayCols;
+  }, [columns, visibleColumns]);
 
   const toggleColumn = (field) => {
     setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
@@ -84,12 +93,14 @@ export default function DataTable({
           params.set(key, String(value)); 
         } 
       });
-      const url = `${apiUrl}${params.toString() ? '?' + params.toString() : ''}`;
+      const qs = params.toString();
+      const url = `${apiUrl}?all=true${qs ? '&' + qs : ''}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json();
-      setRows(json.data || []);
-      if (onDataLoaded) onDataLoaded(json.data || []);
+      const data = json.data || [];
+      setRawRows(data);
+      if (onDataLoaded) onDataLoaded(data);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }, [apiUrl, filtersKey]);
 
@@ -100,7 +111,7 @@ export default function DataTable({
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
       
-      {/* Свой тулбар */}
+      {/* Тулбар */}
       <Box sx={{ 
         display: 'flex', alignItems: 'center', gap: 1, 
         px: 2, py: 1,
@@ -172,7 +183,8 @@ export default function DataTable({
       <DataGrid 
         apiRef={apiRef}
         rows={filteredRows} 
-        columns={visibleCols} 
+        columns={visibleCols}
+        getRowId={(row) => row._rowId}
         loading={loading} 
         sortingMode="client" 
         disableColumnFilter
@@ -188,9 +200,7 @@ export default function DataTable({
           border: '1px solid #e2e8f0',
           borderTop: 'none',
           borderRadius: '0 0 12px 12px',
-          '& .MuiDataGrid-columnHeaders': { 
-            borderRadius: 0,
-          },
+          '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
           '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
         }} 
       />
