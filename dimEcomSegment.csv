@@ -1,0 +1,23 @@
+﻿названия;уп_руб;сегмент;канал
+qty;уп;OLAP SS;OLAP SS
+qty_AR;уп;Аптека.ру;PURE
+qty_EA;уп;еаптека;PURE
+qty_PLZ;уп;Польза;PURE
+qty_NW;уп;OLAP NW;OLAP NW
+qty_OMNI;уп;OMNI;OMNI
+qty_OZ;уп;ozon;MP
+qty_PMP;уп;Проаптека МП;MP
+qty_ZC;уп;Здравсити;PURE
+NW_wo_ecom;уп;OLAP NW wo Ecom;OLAP NW wo Ecom
+SS_wo_ecom;уп;OLAP SS wo Ecom;OLAP SS wo Ecom
+rub;руб;OLAP SS;OLAP SS
+rub_AR;руб;Аптека.ру;PURE
+rub_PLZ;руб;Польза;PURE
+rub_EA;руб;еаптека;PURE
+rub_NW;руб;OLAP NW;OLAP NW
+rub_OMNI;руб;OMNI;OMNI
+rub_OZ;руб;ozon;MP
+rub_ZC;руб;Здравсити;PURE
+rub_PMP;руб;Проаптека МП;MP
+rub_NW_wo_ecom;руб;OLAP NW wo Ecom;OLAP NW wo Ecom
+rub_SS_wo_ecom;руб;OLAP SS wo Ecom;OLAP SS wo Ecom

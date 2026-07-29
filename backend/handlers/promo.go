@@ -1,0 +1,807 @@
+package handlers
+
+import (
+	"database/sql"
+	"fmt"
+	"math"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"backend/config"
+	"backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ─── Вспомогательные утилиты ────────────────────────────────────────────────
+
+func safeFloat(input map[string]interface{}, key string) float64 {
+	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
+	return val
+}
+
+func safeInt(input map[string]interface{}, key string) int {
+	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
+	return val
+}
+
+func safeString(input map[string]interface{}, key string) string {
+	return fmt.Sprint(input[key])
+}
+
+// calculatePromoFields пересчитывает все производные поля и записывает их в input.
+// Должна вызываться и для INSERT, и для UPDATE.
+func calculatePromoFields(input map[string]interface{}) {
+	ppu := safeFloat(input, "plan_promo_units")
+	cp := safeFloat(input, "contract_price")
+	bu := safeFloat(input, "baseline_units")
+	pir := safeFloat(input, "plan_investments_rub")
+	month := safeInt(input, "month")
+	year := safeInt(input, "year")
+	if year == 0 {
+		year = time.Now().Year()
+	}
+	if month == 0 {
+		month = int(time.Now().Month())
+	}
+
+	// GM: берём из input, иначе тянем из БД, иначе 1
+	gm := safeFloat(input, "gm")
+	if gm == 0 {
+		sku := safeString(input, "sku")
+		var dbGM sql.NullFloat64
+		config.DB.QueryRow(
+			"SELECT TOP 1 gm FROM dbo.tbl_PromoActivities WHERE sku = ? AND gm IS NOT NULL ORDER BY year DESC, month DESC",
+			sku,
+		).Scan(&dbGM)
+		if dbGM.Valid {
+			gm = dbGM.Float64
+		} else {
+			gm = 1
+		}
+	}
+
+	// OLAP-цена и справочники
+	sku := safeString(input, "sku")
+	var keyRegion, top20Segment sql.NullString
+	var olapPrice sql.NullFloat64
+	config.DB.QueryRow(
+		"SELECT TOP 1 key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND key_region IS NOT NULL ORDER BY year DESC, month DESC",
+		sku,
+	).Scan(&keyRegion, &top20Segment, &olapPrice)
+	olap := 0.0
+	if olapPrice.Valid {
+		olap = olapPrice.Float64
+	}
+
+	// ─── Плановые ──────────────────────────────────────────────────────────
+	quarter := int(math.Ceil(float64(month) / 3))
+	plan_promo_rub := ppu * cp
+	plan_promo_uplift_units := ppu - bu
+	plan_promo_uplift_rub := plan_promo_uplift_units * cp
+
+	plan_promo_uplift_pct_units := 0.0
+	if ppu > 0 {
+		plan_promo_uplift_pct_units = (plan_promo_uplift_units / ppu) * 100
+	}
+	plan_promo_uplift_pct_rub := 0.0
+	if plan_promo_rub > 0 {
+		plan_promo_uplift_pct_rub = (plan_promo_uplift_rub / plan_promo_rub) * 100
+	}
+	plan_investments_pct := 0.0
+	if plan_promo_rub > 0 {
+		plan_investments_pct = (pir / plan_promo_rub) * 100
+	}
+	plan_roi := 0.0
+	if pir > 0 {
+		plan_roi = (plan_promo_uplift_rub/pir)*gm*100 - 100
+	}
+	baseline_rub := bu * cp
+
+	// ─── Фактические ───────────────────────────────────────────────────────
+	afu := safeFloat(input, "actual_promo_sales_units")
+	afr := safeFloat(input, "actual_promo_rub")
+	afi := safeFloat(input, "actual_investments")
+	afupl := safeFloat(input, "actual_promo_uplift_units")
+	afupr := safeFloat(input, "actual_promo_uplift_rub")
+	afeu := safeFloat(input, "actual_external_ecom_units")
+	acb := safeFloat(input, "actual_corrected_baseline")
+	ph := safeFloat(input, "promo_pharmacies")
+	if ph == 0 {
+		ph = 1
+	}
+
+	net_promo_uplift_rub := afupr * gm
+	net_promo_uplift_pct := 0.0
+	if afr > 0 {
+		net_promo_uplift_pct = (net_promo_uplift_rub / afr) * 100
+	}
+	actual_investments_pct := 0.0
+	if afr > 0 {
+		actual_investments_pct = (afi / afr) * 100
+	}
+	actual_roi := 0.0
+	if afi > 0 {
+		actual_roi = (afupr/afi)*gm*100 - 100
+	}
+
+	actual_promo_rub_wo_ecom := afr - (afeu * cp)
+	actual_promo_uplift_units_wo_ecom := afupl - afeu
+	actual_promo_uplift_rub_wo_ecom := actual_promo_uplift_units_wo_ecom * cp
+	net_promo_uplift_rub_wo_ecom := actual_promo_uplift_rub_wo_ecom * gm
+	net_promo_uplift_pct_wo_ecom := 0.0
+	if actual_promo_rub_wo_ecom > 0 {
+		net_promo_uplift_pct_wo_ecom = (net_promo_uplift_rub_wo_ecom / actual_promo_rub_wo_ecom) * 100
+	}
+	actual_investments_pct_wo_ecom := 0.0
+	if actual_promo_rub_wo_ecom > 0 {
+		actual_investments_pct_wo_ecom = (afi / actual_promo_rub_wo_ecom) * 100
+	}
+	actual_roi_wo_ecom := 0.0
+	if afi > 0 {
+		actual_roi_wo_ecom = (actual_promo_uplift_rub_wo_ecom/afi)*gm*100 - 100
+	}
+
+	plan_vs_fact_rub := 0.0
+	if plan_promo_rub > 0 {
+		plan_vs_fact_rub = (afr / plan_promo_rub) * 100
+	}
+	plan_vs_fact_investments := 0.0
+	if pir > 0 {
+		plan_vs_fact_investments = (afi / pir) * 100
+	}
+
+	turnover_per_point := acb / ph
+	turnover_per_point_promo := afu / ph
+
+	plan_promo_cip_olap := ppu * olap
+	fact_promo_cip_olap := afu * olap
+	plan_promo_uplift_cip_olap := plan_promo_uplift_units * olap
+	fact_promo_uplift_cip_olap := afupl * olap
+
+	promoDate := fmt.Sprintf("%d-%02d-01", year, month)
+
+	// ─── Запись в input ────────────────────────────────────────────────────
+	input["year"] = year
+	input["month"] = month
+	input["quarter"] = quarter
+	input["gm"] = gm
+	input["plan_promo_rub"] = plan_promo_rub
+	input["plan_promo_uplift_units"] = plan_promo_uplift_units
+	input["plan_promo_uplift_rub"] = plan_promo_uplift_rub
+	input["plan_promo_uplift_pct_units"] = plan_promo_uplift_pct_units
+	input["plan_promo_uplift_pct_rub"] = plan_promo_uplift_pct_rub
+	input["plan_investments_pct"] = plan_investments_pct
+	input["plan_roi"] = plan_roi
+	input["baseline_rub"] = baseline_rub
+	input["actual_promo_rub"] = afr
+	input["actual_promo_uplift_units"] = afupl
+	input["actual_promo_uplift_rub"] = afupr
+	input["actual_roi"] = actual_roi
+	input["net_promo_uplift_rub"] = net_promo_uplift_rub
+	input["net_promo_uplift_pct"] = net_promo_uplift_pct
+	input["actual_investments_pct"] = actual_investments_pct
+	input["actual_promo_rub_wo_ecom"] = actual_promo_rub_wo_ecom
+	input["actual_promo_uplift_units_wo_ecom"] = actual_promo_uplift_units_wo_ecom
+	input["actual_promo_uplift_rub_wo_ecom"] = actual_promo_uplift_rub_wo_ecom
+	input["net_promo_uplift_rub_wo_ecom"] = net_promo_uplift_rub_wo_ecom
+	input["net_promo_uplift_pct_wo_ecom"] = net_promo_uplift_pct_wo_ecom
+	input["actual_investments_pct_wo_ecom"] = actual_investments_pct_wo_ecom
+	input["actual_roi_wo_ecom"] = actual_roi_wo_ecom
+	input["plan_vs_fact_rub"] = plan_vs_fact_rub
+	input["plan_vs_fact_investments"] = plan_vs_fact_investments
+	input["turnover_per_point"] = turnover_per_point
+	input["turnover_per_point_promo"] = turnover_per_point_promo
+	input["plan_promo_cip_olap"] = plan_promo_cip_olap
+	input["fact_promo_cip_olap"] = fact_promo_cip_olap
+	input["plan_promo_uplift_cip_olap"] = plan_promo_uplift_cip_olap
+	input["fact_promo_uplift_cip_olap"] = fact_promo_uplift_cip_olap
+	input["date"] = promoDate
+
+	if keyRegion.Valid {
+		input["key_region"] = keyRegion.String
+	}
+	if top20Segment.Valid {
+		input["top20_segment"] = top20Segment.String
+	}
+	input["olap_price"] = olap
+}
+
+// ─── Обработчики ────────────────────────────────────────────────────────────
+
+func GetPromoFilters(c *gin.Context) {
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	kams := c.QueryArray("kam")
+	brands := c.QueryArray("brand")
+	skus := c.QueryArray("sku")
+	networks := c.QueryArray("network_name")
+	mechanics := c.QueryArray("mechanics")
+	statuses := c.QueryArray("status")
+
+	baseWhere := "WHERE 1=1"
+	baseArgs := []interface{}{}
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			baseWhere += " AND year >= ?"
+			baseArgs = append(baseArgs, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			baseWhere += " AND year <= ?"
+			baseArgs = append(baseArgs, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				baseArgs = append(baseArgs, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			baseWhere += " AND month IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	addFilter := func(col string, values []string) (string, []interface{}) {
+		if len(values) == 0 {
+			return "", nil
+		}
+		placeholders := make([]string, 0, len(values))
+		newArgs := []interface{}{}
+		for _, v := range values {
+			if v != "" {
+				placeholders = append(placeholders, "?")
+				newArgs = append(newArgs, v)
+			}
+		}
+		if len(placeholders) > 0 {
+			return " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")", newArgs
+		}
+		return "", nil
+	}
+
+	mainFilters := map[string][]string{
+		"kam": kams, "brand_as": brands, "sku": skus,
+		"network_name": networks, "mechanics": mechanics, "status": statuses,
+	}
+
+	getDistinctMain := func(col string, excludeFilter string) []string {
+		where := baseWhere
+		args := make([]interface{}, len(baseArgs))
+		copy(args, baseArgs)
+		for filterCol, values := range mainFilters {
+			if filterCol != excludeFilter {
+				cond, newArgs := addFilter(filterCol, values)
+				if cond != "" {
+					where += cond
+					args = append(args, newArgs...)
+				}
+			}
+		}
+		query := "SELECT DISTINCT " + col + " FROM dbo.tbl_PromoActivities " + where + " AND " + col + " IS NOT NULL ORDER BY " + col
+		rows, e := config.DB.Query(query, args...)
+		if e != nil {
+			return []string{}
+		}
+		defer rows.Close()
+		var vals []string
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
+				vals = append(vals, v.String)
+			}
+		}
+		return vals
+	}
+
+	getDistinctChannel := func() []string {
+		where := baseWhere
+		args := make([]interface{}, len(baseArgs))
+		copy(args, baseArgs)
+		for filterCol, values := range mainFilters {
+			cond, newArgs := addFilter("p."+filterCol, values)
+			if cond != "" {
+				where += cond
+				args = append(args, newArgs...)
+			}
+		}
+		query := "SELECT DISTINCT m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics " + where + " AND m.channel IS NOT NULL ORDER BY m.channel"
+		rows, e := config.DB.Query(query, args...)
+		if e != nil {
+			return []string{}
+		}
+		defer rows.Close()
+		var vals []string
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
+				vals = append(vals, v.String)
+			}
+		}
+		return vals
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"kam":          getDistinctMain("kam", "kam"),
+		"brand":        getDistinctMain("brand_as", "brand_as"),
+		"sku":          getDistinctMain("sku", "sku"),
+		"network_name": getDistinctMain("network_name", "network_name"),
+		"mechanics":    getDistinctMain("mechanics", "mechanics"),
+		"status":       getDistinctMain("status", "status"),
+		"channel":      getDistinctChannel(),
+	})
+}
+
+func GetPromoData(c *gin.Context) {
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	kams := c.QueryArray("kam")
+	brands := c.QueryArray("brand")
+	skus := c.QueryArray("sku")
+	networks := c.QueryArray("network_name")
+	mechanics := c.QueryArray("mechanics")
+	statuses := c.QueryArray("status")
+	channels := c.QueryArray("channel")
+
+	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE 1=1`
+	args := []interface{}{}
+
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			query += " AND p.year >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			query += " AND p.year <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+	appendFilter("p.kam", kams)
+	appendFilter("p.brand_as", brands)
+	appendFilter("p.sku", skus)
+	appendFilter("p.network_name", networks)
+	appendFilter("p.mechanics", mechanics)
+	appendFilter("p.status", statuses)
+	appendFilter("m.channel", channels)
+
+	all := c.Query("all")
+	if all == "true" {
+		query += " ORDER BY p.year DESC, p.month DESC"
+	} else {
+		offset, limit := 0, 1000
+		if p := c.Query("page"); p != "" {
+			if page, _ := strconv.Atoi(p); page > 0 {
+				if l := c.Query("limit"); l != "" {
+					if lim, _ := strconv.Atoi(l); lim > 0 {
+						offset = (page - 1) * lim
+						limit = lim
+					}
+				}
+			}
+		}
+		query += " ORDER BY p.year DESC, p.month DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+		args = append(args, offset, limit)
+	}
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.PromoRow
+	for rows.Next() {
+		var r models.PromoRow
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.PromoRow{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
+func GetSKUByBrand(c *gin.Context) {
+	brand := c.Query("brand")
+	if brand == "" {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	rows, _ := config.DB.Query("SELECT DISTINCT sku FROM dbo.tbl_PromoActivities WHERE brand_as = ? AND sku IS NOT NULL ORDER BY sku", brand)
+	if rows == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	defer rows.Close()
+	var skus []string
+	for rows.Next() {
+		var s string
+		if rows.Scan(&s) == nil {
+			skus = append(skus, s)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": skus})
+}
+
+func GetLastContractPrice(c *gin.Context) {
+	sku := c.Query("sku")
+	if sku == "" {
+		c.JSON(http.StatusOK, gin.H{"price": nil})
+		return
+	}
+	var price sql.NullFloat64
+	config.DB.QueryRow("SELECT TOP 1 contract_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL ORDER BY year DESC, month DESC", sku).Scan(&price)
+	if !price.Valid {
+		c.JSON(http.StatusOK, gin.H{"price": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"price": price.Float64})
+}
+
+func GetInvestmentTypes(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"data": []string{"GTN", "GTN в ОС", "OPEX", "OPEX Marketing"}})
+}
+
+func GetKAMByNetwork(c *gin.Context) {
+	network := c.Query("network")
+	if network == "" {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	rows, _ := config.DB.Query("SELECT DISTINCT kam FROM dbo.tbl_KAMNetworkMapping WHERE network_name = ? AND kam IS NOT NULL ORDER BY kam", network)
+	if rows == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	defer rows.Close()
+	var kams []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			kams = append(kams, k)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": kams})
+}
+
+func GetLastNetworkData(c *gin.Context) {
+	network := c.Query("network")
+	if network == "" {
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
+	var totalPharmacies sql.NullInt64
+	config.DB.QueryRow("SELECT TOP 1 total_pharmacies FROM dbo.tbl_PromoActivities WHERE network_name = ? AND total_pharmacies IS NOT NULL ORDER BY year DESC, month DESC", network).Scan(&totalPharmacies)
+	c.JSON(http.StatusOK, gin.H{"total_pharmacies": totalPharmacies.Int64})
+}
+
+func GetPromoHistoryFiltered(c *gin.Context) {
+	sku := c.Query("sku")
+	network := c.Query("network_name")
+	mechanics := c.Query("mechanics")
+	yearFrom := c.Query("yearFrom")
+	yearTo := c.Query("yearTo")
+
+	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE 1=1"
+	args := []interface{}{}
+	if sku != "" {
+		query += " AND sku = ?"
+		args = append(args, sku)
+	}
+	if network != "" {
+		query += " AND network_name = ?"
+		args = append(args, network)
+	}
+	if mechanics != "" {
+		query += " AND mechanics = ?"
+		args = append(args, mechanics)
+	}
+	if yearFrom != "" {
+		if y, _ := strconv.Atoi(yearFrom); true {
+			query += " AND year >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearTo != "" {
+		if y, _ := strconv.Atoi(yearTo); true {
+			query += " AND year <= ?"
+			args = append(args, y)
+		}
+	}
+	query += " ORDER BY year DESC, month DESC"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.HistoryRow
+	for rows.Next() {
+		var r models.HistoryRow
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.Year, &r.Month, &r.Mechanics, &r.SKU, &r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits, &r.PlanPromoUpliftUnits, &r.ActualPromoUpliftUnits, &r.PlanROI, &r.ActualROI); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
+func GetSKUInfo(c *gin.Context) {
+	sku := c.Query("sku")
+	if sku == "" {
+		c.JSON(http.StatusOK, gin.H{"brand": nil, "brand_as": nil})
+		return
+	}
+	var brand, brandAs sql.NullString
+	config.DB.QueryRow("SELECT brand, brand_as FROM dbo.tbl_SKUMapping WHERE sku = ?", sku).Scan(&brand, &brandAs)
+	if !brand.Valid {
+		c.JSON(http.StatusOK, gin.H{"brand": nil, "brand_as": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"brand": brand.String, "brand_as": brandAs.String})
+}
+
+func GetLastSKUData(c *gin.Context) {
+	sku := c.Query("sku")
+	if sku == "" {
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
+	var contractPrice, gm, olapPrice sql.NullFloat64
+	var totalPharmacies sql.NullInt64
+	var keyRegion, top20Segment sql.NullString
+
+	err := config.DB.QueryRow(
+		"SELECT TOP 1 contract_price, gm, total_pharmacies, key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL ORDER BY year DESC, month DESC",
+		sku,
+	).Scan(&contractPrice, &gm, &totalPharmacies, &keyRegion, &top20Segment, &olapPrice)
+
+	if err != nil && err != sql.ErrNoRows {
+		config.Logger.Error("get_last_sku_data_failed", "error", err.Error(), "sku", sku)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"contract_price":   contractPrice.Float64,
+		"gm":               gm.Float64,
+		"total_pharmacies": totalPharmacies.Int64,
+		"key_region":       keyRegion.String,
+		"top20_segment":    top20Segment.String,
+		"olap_price":       olapPrice.Float64,
+	})
+}
+
+// ─── Сохранение (INSERT + UPDATE) ──────────────────────────────────────────
+
+var allPromoFields = []string{
+	"network_name", "kam", "brand", "brand_as", "sku",
+	"year", "month", "quarter", "mechanics", "gtn_opex",
+	"baseline_units", "baseline_rub",
+	"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
+	"plan_promo_uplift_units", "plan_promo_uplift_rub",
+	"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
+	"plan_investments_pct", "plan_roi",
+	"contract_price", "gm",
+	"id_directum", "ds_number", "discount_amount",
+	"conditions", "comments", "ecom_segment",
+	"total_pharmacies", "promo_pharmacies",
+	"status", "date",
+	"key_region", "top20_segment", "olap_price",
+	"plan_promo_cip_olap", "fact_promo_cip_olap",
+	"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
+	"actual_promo_sales_units", "actual_investments",
+	"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
+	"actual_external_ecom_units", "actual_corrected_baseline",
+	"agreement1", "agreement2",
+	"net_promo_uplift_rub", "net_promo_uplift_pct",
+	"actual_investments_pct", "actual_roi",
+	"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
+	"actual_promo_uplift_rub_wo_ecom",
+	"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
+	"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
+	"plan_vs_fact_rub", "plan_vs_fact_investments",
+	"turnover_per_point", "turnover_per_point_promo",
+}
+
+// fetchExistingRow возвращает текущие значения строки из БД.
+func fetchExistingRow(id int) (map[string]interface{}, error) {
+	row := config.DB.QueryRow(
+		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ?",
+		id,
+	)
+
+	// Принимаем все поля как sql.Null* и кладём в map
+	existing := make(map[string]interface{})
+	// Строим массив указателей для Scan
+	dest := make([]interface{}, len(allPromoFields))
+	for i := range allPromoFields {
+		var v sql.NullString
+		dest[i] = &v
+	}
+
+	if err := row.Scan(dest...); err != nil {
+		return nil, err
+	}
+
+	for i, field := range allPromoFields {
+		ns := dest[i].(*sql.NullString)
+		if ns.Valid {
+			// Пробуем как float
+			if f, err := strconv.ParseFloat(ns.String, 64); err == nil {
+				existing[field] = f
+			} else if i, err := strconv.Atoi(ns.String); err == nil {
+				existing[field] = i
+			} else {
+				existing[field] = ns.String
+			}
+		}
+	}
+	return existing, nil
+}
+
+func SavePromo(c *gin.Context) {
+	var input map[string]interface{}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// ─── UPDATE ────────────────────────────────────────────────────────────
+	if id, ok := input["id"]; ok && id != nil {
+		idFloat, _ := strconv.ParseFloat(fmt.Sprint(id), 64)
+		idInt := int(idFloat)
+		if idInt > 0 {
+			// 1. Загружаем текущую строку
+			existing, err := fetchExistingRow(idInt)
+			if err != nil {
+				config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Запись не найдена"})
+				return
+			}
+
+			// 2. Сливаем: existing <- input (изменения пользователя)
+			for k, v := range input {
+				if k != "id" {
+					existing[k] = v
+				}
+			}
+
+			// 3. Пересчитываем все производные поля
+			calculatePromoFields(existing)
+
+			// 4. Строим SET-клаузы из всех полей
+			setClauses := []string{}
+			values := []interface{}{}
+			for _, field := range allPromoFields {
+				if val, ok := existing[field]; ok {
+					setClauses = append(setClauses, field+" = ?")
+					values = append(values, val)
+				}
+			}
+			setClauses = append(setClauses, "updated_at = GETDATE()")
+			values = append(values, idInt)
+
+			if _, err := config.DB.Exec(
+				"UPDATE dbo.tbl_PromoActivities SET "+strings.Join(setClauses, ", ")+" WHERE id = ?",
+				values...,
+			); err != nil {
+				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			config.Logger.Info("promo_updated",
+				"id", idInt,
+				"sku", fmt.Sprint(existing["sku"]),
+				"network", fmt.Sprint(existing["network_name"]),
+				"user", "system",
+				"timestamp", time.Now().Format(time.RFC3339),
+			)
+			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": existing})
+			return
+		}
+	}
+
+	// ─── INSERT ────────────────────────────────────────────────────────────
+	calculatePromoFields(input)
+	delete(input, "id")
+
+	placeholders := make([]string, len(allPromoFields))
+	values := make([]interface{}, len(allPromoFields))
+	for i, f := range allPromoFields {
+		placeholders[i] = "?"
+		if val, ok := input[f]; ok {
+			values[i] = val
+		} else {
+			values[i] = nil
+		}
+	}
+
+	result, err := config.DB.Exec(
+		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) VALUES (%s)",
+			strings.Join(allPromoFields, ", "),
+			strings.Join(placeholders, ", ")),
+		values...,
+	)
+	if err != nil {
+		config.Logger.Error("promo_insert_failed",
+			"error", err.Error(),
+			"sku", fmt.Sprint(input["sku"]),
+			"network", fmt.Sprint(input["network_name"]),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	newID, _ := result.LastInsertId()
+	config.Logger.Info("promo_created",
+		"id", newID,
+		"sku", fmt.Sprint(input["sku"]),
+		"network", fmt.Sprint(input["network_name"]),
+		"year", safeInt(input, "year"),
+		"month", safeInt(input, "month"),
+		"plan_units", safeFloat(input, "plan_promo_units"),
+		"plan_rub", safeFloat(input, "plan_promo_rub"),
+		"user", "system",
+		"timestamp", time.Now().Format(time.RFC3339),
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": input})
+}
+
+func DeletePromo(c *gin.Context) {
+	id := c.Param("id")
+
+	if _, err := strconv.Atoi(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный ID"})
+		return
+	}
+
+	if _, err := config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE id = ?", id); err != nil {
+		config.Logger.Error("promo_delete_failed", "id", id, "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
+		return
+	}
+	config.Logger.Info("promo_deleted", "id", id, "user", "system", "timestamp", time.Now().Format(time.RFC3339))
+	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
+}

@@ -1,0 +1,36 @@
+# Файлы с паролями
+.env
+*.env
+
+# Go
+backend/tmp/
+backend/*.exe
+
+# Python
+__pycache__/
+*.pyc
+sync_script/venv/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Файлы с паролями и переменными окружения
+.env
+*.env
+.env.local
+.env.*.local
+
+# Исключение — шаблоны можно коммитить
+!.env.example

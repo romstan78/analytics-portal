@@ -1,0 +1,17 @@
+version: '3.9'
+
+services:
+  mssql_db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: my_local_mssql
+    environment:
+      ACCEPT_EULA: Y
+      SA_PASSWORD: $#Pfchfytw_0378 # Очень важный пароль. Обязательно сложный!
+    ports:
+      - "1433:1433" # MSSQL стандартный порт
+    volumes:
+      - mssql_data_volume:/var/opt/mssql
+    restart: unless-stopped
+
+volumes:
+  mssql_data_volume:
