@@ -727,12 +727,15 @@ func SavePromo(c *gin.Context) {
 			}
 
 			for k, v := range input {
-				if k != "id" && k != "deleted_at" {
+				if k != "id" && k != "deleted_at" && k != "updated_at" {
 					existing[k] = v
 				}
 			}
 
 			calculatePromoFields(existing)
+
+			// Optimistic locking: запоминаем updated_at до изменений
+			oldUpdatedAt := input["updated_at"]
 
 			setClauses := []string{}
 			values := []interface{}{}
@@ -743,14 +746,22 @@ func SavePromo(c *gin.Context) {
 				}
 			}
 			setClauses = append(setClauses, "updated_at = GETDATE()")
-			values = append(values, idInt)
+			values = append(values, idInt, oldUpdatedAt)
 
-			if _, err := config.DB.Exec(
-				"UPDATE dbo.tbl_PromoActivities SET "+strings.Join(setClauses, ", ")+" WHERE id = ?",
+			result, err := config.DB.Exec(
+				"UPDATE dbo.tbl_PromoActivities SET "+strings.Join(setClauses, ", ")+" WHERE id = ? AND updated_at = ?",
 				values...,
-			); err != nil {
+			)
+			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+
+			rowsAffected, _ := result.RowsAffected()
+			if rowsAffected == 0 {
+				config.Logger.Info("promo_update_conflict", "id", idInt)
+				c.JSON(http.StatusConflict, gin.H{"error": "Запись изменена другим пользователем. Обновите страницу."})
 				return
 			}
 

@@ -61,6 +61,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
       id_directum: row.id_directum ?? '',
       ds_number: row.ds_number ?? '',
       status: row.status ?? '',
+      updated_at: row.updated_at ?? null,
     });
     setEditMode(true);
   }, []);
@@ -99,6 +100,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         agreement1: form.agreement1 ?? null,
         agreement2: form.agreement2 ?? null,
         status: form.status,
+        updated_at: form.updated_at,
       };
 
       const result = await promoAPI.save(payload);
@@ -115,7 +117,10 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
       return { success: true, message: '✅ Сохранено' };
     } catch (err) {
-      return { success: false, message: '❌ Ошибка: ' + err.message };
+      if (err.status === 409) {
+        return { success: false, message: '⚠️ ' + err.message };
+      }
+      return { success: false, message: '❌ ' + (err.message || 'Ошибка сохранения') };
     } finally {
       setSaving(false);
     }

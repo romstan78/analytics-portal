@@ -638,3 +638,77 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 		t.Error("Старые записи должны были очиститься")
 	}
 }
+
+func saveTestPromoWithMeta(t *testing.T, router *gin.Engine, sku string) (int, string) {
+	t.Helper()
+	payload := map[string]interface{}{
+		"network_name": "Тест-OPTILOCK", "sku": sku, "year": 2026, "month": 5,
+		"baseline_units": 100, "plan_promo_units": 200, "plan_investments_rub": 10000,
+		"contract_price": 150, "mechanics": "Скидка", "gtn_opex": "GTN",
+		"status": "Планируется",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+
+	if response["message"] != "Created" {
+		t.Fatalf("Не удалось создать тестовое промо: %v", response)
+	}
+
+	id := int(response["id"].(float64))
+
+	// Достаём реальный updated_at из БД
+	var updatedAt string
+	config.DB.QueryRow("SELECT CONVERT(NVARCHAR, updated_at, 121) FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id).Scan(&updatedAt)
+
+	return id, updatedAt
+}
+
+func TestSavePromo_OptimisticLocking(t *testing.T) {
+	router := setupRouter()
+	id, updatedAt := saveTestPromoWithMeta(t, router, "TEST-OPTILOCK-001")
+
+	// Первое обновление — передаём актуальный updated_at (должно пройти)
+	payload1 := map[string]interface{}{
+		"id": id, "status": "Первое изменение",
+		"updated_at": updatedAt,
+	}
+	body1, _ := json.Marshal(payload1)
+	req1, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body1))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	router.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		var errResp map[string]interface{}
+		json.Unmarshal(w1.Body.Bytes(), &errResp)
+		t.Fatalf("Первое обновление должно пройти: %v", errResp)
+	}
+
+	var resp1 map[string]interface{}
+	json.Unmarshal(w1.Body.Bytes(), &resp1)
+	data1 := resp1["data"].(map[string]interface{})
+	newUpdatedAt := data1["updated_at"]
+
+	// Второе обновление с тем же старым updated_at — должно дать 409
+	payload2 := map[string]interface{}{
+		"id": id, "status": "Конфликт",
+		"updated_at": updatedAt, // тот же, что и в первом запросе — уже не актуален
+	}
+	body2, _ := json.Marshal(payload2)
+	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusConflict {
+		t.Errorf("Ожидался 409 Conflict, получен %d. Ответ: %s", w2.Code, w2.Body.String())
+	} else {
+		t.Logf("✅ Optimistic locking работает: первый OK с новым updated_at=%v, второй 409 со старым=%v", newUpdatedAt, updatedAt)
+	}
+}

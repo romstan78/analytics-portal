@@ -217,3 +217,13 @@
 {"time":"2026-07-31T01:48:12.6701+07:00","level":"INFO","msg":"promo_deleted","id":"79340","user":"system","timestamp":"2026-07-31T01:48:12+07:00"}
 {"time":"2026-07-31T01:53:20.48906+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:53:20+07:00"}
 {"time":"2026-07-31T01:56:21.997909+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:56:21+07:00"}
+{"time":"2026-07-31T02:25:09.498488+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T02:25:09+07:00"}
+{"time":"2026-07-31T02:27:01.779146+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T02:27:01+07:00"}
+{"time":"2026-07-31T02:27:04.527709+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T02:27:04+07:00"}
+{"time":"2026-07-31T02:34:37.015739+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T02:34:37.0867+07:00","level":"INFO","msg":"promo_created","id":79341,"sku":"TEST-OPTILOCK-001","network":"Тест-Update","year":2026,"month":5,"plan_units":200,"plan_rub":30000,"user":"system","timestamp":"2026-07-31T02:34:37+07:00"}
+{"time":"2026-07-31T02:34:37.115016+07:00","level":"INFO","msg":"promo_update_conflict","id":79341}
+{"time":"2026-07-31T02:38:33.044838+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T02:38:33.079752+07:00","level":"INFO","msg":"promo_created","id":79342,"sku":"TEST-OPTILOCK-001","network":"Тест-OPTILOCK","year":2026,"month":5,"plan_units":200,"plan_rub":30000,"user":"system","timestamp":"2026-07-31T02:38:33+07:00"}
+{"time":"2026-07-31T02:38:33.117203+07:00","level":"INFO","msg":"promo_updated","id":79342,"sku":"TEST-OPTILOCK-001","network":"Тест-OPTILOCK","user":"system","timestamp":"2026-07-31T02:38:33+07:00"}
+{"time":"2026-07-31T02:38:33.134903+07:00","level":"INFO","msg":"promo_update_conflict","id":79342}

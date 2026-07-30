@@ -49,8 +49,13 @@ export const promoAPI = {
   save: (data) =>
     fetchWithAuth(`${API_BASE}/api/promo/save`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    }).then(r => r.json()),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка сохранения' };
+      return json;
+    }),
 
     delete: (id) =>
       fetchWithAuth(`${API_BASE}/api/promo/${id}`, { method: 'DELETE' }).then(async r => {
