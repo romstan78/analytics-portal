@@ -30,10 +30,9 @@ export default function FilterPanel({
   const handleArrayChange = (field) => (_, newValue) => onFiltersChange({ ...filters, [field]: newValue });
 
   const renderCheckboxOption = (props, option, { selected }) => {
-    // Выдёргиваем item, чтобы он не попал в DOM
-    const { item, ...restProps } = props;
+    const { key, item, ...rest } = props;
     return (
-      <li {...restProps} style={{ padding: '2px 8px' }}>
+      <li key={key} {...rest} style={{ padding: '2px 8px' }}>
         <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
         <ListItemText 
           primary={option?.label ?? option} 

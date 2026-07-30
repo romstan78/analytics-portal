@@ -80,7 +80,6 @@ export default function DataTable({
   const handleExport = async () => {
     setLoading(true);
     try {
-      // Тянем все данные с сервера
       const params = new URLSearchParams();
       params.set('all', 'true');
       Object.entries(filters).forEach(([key, value]) => { 
@@ -91,12 +90,15 @@ export default function DataTable({
         } 
       });
       const url = `${apiUrl}?${params.toString()}`;
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json();
       const data = json.data || [];
 
-      // Строим CSV
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
 
@@ -106,7 +108,6 @@ export default function DataTable({
           let val = row[f];
           if (val == null) return '';
           val = String(val);
-          // Экранируем точку с запятой и кавычки
           if (val.includes(';') || val.includes('"') || val.includes('\n')) {
             val = '"' + val.replace(/"/g, '""') + '"';
           }
@@ -115,7 +116,6 @@ export default function DataTable({
         csv += line + '\n';
       });
 
-      // Скачиваем
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -134,7 +134,6 @@ export default function DataTable({
     setLoading(true); setError(null);
     try {
       const params = new URLSearchParams();
-      // Не шлём all=true — используем пагинацию
       params.set('page', String(paginationModel.page));
       params.set('pageSize', String(paginationModel.pageSize));
       
@@ -146,8 +145,12 @@ export default function DataTable({
         } 
       });
       const qs = params.toString();
-      const url = `${apiUrl}${qs ? '?' + qs : ''}`;
-      const response = await fetch(url);
+      const url = `${apiUrl}?${qs}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json();
       const data = json.data || [];

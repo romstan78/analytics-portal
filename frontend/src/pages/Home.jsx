@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Grid, Card, CardActionArea, CardContent } from '@mui/material';
+import { Box, Typography, Grid, Card, CardActionArea, CardContent, Button } from '@mui/material';
 import { 
   BarChart as BarChartIcon, 
   ListAlt as ListAltIcon, 
@@ -15,56 +15,70 @@ const blocks = [
     path: '/sales-analysis', 
     icon: <BarChartIcon sx={{ fontSize: 36 }} />, 
     desc: 'Динамика продаж по периодам',
-    color: '#6366f1', // Indigo
+    color: '#6366f1',
   },
   { 
     title: 'Реестр сетей', 
     path: '/network-registry', 
     icon: <ListAltIcon sx={{ fontSize: 36 }} />, 
     desc: 'Справочник торговых сетей',
-    color: '#10b981', // Emerald
+    color: '#10b981',
   },
   { 
     title: 'Интернет-продажи', 
     path: '/internet-sales', 
     icon: <CartIcon sx={{ fontSize: 36 }} />, 
     desc: 'Детализация онлайн-заказов',
-    color: '#f59e0b', // Amber
+    color: '#f59e0b',
   },
   { 
     title: 'Оборачиваемость', 
     path: '/turnover', 
     icon: <RefreshIcon sx={{ fontSize: 36 }} />, 
     desc: 'Анализ оборотов запасов',
-    color: '#8b5cf6', // Violet
+    color: '#8b5cf6',
   },
   { 
     title: 'Анализ промо', 
     path: '/promo-analysis', 
     icon: <CampaignIcon sx={{ fontSize: 36 }} />, 
     desc: 'Эффективность промо-акций',
-    color: '#f43f5e', // Rose
+    color: '#f43f5e',
   },
   { 
     title: 'Продажи Like For Like', 
     path: '/like-for-like', 
     icon: <CompareIcon sx={{ fontSize: 36 }} />, 
     desc: 'Сравнение продаж LFL',
-    color: '#0ea5e9', // Sky
+    color: '#0ea5e9',
   },
 ];
 
-export default function Home() {
+export default function Home({ onLogout }) {
   const navigate = useNavigate();
 
   return (
     <Box sx={{ p: { xs: 3, md: 6 }, maxWidth: 1400, mx: 'auto', w: '100%' }}>
-      <Typography variant="h3" gutterBottom sx={{ mb: 1 }}>
-        Аналитический портал
-      </Typography>
-      <Typography variant="subtitle1" color="text.secondary" sx={{ mb: 5 }}>
-        Добро пожаловать. Выберите нужный раздел для начала работы.
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+        <Box>
+          <Typography variant="h3" gutterBottom>
+            Аналитический портал
+          </Typography>
+          <Typography variant="subtitle1" color="text.secondary" sx={{ mb: 5 }}>
+            Добро пожаловать. Выберите нужный раздел для начала работы.
+          </Typography>
+        </Box>
+        {onLogout && (
+          <Button 
+            variant="outlined" 
+            onClick={onLogout} 
+            size="small"
+            sx={{ mt: 1 }}
+          >
+            Выйти ({localStorage.getItem('username')})
+          </Button>
+        )}
+      </Box>
       
       <Grid container spacing={4}>
         {blocks.map((block) => (
@@ -88,7 +102,6 @@ export default function Home() {
                 sx={{ height: '100%', p: 3, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}
               >
                 <CardContent sx={{ textAlign: 'left', p: 0, w: '100%' }}>
-                  {/* Мягкая иконка с фоном */}
                   <Box 
                     sx={{ 
                       width: 64, 
@@ -98,7 +111,7 @@ export default function Home() {
                       display: 'flex', 
                       alignItems: 'center', 
                       justifyContent: 'center',
-                      backgroundColor: `${block.color}15`, // 15 - это hex-прозрачность (около 8%)
+                      backgroundColor: `${block.color}15`,
                       color: block.color,
                     }}
                   >

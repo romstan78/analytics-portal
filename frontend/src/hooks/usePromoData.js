@@ -1,8 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { promoAPI } from '../api/promo';
-
-// promoAPI уже создаёт свой AbortController внутри fetchWithAbort,
-// поэтому переопределяем getData с поддержкой внешнего сигнала.
 
 export function usePromoData(filters, refreshKey) {
   const [rows, setRows] = useState([]);
@@ -11,7 +7,6 @@ export function usePromoData(filters, refreshKey) {
   const abortRef = useRef(null);
 
   const fetchData = useCallback(async () => {
-    // Отменяем предыдущий запрос
     if (abortRef.current) abortRef.current.abort();
 
     const controller = new AbortController();
@@ -21,7 +16,6 @@ export function usePromoData(filters, refreshKey) {
     setError(null);
 
     try {
-      // Используем прямую логику из promoAPI.getData, но со своим сигналом
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
@@ -31,9 +25,15 @@ export function usePromoData(filters, refreshKey) {
         }
       });
 
+      const qs = params.toString();
       const response = await fetch(
-        `http://localhost:8080/api/promo/data?all=true&${params.toString()}`,
-        { signal: controller.signal }
+        `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+        { 
+          signal: controller.signal,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          },
+        }
       );
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

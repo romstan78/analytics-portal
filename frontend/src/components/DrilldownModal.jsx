@@ -44,8 +44,11 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
       if (appliedFilters.segment?.length > 0) appliedFilters.segment.forEach(s => params.append('segment', s));
       if (appliedFilters.channel?.length > 0) appliedFilters.channel.forEach(c => params.append('channel', c));
 
-      const response = await fetch(`${API_BASE}/api/drilldown?${params}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const response = await fetch(`${API_BASE}/api/drilldown?${params}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
       const json = await response.json();
       setData(json.data || []);
     } catch (err) { setError(err.message); } finally { setLoading(false); }

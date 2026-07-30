@@ -8,6 +8,7 @@ import (
 
 	"backend/config"
 	"backend/handlers"
+	"backend/middleware"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,6 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 		limit:    limit,
 		window:   window,
 	}
-	// Фоновая очистка мёртвых IP каждые 5 минут
 	go rl.periodicCleanup(5 * time.Minute)
 	return rl
 }
@@ -41,7 +41,6 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	now := time.Now()
 	cutoff := now.Add(-rl.window)
 
-	// Оставляем только записи внутри окна
 	var valid []time.Time
 	for _, t := range rl.visitors[ip] {
 		if t.After(cutoff) {
@@ -59,7 +58,6 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	return true
 }
 
-// periodicCleanup удаляет IP с пустыми списками.
 func (rl *RateLimiter) periodicCleanup(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -96,36 +94,47 @@ func main() {
 	config.Init()
 	defer config.DB.Close()
 
-	// Rate limiter: 100 запросов в минуту
 	limiter := NewRateLimiter(100, 1*time.Minute)
 
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"http://localhost:5173"},
 		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Content-Type"},
+		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}))
 	r.Use(RateLimitMiddleware(limiter))
 
-	// Интернет-продажи
-	r.GET("/api/data", handlers.GetData)
-	r.GET("/api/filters", handlers.GetFilterOptions)
-	r.GET("/api/drilldown", handlers.GetDrilldown)
+	// ─── Публичный роут (без авторизации) ────────────────────────────────
+	r.POST("/api/auth/login", handlers.Login)
 
-	// Промо
-	r.GET("/api/promo/filters", handlers.GetPromoFilters)
-	r.GET("/api/promo/data", handlers.GetPromoData)
-	r.GET("/api/promo/sku-by-brand", handlers.GetSKUByBrand)
-	r.GET("/api/promo/last-contract-price", handlers.GetLastContractPrice)
-	r.GET("/api/promo/investment-types", handlers.GetInvestmentTypes)
-	r.GET("/api/promo/kam-by-network", handlers.GetKAMByNetwork)
-	r.GET("/api/promo/last-network-data", handlers.GetLastNetworkData)
-	r.GET("/api/promo/history", handlers.GetPromoHistoryFiltered)
-	r.GET("/api/promo/sku-info", handlers.GetSKUInfo)
-	r.GET("/api/promo/last-sku-data", handlers.GetLastSKUData)
-	r.GET("/api/promo/network-geo", handlers.GetNetworkGeoMapping)
-	r.POST("/api/promo/save", handlers.SavePromo)
-	r.DELETE("/api/promo/:id", handlers.DeletePromo)
+	// ─── Защищённые роуты (требуется JWT) ────────────────────────────────
+	api := r.Group("/api")
+	api.Use(middleware.AuthRequired())
+	{
+		// Интернет-продажи
+		api.GET("/data", handlers.GetData)
+		api.GET("/filters", handlers.GetFilterOptions)
+		api.GET("/drilldown", handlers.GetDrilldown)
+
+		// Промо — чтение
+		api.GET("/promo/filters", handlers.GetPromoFilters)
+		api.GET("/promo/data", handlers.GetPromoData)
+		api.GET("/promo/sku-by-brand", handlers.GetSKUByBrand)
+		api.GET("/promo/last-contract-price", handlers.GetLastContractPrice)
+		api.GET("/promo/investment-types", handlers.GetInvestmentTypes)
+		api.GET("/promo/kam-by-network", handlers.GetKAMByNetwork)
+		api.GET("/promo/last-network-data", handlers.GetLastNetworkData)
+		api.GET("/promo/network-geo", handlers.GetNetworkGeoMapping)
+		api.GET("/promo/history", handlers.GetPromoHistoryFiltered)
+		api.GET("/promo/sku-info", handlers.GetSKUInfo)
+		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
+
+		// Промо — запись (agreement1, agreement2, admin)
+		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
+
+		// Промо — удаление (только admin)
+		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)
+	}
 
 	config.Logger.Info("server_starting", "port", "8080")
 	if err := r.Run(":8080"); err != nil {
