@@ -51,7 +51,7 @@ func calculatePromoFields(input map[string]interface{}) {
 		sku := safeString(input, "sku")
 		var dbGM sql.NullFloat64
 		config.DB.QueryRow(
-			"SELECT TOP 1 gm FROM dbo.tbl_PromoActivities WHERE sku = ? AND gm IS NOT NULL ORDER BY year DESC, month DESC",
+			"SELECT TOP 1 gm FROM dbo.tbl_PromoActivities WHERE sku = ? AND gm IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
 			sku,
 		).Scan(&dbGM)
 		if dbGM.Valid {
@@ -82,7 +82,7 @@ func calculatePromoFields(input map[string]interface{}) {
 	// olap_price — из последнего промо по SKU
 	var olapPrice sql.NullFloat64
 	config.DB.QueryRow(
-		"SELECT TOP 1 olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND olap_price IS NOT NULL ORDER BY year DESC, month DESC",
+		"SELECT TOP 1 olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND olap_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
 		sku,
 	).Scan(&olapPrice)
 	olap := 0.0
@@ -229,7 +229,7 @@ func GetPromoFilters(c *gin.Context) {
 	mechanics := c.QueryArray("mechanics")
 	statuses := c.QueryArray("status")
 
-	baseWhere := "WHERE 1=1"
+	baseWhere := "WHERE deleted_at IS NULL"
 	baseArgs := []interface{}{}
 	if yearFromStr != "" {
 		if y, _ := strconv.Atoi(yearFromStr); true {
@@ -358,7 +358,7 @@ func GetPromoData(c *gin.Context) {
 	statuses := c.QueryArray("status")
 	channels := c.QueryArray("channel")
 
-	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE 1=1`
+	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
 	args := []interface{}{}
 
 	if yearFromStr != "" {
@@ -452,7 +452,7 @@ func GetSKUByBrand(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
 	}
-	rows, _ := config.DB.Query("SELECT DISTINCT sku FROM dbo.tbl_PromoActivities WHERE brand_as = ? AND sku IS NOT NULL ORDER BY sku", brand)
+	rows, _ := config.DB.Query("SELECT DISTINCT sku FROM dbo.tbl_PromoActivities WHERE brand_as = ? AND sku IS NOT NULL AND deleted_at IS NULL ORDER BY sku", brand)
 	if rows == nil {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
@@ -475,7 +475,7 @@ func GetLastContractPrice(c *gin.Context) {
 		return
 	}
 	var price sql.NullFloat64
-	config.DB.QueryRow("SELECT TOP 1 contract_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL ORDER BY year DESC, month DESC", sku).Scan(&price)
+	config.DB.QueryRow("SELECT TOP 1 contract_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", sku).Scan(&price)
 	if !price.Valid {
 		c.JSON(http.StatusOK, gin.H{"price": nil})
 		return
@@ -516,7 +516,7 @@ func GetLastNetworkData(c *gin.Context) {
 		return
 	}
 	var totalPharmacies sql.NullInt64
-	config.DB.QueryRow("SELECT TOP 1 total_pharmacies FROM dbo.tbl_PromoActivities WHERE network_name = ? AND total_pharmacies IS NOT NULL ORDER BY year DESC, month DESC", network).Scan(&totalPharmacies)
+	config.DB.QueryRow("SELECT TOP 1 total_pharmacies FROM dbo.tbl_PromoActivities WHERE network_name = ? AND total_pharmacies IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", network).Scan(&totalPharmacies)
 	c.JSON(http.StatusOK, gin.H{"total_pharmacies": totalPharmacies.Int64})
 }
 
@@ -553,7 +553,7 @@ func GetPromoHistoryFiltered(c *gin.Context) {
 	yearFrom := c.Query("yearFrom")
 	yearTo := c.Query("yearTo")
 
-	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE 1=1"
+	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE deleted_at IS NULL"
 	args := []interface{}{}
 	if sku != "" {
 		query += " AND sku = ?"
@@ -625,7 +625,7 @@ func GetLastSKUData(c *gin.Context) {
 	var keyRegion, top20Segment sql.NullString
 
 	err := config.DB.QueryRow(
-		"SELECT TOP 1 contract_price, gm, total_pharmacies, key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL ORDER BY year DESC, month DESC",
+		"SELECT TOP 1 contract_price, gm, total_pharmacies, key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
 		sku,
 	).Scan(&contractPrice, &gm, &totalPharmacies, &keyRegion, &top20Segment, &olapPrice)
 
@@ -677,7 +677,7 @@ var allPromoFields = []string{
 
 func fetchExistingRow(id int) (map[string]interface{}, error) {
 	row := config.DB.QueryRow(
-		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ?",
+		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL",
 		id,
 	)
 
@@ -727,7 +727,7 @@ func SavePromo(c *gin.Context) {
 			}
 
 			for k, v := range input {
-				if k != "id" {
+				if k != "id" && k != "deleted_at" {
 					existing[k] = v
 				}
 			}
@@ -820,11 +820,19 @@ func DeletePromo(c *gin.Context) {
 		return
 	}
 
-	if _, err := config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE id = ?", id); err != nil {
+	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE(), updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", id)
+	if err != nil {
 		config.Logger.Error("promo_delete_failed", "id", id, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
 		return
 	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена или уже удалена"})
+		return
+	}
+
 	config.Logger.Info("promo_deleted", "id", id, "user", "system", "timestamp", time.Now().Format(time.RFC3339))
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }

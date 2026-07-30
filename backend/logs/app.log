@@ -202,3 +202,18 @@
 {"time":"2026-07-31T00:38:09.16766+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
 {"time":"2026-07-31T00:38:09.168946+07:00","level":"INFO","msg":"server_starting","port":"8080"}
 {"time":"2026-07-31T00:54:34.614963+07:00","level":"INFO","msg":"promo_deleted","id":"78340","user":"system","timestamp":"2026-07-31T00:54:34+07:00"}
+{"time":"2026-07-31T01:24:46.497897+07:00","level":"INFO","msg":"promo_deleted","id":"77331","user":"system","timestamp":"2026-07-31T01:24:46+07:00"}
+{"time":"2026-07-31T01:32:25.064016+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T01:32:25.065514+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T01:32:25.065683+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-07-31T01:32:25.065701+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-07-31T01:32:46.87007+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T01:32:46.87131+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T01:33:35.087927+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:33:35+07:00"}
+{"time":"2026-07-31T01:44:26.441193+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:44:26+07:00"}
+{"time":"2026-07-31T01:46:50.43116+07:00","level":"INFO","msg":"promo_created","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","year":2027,"month":1,"plan_units":15,"plan_rub":46425,"user":"system","timestamp":"2026-07-31T01:46:50+07:00"}
+{"time":"2026-07-31T01:47:10.813611+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T01:47:10+07:00"}
+{"time":"2026-07-31T01:47:20.968591+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T01:47:20+07:00"}
+{"time":"2026-07-31T01:48:12.6701+07:00","level":"INFO","msg":"promo_deleted","id":"79340","user":"system","timestamp":"2026-07-31T01:48:12+07:00"}
+{"time":"2026-07-31T01:53:20.48906+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:53:20+07:00"}
+{"time":"2026-07-31T01:56:21.997909+07:00","level":"INFO","msg":"promo_deleted","id":"77329","user":"system","timestamp":"2026-07-31T01:56:21+07:00"}
