@@ -208,6 +208,21 @@ def main():
         
         df.rename(columns=rename_dict, inplace=True)
         print(f"🔄 Переименовано {len(rename_dict)} колонок")
+
+        # Конвертация квартала: Q1 → 1
+        if 'quarter' in df.columns:
+            def convert_quarter(val):
+                if pd.isna(val) or val == '' or val is None:
+                    return None
+                s = str(val).strip()
+                m = re.match(r'^[Qq]\s*(\d)$', s)
+                if m:
+                    return int(m.group(1))
+                return safe_int(val)
+            
+            before = df['quarter'].iloc[0] if len(df) > 0 else 'N/A'
+            df['quarter'] = df['quarter'].apply(convert_quarter)
+            print(f"🔄 Кварталы сконвертированы (было: {before})")
         
         conn = connect_to_db()
         if not conn:

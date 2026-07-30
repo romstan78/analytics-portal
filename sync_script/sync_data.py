@@ -3,10 +3,8 @@ import sys
 import os
 from dotenv import load_dotenv
 
-# --- ИЗМЕНЕНИЕ: загружаем переменные из .env файла
 load_dotenv()
 
-# --- ИЗМЕНЕНИЕ: все пароли и настройки из переменных окружения
 SOURCE_SERVER = os.getenv('OLAP_SERVER')
 SOURCE_DATABASE = os.getenv('OLAP_DATABASE')
 SOURCE_UID = os.getenv('OLAP_UID')
@@ -38,6 +36,62 @@ def connect_to_mssql(server, database, uid, pwd, autocommit=False):
     except Exception as e:
         print(f"❌ Ошибка подключения к базе данных: {e}")
         return None
+
+def sync_normalized(cursor):
+    """Инкрементальная синхронизация нормализованной таблицы с mapping-данными"""
+    print("Синхронизация tbl_EcomSalesNormalized...")
+
+    # 1. Удаляем записи, чьи source_id обновлялись за последние сутки
+    cursor.execute("""
+        DELETE n
+        FROM dbo.tbl_EcomSalesNormalized n
+        WHERE n.source_id IN (
+            SELECT id FROM dbo.tbl_EcomSalesConsolidated
+            WHERE updated_at >= DATEADD(day, -1, GETDATE())
+        )
+    """)
+    deleted = cursor.rowcount
+    print(f"  Удалено: {deleted} строк")
+
+    # 2. Вставляем заново через UNPIVOT
+    cursor.execute("""
+        INSERT INTO dbo.tbl_EcomSalesNormalized 
+            (source_id, [year], [month], brandName, productName, networkName, 
+             metric_type, metric_value, updated_at)
+        SELECT
+            id, [year], [month], brandName, productName, networkName,
+            metric_type, metric_value, updated_at
+        FROM dbo.tbl_EcomSalesConsolidated
+        UNPIVOT (
+            metric_value FOR metric_type IN (
+                qty, rub, qty_ZC, rub_ZC, qty_PLZ, rub_PLZ,
+                qty_AR, rub_AR, qty_OZ, rub_OZ, qty_EA, rub_EA,
+                qty_PMP, rub_PMP, qty_OMNI, rub_OMNI,
+                qty_NW, rub_NW, NW_wo_ecom, SS_wo_ecom,
+                rub_NW_wo_ecom, rub_SS_wo_ecom
+            )
+        ) AS unpvt
+        WHERE metric_value != 0 AND metric_value IS NOT NULL
+          AND updated_at >= DATEADD(day, -1, GETDATE())
+    """)
+    inserted = cursor.rowcount
+    print(f"  Вставлено: {inserted} строк")
+
+    # 3. Заполняем mapping-данные (un_rub, segment, channel) для новых строк
+    cursor.execute("""
+        UPDATE n
+        SET n.un_rub  = m.un_rub,
+            n.segment = m.segment,
+            n.channel = m.channel
+        FROM dbo.tbl_EcomSalesNormalized n
+        JOIN dbo.tbl_ChannelSegmentMapping m ON n.metric_type = m.name
+        WHERE n.un_rub IS NULL
+    """)
+    updated = cursor.rowcount
+    print(f"  Mapping обновлён: {updated} строк")
+
+    cursor.commit()
+    print("✅ tbl_EcomSalesNormalized синхронизирована")
 
 def main():
     source_conn = None
@@ -143,7 +197,7 @@ def main():
             pk_cols = ', '.join([f"[{pk}]" for pk in primary_keys])
             create_table_sql += f"  CONSTRAINT [PK_{table_name_clean}] PRIMARY KEY ({pk_cols})\n"
         else:
-             create_table_sql = create_table_sql.rstrip(",\n") + "\n"
+            create_table_sql = create_table_sql.rstrip(",\n") + "\n"
 
         create_table_sql += ");\nEND"
 
@@ -171,6 +225,12 @@ def main():
         local_data_conn.commit()
         local_data_cursor.execute(f"SET IDENTITY_INSERT {LOCAL_TABLE_NAME} OFF;")
         print("✅ Синхронизация завершена успешно!")
+
+        # Синхронизация нормализованной таблицы
+        try:
+            sync_normalized(local_data_cursor)
+        except Exception as e:
+            print(f"⚠️ Ошибка синхронизации нормализованной таблицы: {e}")
 
     except Exception as e:
         print(f"❌ Ошибка во время синхронизации: {e}")

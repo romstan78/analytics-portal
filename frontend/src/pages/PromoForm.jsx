@@ -48,6 +48,16 @@ const fmt = (v) => {
 
 const cleanNumber = (v) => v.replace(/\s/g, '').replace(',', '.');
 
+const safeNumber = (val) => {
+  const n = parseInt(val);
+  return isNaN(n) ? null : n;
+};
+
+const safeFloatNull = (val) => {
+  const n = parseFloat(val);
+  return isNaN(n) ? null : n;
+};
+
 const requiredLabel = (label) => `${label} *`;
 
 const NumberField = ({ label, value, onChange, ...props }) => (
@@ -174,10 +184,17 @@ export default function PromoForm({ onSave }) {
         contract_price: parseFloat(form.contract_price),
         id_directum: form.id_directum, ds_number: form.ds_number,
         discount_amount: parseFloat(form.discount_amount) || null,
-        conditions: form.conditions, comments: form.comments || null,
+        conditions: form.conditions, comments: form.comments ?? null,
         ecom_segment: form.ecom_segment,
-        total_pharmacies: parseInt(form.total_pharmacies),
-        promo_pharmacies: parseInt(form.promo_pharmacies),
+        total_pharmacies: safeNumber(form.total_pharmacies),
+        promo_pharmacies: safeNumber(form.promo_pharmacies),
+        actual_promo_sales_units: parseFloat(form.actual_promo_sales_units) || null,
+        actual_investments: parseFloat(form.actual_investments) || null,
+        actual_promo_rub: parseFloat(form.actual_promo_rub) || null,
+        actual_promo_uplift_units: parseFloat(form.actual_promo_uplift_units) || null,
+        actual_promo_uplift_rub: parseFloat(form.actual_promo_uplift_rub) || null,
+        actual_external_ecom_units: safeFloatNull(form.actual_external_ecom_units),
+        actual_corrected_baseline: safeFloatNull(form.actual_corrected_baseline),
         status: form.status, date: calculated.promo_date,
       };
 

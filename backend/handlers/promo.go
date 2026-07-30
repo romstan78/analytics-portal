@@ -32,7 +32,6 @@ func safeString(input map[string]interface{}, key string) string {
 }
 
 // calculatePromoFields пересчитывает все производные поля и записывает их в input.
-// Должна вызываться и для INSERT, и для UPDATE.
 func calculatePromoFields(input map[string]interface{}) {
 	ppu := safeFloat(input, "plan_promo_units")
 	cp := safeFloat(input, "contract_price")
@@ -47,7 +46,6 @@ func calculatePromoFields(input map[string]interface{}) {
 		month = int(time.Now().Month())
 	}
 
-	// GM: берём из input, иначе тянем из БД, иначе 1
 	gm := safeFloat(input, "gm")
 	if gm == 0 {
 		sku := safeString(input, "sku")
@@ -63,7 +61,6 @@ func calculatePromoFields(input map[string]interface{}) {
 		}
 	}
 
-	// OLAP-цена и справочники
 	sku := safeString(input, "sku")
 	var keyRegion, top20Segment sql.NullString
 	var olapPrice sql.NullFloat64
@@ -351,7 +348,7 @@ func GetPromoData(c *gin.Context) {
 	statuses := c.QueryArray("status")
 	channels := c.QueryArray("channel")
 
-	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE 1=1`
+	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE 1=1`
 	args := []interface{}{}
 
 	if yearFromStr != "" {
@@ -405,19 +402,17 @@ func GetPromoData(c *gin.Context) {
 	if all == "true" {
 		query += " ORDER BY p.year DESC, p.month DESC"
 	} else {
-		offset, limit := 0, 1000
-		if p := c.Query("page"); p != "" {
-			if page, _ := strconv.Atoi(p); page > 0 {
-				if l := c.Query("limit"); l != "" {
-					if lim, _ := strconv.Atoi(l); lim > 0 {
-						offset = (page - 1) * lim
-						limit = lim
-					}
-				}
-			}
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", c.DefaultQuery("limit", "100")))
+		if pageSize <= 0 {
+			pageSize = 100
 		}
+		if pageSize > 1000 {
+			pageSize = 1000
+		}
+		offset := page * pageSize
 		query += " ORDER BY p.year DESC, p.month DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-		args = append(args, offset, limit)
+		args = append(args, offset, pageSize)
 	}
 
 	rows, err := config.DB.Query(query, args...)
@@ -430,7 +425,7 @@ func GetPromoData(c *gin.Context) {
 	var results []models.PromoRow
 	for rows.Next() {
 		var r models.PromoRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
 			continue
 		}
 		results = append(results, r)
@@ -651,9 +646,7 @@ func fetchExistingRow(id int) (map[string]interface{}, error) {
 		id,
 	)
 
-	// Принимаем все поля как sql.Null* и кладём в map
 	existing := make(map[string]interface{})
-	// Строим массив указателей для Scan
 	dest := make([]interface{}, len(allPromoFields))
 	for i := range allPromoFields {
 		var v sql.NullString
@@ -667,7 +660,6 @@ func fetchExistingRow(id int) (map[string]interface{}, error) {
 	for i, field := range allPromoFields {
 		ns := dest[i].(*sql.NullString)
 		if ns.Valid {
-			// Пробуем как float
 			if f, err := strconv.ParseFloat(ns.String, 64); err == nil {
 				existing[field] = f
 			} else if i, err := strconv.Atoi(ns.String); err == nil {
@@ -692,7 +684,6 @@ func SavePromo(c *gin.Context) {
 		idFloat, _ := strconv.ParseFloat(fmt.Sprint(id), 64)
 		idInt := int(idFloat)
 		if idInt > 0 {
-			// 1. Загружаем текущую строку
 			existing, err := fetchExistingRow(idInt)
 			if err != nil {
 				config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
@@ -700,17 +691,14 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			// 2. Сливаем: existing <- input (изменения пользователя)
 			for k, v := range input {
 				if k != "id" {
 					existing[k] = v
 				}
 			}
 
-			// 3. Пересчитываем все производные поля
 			calculatePromoFields(existing)
 
-			// 4. Строим SET-клаузы из всех полей
 			setClauses := []string{}
 			values := []interface{}{}
 			for _, field := range allPromoFields {
@@ -758,12 +746,14 @@ func SavePromo(c *gin.Context) {
 		}
 	}
 
-	result, err := config.DB.Exec(
-		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) VALUES (%s)",
+	// MSSQL: используем OUTPUT INSERTED.id вместо LastInsertId
+	var newID int64
+	err := config.DB.QueryRow(
+		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) OUTPUT INSERTED.id VALUES (%s)",
 			strings.Join(allPromoFields, ", "),
 			strings.Join(placeholders, ", ")),
 		values...,
-	)
+	).Scan(&newID)
 	if err != nil {
 		config.Logger.Error("promo_insert_failed",
 			"error", err.Error(),
@@ -774,7 +764,6 @@ func SavePromo(c *gin.Context) {
 		return
 	}
 
-	newID, _ := result.LastInsertId()
 	config.Logger.Info("promo_created",
 		"id", newID,
 		"sku", fmt.Sprint(input["sku"]),

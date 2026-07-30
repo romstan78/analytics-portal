@@ -45,12 +45,16 @@ type PromoRow struct {
 	PlanROI                 *float64 `json:"plan_roi"`
 	ContractPrice           *float64 `json:"contract_price"`
 	GM                      *float64 `json:"gm"`
+	TotalPharmacies         *int     `json:"total_pharmacies"`
+	PromoPharmacies         *int     `json:"promo_pharmacies"`
 	ActualPromoSalesUnits   *float64 `json:"actual_promo_sales_units"`
 	ActualInvestments       *float64 `json:"actual_investments"`
 	Status                  *string  `json:"status"`
 	ActualPromoRub          *float64 `json:"actual_promo_rub"`
 	ActualPromoUpliftUnits  *float64 `json:"actual_promo_uplift_units"`
 	ActualPromoUpliftRub    *float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits *float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline *float64 `json:"actual_corrected_baseline"`
 	ActualROI               *float64 `json:"actual_roi"`
 	PlanVsFactRub           *float64 `json:"plan_vs_fact_rub"`
 	PlanVsFactInvestments   *float64 `json:"plan_vs_fact_investments"`
