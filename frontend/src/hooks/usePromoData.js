@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-export function usePromoData(filters, refreshKey) {
+export function usePromoData(filters, refreshTrigger) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -53,7 +53,7 @@ export function usePromoData(filters, refreshKey) {
     return () => {
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [fetchData, refreshKey]);
+  }, [fetchData, refreshTrigger]);
 
-  return { rows, loading, error, refetch: fetchData };
+  return { rows, setRows, loading, error, refetch: fetchData };
 }

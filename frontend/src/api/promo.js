@@ -52,8 +52,14 @@ export const promoAPI = {
       body: JSON.stringify(data),
     }).then(r => r.json()),
 
-  delete: (id) =>
-    fetchWithAuth(`${API_BASE}/api/promo/${id}`, { method: 'DELETE' }).then(r => r.json()),
+    delete: (id) =>
+      fetchWithAuth(`${API_BASE}/api/promo/${id}`, { method: 'DELETE' }).then(async r => {
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${r.status}`);
+        }
+        return r.json();
+      }),
 
   getSKUByBrand: (brand) =>
     fetchWithAuth(`${API_BASE}/api/promo/sku-by-brand?brand=${encodeURIComponent(brand)}`).then(r => r.json()),

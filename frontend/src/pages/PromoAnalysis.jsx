@@ -57,7 +57,7 @@ const PROMO_VISIBLE_FILTERS = ['kam', 'brand', 'sku', 'network_name', 'mechanics
 export default function PromoAnalysis() {
   const navigate = useNavigate();
   const [tab, setTab] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [allSkuOptions, setAllSkuOptions] = useState([]);
   const [allNetworkOptions, setAllNetworkOptions] = useState([]);
   const [investmentTypes, setInvestmentTypes] = useState([]);
@@ -65,7 +65,7 @@ export default function PromoAnalysis() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
-  // --- Свой тулбар ---
+  // Тулбар
   const [searchText, setSearchText] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
@@ -75,54 +75,29 @@ export default function PromoAnalysis() {
   });
   const apiRef = useRef(null);
 
-  const toggleColumn = (field) => {
-    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
-  };
-
-  const showAllColumns = () => {
-    const map = {};
-    COLUMNS.forEach(c => { map[c.field] = true; });
-    setVisibleColumns(map);
-  };
-
-  const hideAllColumns = () => {
-    const map = {};
-    COLUMNS.forEach(c => { map[c.field] = false; });
-    setVisibleColumns(map);
-  };
-
-  const visibleCols = useMemo(
-    () => COLUMNS.filter(c => visibleColumns[c.field] !== false),
-    [visibleColumns]
-  );
-
-  const handleExport = () => {
-    if (apiRef.current) {
-      apiRef.current.exportDataAsCsv({
-        utf8WithBom: true,
-        fileName: 'promo-analysis',
-      });
-    }
-  };
-
-  // --- Данные и фильтры ---
   const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta } = 
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
-  const { rows, loading: dataLoading, error: dataError } = usePromoData(appliedFilters, refreshKey);
+  const { rows, setRows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters, refreshTrigger);
 
-  // Поиск
-  const filteredRows = useMemo(() => {
-    if (!searchText.trim()) return rows;
-    const lower = searchText.toLowerCase();
-    return rows.filter(row =>
-      Object.values(row).some(val =>
-        val != null && String(val).toLowerCase().includes(lower)
-      )
-    );
-  }, [rows, searchText]);
+  // Локальное обновление после редактирования
+  const handleEditSuccess = useCallback((editedId, updatedData) => {
+    setRows(prev => prev.map(row => 
+      row.id === editedId ? { ...row, ...updatedData } : row
+    ));
+  }, [setRows]);
 
-  const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete } = 
-    usePromoForm(() => { setRefreshKey(prev => prev + 1); setEditDialogOpen(false); });
+  // Локальное удаление
+  const handleDeleteSuccess = useCallback((deletedId) => {
+    setRows(prev => prev.filter(row => row.id !== deletedId));
+  }, [setRows]);
+
+  // После создания нового промо — перезагрузка
+  const handleCreateSuccess = useCallback(() => {
+    setRefreshTrigger(prev => prev + 1);
+  }, []);
+
+  const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete, resetForm } = 
+    usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
   useEffect(() => { promoAPI.getInvestmentTypes().then(data => setInvestmentTypes(data.data || [])); }, []);
@@ -140,18 +115,73 @@ export default function PromoAnalysis() {
   }), [meta]);
 
   const handleRowClick = (params) => { formHandleRowClick(params.row); setEditDialogOpen(true); };
+
   const handleSave = async () => { 
     const result = await formHandleSave(); 
+    if (result.success) setEditDialogOpen(false);
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
+
   const handleDelete = async () => { 
     const result = await formHandleDelete(); 
-    if (result.success) { 
-      setDeleteDialogOpen(false); 
-      setEditDialogOpen(false); 
-      setRefreshKey(prev => prev + 1); 
-    } 
+    if (result.success) { setDeleteDialogOpen(false); setEditDialogOpen(false); }
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
+  };
+
+  const handlePromoFormSave = () => {
+    setRefreshTrigger(prev => prev + 1);
+    setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
+  };
+
+  // Поиск по таблице (клиентский)
+  const filteredRows = useMemo(() => {
+    if (!searchText.trim()) return rows;
+    const lower = searchText.toLowerCase();
+    return rows.filter(row =>
+      Object.values(row).some(val =>
+        val != null && String(val).toLowerCase().includes(lower)
+      )
+    );
+  }, [rows, searchText]);
+
+  const visibleCols = useMemo(
+    () => COLUMNS.filter(c => visibleColumns[c.field] !== false),
+    [visibleColumns]
+  );
+
+  const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
+
+  const handleExport = async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set('all', 'true');
+      Object.entries(appliedFilters).forEach(([k, v]) => {
+        if (Array.isArray(v)) v.forEach(x => { if (x) params.append(k, String(x)); });
+        else if (v) params.set(k, String(v));
+      });
+      const res = await fetch(`http://localhost:8080/api/promo/data?${params}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      });
+      const json = await res.json();
+      const data = json.data || [];
+      const headers = visibleCols.map(c => c.headerName || c.field);
+      const fields = visibleCols.map(c => c.field);
+      let csv = '\uFEFF' + headers.join(';') + '\n';
+      data.forEach(row => {
+        csv += fields.map(f => {
+          let v = row[f]; if (v == null) return '';
+          v = String(v);
+          if (v.includes(';') || v.includes('"') || v.includes('\n')) v = '"' + v.replace(/"/g, '""') + '"';
+          return v;
+        }).join(';') + '\n';
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'promo-analysis.csv';
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (e) { console.error('Export error:', e); }
   };
 
   return (
@@ -171,50 +201,32 @@ export default function PromoAnalysis() {
 
       {tab === 0 && (<>
         <Box sx={{ mb: 2 }}>
-          <FilterPanel 
-            filters={filters} filterOptions={filterOptions} onFiltersChange={setFilters} 
+          <FilterPanel filters={filters} filterOptions={filterOptions} onFiltersChange={setFilters}
             onSearch={handleSearch} onReset={handleReset} extraFilters={EXTRA_FILTERS}
             persistFilters={persistFilters} onPersistChange={handlePersistChange} 
-            visibleFilters={PROMO_VISIBLE_FILTERS} 
-          />
+            visibleFilters={PROMO_VISIBLE_FILTERS} />
         </Box>
         {meta.error && 
           <Button variant="outlined" color="warning" onClick={() => fetchMeta(filters)} sx={{ mb: 2 }}>
             Ошибка загрузки справочников. Повторить
           </Button>}
 
-        {/* Таблица с кастомным тулбаром */}
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          
-          {/* Тулбар */}
           <Box sx={{ 
-            display: 'flex', alignItems: 'center', gap: 1, 
-            px: 2, py: 1,
-            bgcolor: '#f1f5f9', 
-            borderRadius: '12px 12px 0 0',
-            border: '1px solid #e2e8f0',
-            borderBottom: 'none',
+            display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+            bgcolor: '#f1f5f9', borderRadius: '12px 12px 0 0',
+            border: '1px solid #e2e8f0', borderBottom: 'none',
           }}>
-            <Button 
-              size="small" 
-              startIcon={<ColumnsIcon />}
+            <Button size="small" startIcon={<ColumnsIcon />}
               onClick={(e) => setColumnsAnchor(e.currentTarget)}
-              sx={{ color: '#475569', fontWeight: 500 }}
-            >
-              Колонки
-            </Button>
-            <Menu
-              anchorEl={columnsAnchor}
-              open={Boolean(columnsAnchor)}
+              sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
+            <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
               onClose={() => setColumnsAnchor(null)}
-              slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}
-            >
-              <MenuItem dense onClick={showAllColumns}>
-                <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography>
-              </MenuItem>
-              <MenuItem dense onClick={hideAllColumns}>
-                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography>
-              </MenuItem>
+              slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
+              <MenuItem dense onClick={() => setVisibleColumns(Object.fromEntries(COLUMNS.map(c => [c.field, true])))}>
+                <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
+              <MenuItem dense onClick={() => setVisibleColumns(Object.fromEntries(COLUMNS.map(c => [c.field, false])))}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
               <Divider />
               {COLUMNS.map(col => (
                 <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
@@ -223,38 +235,20 @@ export default function PromoAnalysis() {
                 </MenuItem>
               ))}
             </Menu>
-
-            <TextField
-              size="small"
-              placeholder="Поиск..."
-              value={searchText}
+            <TextField size="small" placeholder="Поиск по таблице..." value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
-              sx={{ 
-                width: 220,
-                '& .MuiOutlinedInput-root': { 
-                  bgcolor: '#fff', 
-                  borderRadius: 2,
-                  '& fieldset': { borderColor: '#e2e8f0' },
-                  '&:hover fieldset': { borderColor: '#cbd5e1' },
-                },
-                '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 }
-              }}
-            />
-
+              sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
             <Box sx={{ flex: 1 }} />
-
-            <Button 
-              size="small"
-              startIcon={<ExportIcon />}
-              onClick={handleExport}
-              sx={{ color: '#475569', fontWeight: 500 }}
-            >
-              CSV
-            </Button>
+            {rows.length > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+                {rows.length.toLocaleString('ru-RU')} строк
+              </Typography>
+            )}
+            <Button size="small" startIcon={<ExportIcon />} onClick={handleExport}
+              sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
           </Box>
 
-          {/* DataGrid */}
           <DataGrid 
             apiRef={apiRef}
             rows={filteredRows} 
@@ -270,9 +264,7 @@ export default function PromoAnalysis() {
             pageSizeOptions={[25, 50, 100]} 
             disableRowSelectionOnClick 
             sx={{ 
-              flex: 1,
-              border: '1px solid #e2e8f0',
-              borderTop: 'none',
+              flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
               borderRadius: '0 0 12px 12px',
               '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
               '& .MuiDataGrid-row': { cursor: 'pointer' } 
@@ -301,11 +293,7 @@ export default function PromoAnalysis() {
         </Dialog>
       </>)}
 
-      {tab === 1 && 
-        <PromoForm onSave={() => { 
-          setRefreshKey(prev => prev + 1); 
-          setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' }); 
-        }} />}
+      {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
 
       <Snackbar open={snackbar.open} autoHideDuration={3000} 
         onClose={() => setSnackbar(s => ({ ...s, open: false }))}>

@@ -16,7 +16,7 @@ const EMPTY_FORM = {
   status: '',
 };
 
-export function usePromoForm(onSave) {
+export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -26,8 +26,6 @@ export function usePromoForm(onSave) {
     setForm({
       id: row.id,
       network_name: row.network_name ?? '',
-      id_directum: row.id_directum ?? '',        // ← добавить
-      ds_number: row.ds_number ?? '',            // ← добавить
       kam: row.kam ?? '',
       brand: row.brand_as ?? row.brand ?? '',
       sku: row.sku ?? '',
@@ -35,7 +33,6 @@ export function usePromoForm(onSave) {
       month: row.month,
       mechanics: row.mechanics ?? '',
       gtn_opex: row.gtn_opex ?? '',
-      // Числовые поля — ?? сохраняет 0
       baseline_units: row.baseline_units ?? '',
       baseline_rub: row.baseline_rub ?? '',
       plan_promo_units: row.plan_promo_units ?? '',
@@ -47,6 +44,8 @@ export function usePromoForm(onSave) {
       discount_amount: row.discount_amount ?? '',
       plan_roi: row.plan_roi ?? '',
       gm: row.gm ?? '',
+      total_pharmacies: row.total_pharmacies ?? '',
+      promo_pharmacies: row.promo_pharmacies ?? '',
       actual_promo_sales_units: row.actual_promo_sales_units ?? '',
       actual_investments: row.actual_investments ?? '',
       actual_promo_rub: row.actual_promo_rub ?? '',
@@ -55,13 +54,12 @@ export function usePromoForm(onSave) {
       actual_roi: row.actual_roi ?? '',
       actual_external_ecom_units: row.actual_external_ecom_units ?? '',
       actual_corrected_baseline: row.actual_corrected_baseline ?? '',
-      total_pharmacies: row.total_pharmacies ?? '',
-      promo_pharmacies: row.promo_pharmacies ?? '',
-      // Текстовые — ?? сохраняет ''
       agreement1: row.agreement1 ?? '',
       agreement2: row.agreement2 ?? '',
       conditions: row.conditions ?? '',
       comments: row.comments ?? '',
+      id_directum: row.id_directum ?? '',
+      ds_number: row.ds_number ?? '',
       status: row.status ?? '',
     });
     setEditMode(true);
@@ -109,27 +107,33 @@ export function usePromoForm(onSave) {
         setForm(prev => ({ ...prev, ...result.data, id: result.id }));
       }
 
-      if (onSave) onSave();
+      if (form.id && onEditSuccess && result.data) {
+        onEditSuccess(form.id, result.data);
+      } else if (!form.id && onCreateSuccess) {
+        onCreateSuccess();
+      }
+
       return { success: true, message: '✅ Сохранено' };
     } catch (err) {
       return { success: false, message: '❌ Ошибка: ' + err.message };
     } finally {
       setSaving(false);
     }
-  }, [form, onSave]);
+  }, [form, onEditSuccess, onCreateSuccess]);
 
   const handleDelete = useCallback(async () => {
     if (!form.id) return { success: false, message: 'Нет ID' };
     setDeleting(true);
     try {
       await promoAPI.delete(form.id);
+      if (onDeleteSuccess) onDeleteSuccess(form.id);
       return { success: true, message: '🗑️ Удалено' };
     } catch (err) {
-      return { success: false, message: '❌ Ошибка удаления' };
+      return { success: false, message: '❌ ' + (err.message || 'Ошибка удаления') };
     } finally {
       setDeleting(false);
     }
-  }, [form.id]);
+  }, [form.id, onDeleteSuccess]);
 
   const resetForm = useCallback(() => {
     setForm({ ...EMPTY_FORM });

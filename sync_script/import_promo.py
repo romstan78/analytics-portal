@@ -174,6 +174,15 @@ def convert_value(col_name, value):
     else:
         return clean_string(value)
 
+def convert_quarter(val):
+    if pd.isna(val) or val == '' or val is None:
+        return None
+    s = str(val).strip()
+    m = re.match(r'^[Qq]\s*(\d)$', s)
+    if m:
+        return int(m.group(1))
+    return safe_int(val)
+
 def connect_to_db():
     try:
         drivers = ['ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server']
@@ -194,57 +203,67 @@ def main():
     if not os.path.exists(EXCEL_FILE):
         print(f"❌ Файл не найден: {EXCEL_FILE}")
         return
-    
+
     print(f"📂 Читаю файл: {EXCEL_FILE}")
-    
+
     try:
         df = pd.read_excel(EXCEL_FILE, dtype=str)
         print(f"✅ Загружено {len(df)} строк, {len(df.columns)} колонок")
-        
+
         rename_dict = {}
         for excel_col, db_col in COLUMN_MAPPING.items():
             if excel_col in df.columns:
                 rename_dict[excel_col] = db_col
-        
+
         df.rename(columns=rename_dict, inplace=True)
         print(f"🔄 Переименовано {len(rename_dict)} колонок")
 
         # Конвертация квартала: Q1 → 1
         if 'quarter' in df.columns:
-            def convert_quarter(val):
-                if pd.isna(val) or val == '' or val is None:
-                    return None
-                s = str(val).strip()
-                m = re.match(r'^[Qq]\s*(\d)$', s)
-                if m:
-                    return int(m.group(1))
-                return safe_int(val)
-            
             before = df['quarter'].iloc[0] if len(df) > 0 else 'N/A'
             df['quarter'] = df['quarter'].apply(convert_quarter)
             print(f"🔄 Кварталы сконвертированы (было: {before})")
-        
+
         conn = connect_to_db()
         if not conn:
             return
-        
+
         cursor = conn.cursor()
-        
-        # Очищаем таблицу
-        cursor.execute("DELETE FROM dbo.tbl_PromoActivities")
+
+        # Добавляем колонку deleted_at если её ещё нет
+        cursor.execute("""
+            IF COL_LENGTH('dbo.tbl_PromoActivities', 'deleted_at') IS NULL
+            ALTER TABLE dbo.tbl_PromoActivities ADD deleted_at DATETIME NULL
+        """)
         conn.commit()
-        print("🗑️ Таблица очищена")
-        
+
+        # Помечаем ВСЕ активные записи как удалённые. MERGE восстановит те, что есть в Excel.
+        cursor.execute("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE() WHERE deleted_at IS NULL")
+        marked = cursor.rowcount
+        print(f"🏷️ Помечено как удалённые: {marked} записей")
+
         db_columns = [col for col in rename_dict.values() if col in df.columns]
-        placeholders = ', '.join(['?' for _ in db_columns])
-        columns_str = ', '.join([f'[{col}]' for col in db_columns])
-        insert_sql = f"INSERT INTO dbo.tbl_PromoActivities ({columns_str}) VALUES ({placeholders})"
-        
-        print(f"💾 Очищаю данные и вставляю...")
-        
+
+        # Строим MERGE
+        update_clause = ', '.join([f"t.[{col}] = s.[{col}]" for col in db_columns])
+        insert_cols = ', '.join([f"[{col}]" for col in db_columns])
+        insert_vals = ', '.join([f"s.[{col}]" for col in db_columns])
+
+        merge_sql = f"""
+            MERGE dbo.tbl_PromoActivities AS t
+            USING (VALUES ({{placeholders}})) AS s ({insert_cols})
+            ON t.sku = s.sku AND t.network_name = s.network_name 
+               AND t.[year] = s.[year] AND t.[month] = s.[month] 
+               AND t.mechanics = s.mechanics AND t.deleted_at IS NULL
+            WHEN MATCHED THEN UPDATE SET {update_clause}
+            WHEN NOT MATCHED BY TARGET THEN INSERT ({insert_cols}) VALUES ({insert_vals})
+            WHEN NOT MATCHED BY SOURCE AND t.deleted_at IS NULL THEN UPDATE SET t.deleted_at = GETDATE();
+        """
+
+        # Конвертируем данные
         rows_to_insert = []
         errors = []
-        
+
         for idx, (_, row) in enumerate(df.iterrows()):
             try:
                 values = []
@@ -254,36 +273,54 @@ def main():
                 rows_to_insert.append(tuple(values))
             except Exception as e:
                 errors.append(f"Строка {idx+2}: {str(e)[:100]}")
-        
+
         if errors:
             print(f"⚠️ Ошибок конвертации: {len(errors)} из {len(df)} строк")
-        
+
+        # Выполняем MERGE батчами
         batch_size = 500
         cursor.fast_executemany = True
-        total_inserted = 0
-        
+        total_processed = 0
+
+        # Формируем плейсхолдеры для одного батча
+        single_row = '(' + ', '.join(['?' for _ in db_columns]) + ')'
+
         for i in range(0, len(rows_to_insert), batch_size):
             batch = rows_to_insert[i:i+batch_size]
+            placeholders_str = ', '.join([single_row for _ in batch])
+            flat_values = [val for row in batch for val in row]
+
+            batch_sql = merge_sql.replace('{placeholders}', placeholders_str)
+
             try:
-                cursor.executemany(insert_sql, batch)
+                cursor.execute(batch_sql, flat_values)
                 conn.commit()
-                total_inserted += len(batch)
-                print(f"  ✓ {total_inserted}/{len(rows_to_insert)}")
+                total_processed += len(batch)
+                print(f"  ✓ {total_processed}/{len(rows_to_insert)}")
             except Exception as e:
                 print(f"  ❌ Ошибка в батче {i//batch_size + 1}: {str(e)[:200]}")
-                for j, row_data in enumerate(batch):
+                # Пробуем по одной
+                for row_data in batch:
                     try:
-                        cursor.execute(insert_sql, row_data)
+                        single_merge = merge_sql.replace('{placeholders}', single_row)
+                        cursor.execute(single_merge, row_data)
                         conn.commit()
-                        total_inserted += 1
+                        total_processed += 1
                     except Exception as e2:
                         pass
-        
-        print(f"✅ Импорт завершён! Вставлено {total_inserted} из {len(rows_to_insert)} записей")
-        
+
+        # Окончательно помечаем удалёнными записи, которых не было в Excel
+        # (те, что остались deleted_at IS NULL после MERGE WHEN NOT MATCHED BY SOURCE)
+        cursor.execute("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE() WHERE deleted_at IS NULL")
+        remaining = cursor.rowcount
+        if remaining > 0:
+            print(f"  🗑️ Помечено удалёнными: {remaining} записей (отсутствуют в Excel)")
+
+        print(f"✅ Импорт завершён! Обработано {total_processed} из {len(rows_to_insert)} записей")
+
         cursor.close()
         conn.close()
-        
+
     except Exception as e:
         print(f"❌ Ошибка: {e}")
         import traceback
