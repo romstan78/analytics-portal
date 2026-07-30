@@ -62,12 +62,29 @@ func calculatePromoFields(input map[string]interface{}) {
 	}
 
 	sku := safeString(input, "sku")
-	var keyRegion, top20Segment sql.NullString
+	networkName := safeString(input, "network_name")
+
+	// key_region и top20_segment — приоритет: фронтенд > tbl_NetworkGeoMapping > tbl_PromoActivities
+	if safeString(input, "key_region") == "" || safeString(input, "top20_segment") == "" {
+		var kr, t20 sql.NullString
+		config.DB.QueryRow(
+			"SELECT key_region, top20_segment FROM dbo.tbl_NetworkGeoMapping WHERE network_name = ?",
+			networkName,
+		).Scan(&kr, &t20)
+		if kr.Valid && safeString(input, "key_region") == "" {
+			input["key_region"] = kr.String
+		}
+		if t20.Valid && safeString(input, "top20_segment") == "" {
+			input["top20_segment"] = t20.String
+		}
+	}
+
+	// olap_price — из последнего промо по SKU
 	var olapPrice sql.NullFloat64
 	config.DB.QueryRow(
-		"SELECT TOP 1 key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND key_region IS NOT NULL ORDER BY year DESC, month DESC",
+		"SELECT TOP 1 olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND olap_price IS NOT NULL ORDER BY year DESC, month DESC",
 		sku,
-	).Scan(&keyRegion, &top20Segment, &olapPrice)
+	).Scan(&olapPrice)
 	olap := 0.0
 	if olapPrice.Valid {
 		olap = olapPrice.Float64
@@ -196,13 +213,6 @@ func calculatePromoFields(input map[string]interface{}) {
 	input["plan_promo_uplift_cip_olap"] = plan_promo_uplift_cip_olap
 	input["fact_promo_uplift_cip_olap"] = fact_promo_uplift_cip_olap
 	input["date"] = promoDate
-
-	if keyRegion.Valid {
-		input["key_region"] = keyRegion.String
-	}
-	if top20Segment.Valid {
-		input["top20_segment"] = top20Segment.String
-	}
 	input["olap_price"] = olap
 }
 
@@ -510,6 +520,32 @@ func GetLastNetworkData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"total_pharmacies": totalPharmacies.Int64})
 }
 
+func GetNetworkGeoMapping(c *gin.Context) {
+	network := c.Query("network")
+	if network == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "network is required"})
+		return
+	}
+
+	var kam, networkType, top20Segment, keyRegion sql.NullString
+	err := config.DB.QueryRow(
+		"SELECT kam, network_type, top20_segment, key_region FROM dbo.tbl_NetworkGeoMapping WHERE network_name = ?",
+		network,
+	).Scan(&kam, &networkType, &top20Segment, &keyRegion)
+
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"kam": nil, "network_type": nil, "top20_segment": nil, "key_region": nil})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"kam":           kam.String,
+		"network_type":  networkType.String,
+		"top20_segment": top20Segment.String,
+		"key_region":    keyRegion.String,
+	})
+}
+
 func GetPromoHistoryFiltered(c *gin.Context) {
 	sku := c.Query("sku")
 	network := c.Query("network_name")
@@ -639,7 +675,6 @@ var allPromoFields = []string{
 	"turnover_per_point", "turnover_per_point_promo",
 }
 
-// fetchExistingRow возвращает текущие значения строки из БД.
 func fetchExistingRow(id int) (map[string]interface{}, error) {
 	row := config.DB.QueryRow(
 		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ?",
@@ -746,7 +781,6 @@ func SavePromo(c *gin.Context) {
 		}
 	}
 
-	// MSSQL: используем OUTPUT INSERTED.id вместо LastInsertId
 	var newID int64
 	err := config.DB.QueryRow(
 		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) OUTPUT INSERTED.id VALUES (%s)",

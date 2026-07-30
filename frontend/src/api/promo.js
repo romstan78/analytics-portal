@@ -76,6 +76,9 @@ export const promoAPI = {
   // Цена контракта
   getLastContractPrice: (sku) =>
     fetchWithAbort(`${API_BASE}/api/promo/last-contract-price?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
+
+  getNetworkGeo: (network) =>
+    fetchWithAbort(`${API_BASE}/api/promo/network-geo?network=${encodeURIComponent(network)}`).then(r => r.json()),
 };
 
 // Для интернет-продаж

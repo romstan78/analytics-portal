@@ -38,6 +38,7 @@ const EMPTY_FORM = {
   actual_promo_sales_units: '', actual_investments: '', actual_promo_rub: '',
   actual_promo_uplift_units: '', actual_promo_uplift_rub: '',
   actual_external_ecom_units: '', actual_corrected_baseline: '',
+  key_region: '', top20_segment: '',
   status: 'Планируется',
 };
 
@@ -83,7 +84,6 @@ export default function PromoForm({ onSave }) {
   const [saving, setSaving] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [lastSKUData, setLastSKUData] = useState({});
-  const [kamOptions, setKamOptions] = useState([]);
 
   // Загрузка справочников
   useEffect(() => {
@@ -109,13 +109,16 @@ export default function PromoForm({ onSave }) {
     }
   }, [form.sku]);
 
-  // При выборе сети
+  // При выборе сети — подтягиваем KAM, регион, сегмент, аптеки
   useEffect(() => {
     if (form.network_name) {
-      promoAPI.getKAMByNetwork(form.network_name).then(data => {
-        setKamOptions(data.data || []);
-        if (data.data?.length === 1) setForm(prev => ({ ...prev, kam: data.data[0] }));
-      }).catch(() => setKamOptions([]));
+      promoAPI.getNetworkGeo(form.network_name).then(data => {
+        const updates = {};
+        if (data.kam) updates.kam = data.kam;
+        if (data.key_region) updates.key_region = data.key_region;
+        if (data.top20_segment) updates.top20_segment = data.top20_segment;
+        if (Object.keys(updates).length > 0) setForm(prev => ({ ...prev, ...updates }));
+      }).catch(() => {});
       
       promoAPI.getLastNetworkData(form.network_name).then(data => {
         if (data.total_pharmacies) setForm(prev => ({ ...prev, total_pharmacies: data.total_pharmacies }));
@@ -188,6 +191,8 @@ export default function PromoForm({ onSave }) {
         ecom_segment: form.ecom_segment,
         total_pharmacies: safeNumber(form.total_pharmacies),
         promo_pharmacies: safeNumber(form.promo_pharmacies),
+        key_region: form.key_region || null,
+        top20_segment: form.top20_segment || null,
         actual_promo_sales_units: parseFloat(form.actual_promo_sales_units) || null,
         actual_investments: parseFloat(form.actual_investments) || null,
         actual_promo_rub: parseFloat(form.actual_promo_rub) || null,

@@ -183,3 +183,13 @@
 {"time":"2026-07-30T18:04:02.909009+07:00","level":"INFO","msg":"promo_updated","id":77339,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","user":"system","timestamp":"2026-07-30T18:04:02+07:00"}
 {"time":"2026-07-30T18:05:58.633166+07:00","level":"INFO","msg":"promo_updated","id":77339,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","user":"system","timestamp":"2026-07-30T18:05:58+07:00"}
 {"time":"2026-07-30T18:07:35.805689+07:00","level":"INFO","msg":"promo_deleted","id":"77339","user":"system","timestamp":"2026-07-30T18:07:35+07:00"}
+{"time":"2026-07-30T21:30:35.268281+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-30T21:30:35.269859+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-30T21:32:29.301998+07:00","level":"INFO","msg":"promo_created","id":77340,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","year":2026,"month":12,"plan_units":3600,"plan_rub":1832400,"user":"system","timestamp":"2026-07-30T21:32:29+07:00"}
+{"time":"2026-07-30T21:32:56.776369+07:00","level":"INFO","msg":"promo_updated","id":77340,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","user":"system","timestamp":"2026-07-30T21:32:56+07:00"}
+{"time":"2026-07-30T21:33:22.923908+07:00","level":"INFO","msg":"promo_updated","id":77340,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","user":"system","timestamp":"2026-07-30T21:33:22+07:00"}
+{"time":"2026-07-30T21:45:05.306921+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-30T21:45:05.308731+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-30T21:45:17.292168+07:00","level":"INFO","msg":"promo_deleted","id":"77340","user":"system","timestamp":"2026-07-30T21:45:17+07:00"}
+{"time":"2026-07-30T21:46:57.646229+07:00","level":"INFO","msg":"promo_created","id":78340,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","year":2027,"month":1,"plan_units":3700,"plan_rub":1883300,"user":"system","timestamp":"2026-07-30T21:46:57+07:00"}
+{"time":"2026-07-30T21:47:18.143216+07:00","level":"INFO","msg":"promo_updated","id":78340,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Фармленд АС","user":"system","timestamp":"2026-07-30T21:47:18+07:00"}

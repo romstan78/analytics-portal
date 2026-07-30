@@ -123,6 +123,7 @@ func main() {
 	r.GET("/api/promo/history", handlers.GetPromoHistoryFiltered)
 	r.GET("/api/promo/sku-info", handlers.GetSKUInfo)
 	r.GET("/api/promo/last-sku-data", handlers.GetLastSKUData)
+	r.GET("/api/promo/network-geo", handlers.GetNetworkGeoMapping)
 	r.POST("/api/promo/save", handlers.SavePromo)
 	r.DELETE("/api/promo/:id", handlers.DeletePromo)
 
