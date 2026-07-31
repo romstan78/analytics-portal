@@ -868,34 +868,31 @@ func GetApprovals(c *gin.Context) {
 
 	kam := c.Query("kam")
 
+	// Ограничиваем только последними 2 годами (не исторические данные)
+	currentYear := time.Now().Year()
+
 	query := fmt.Sprintf(`
-		SELECT 
+		SELECT TOP 500
 			p.id, p.network_name, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
 			p.conditions, p.agreement1, p.agreement2, p.status,
-			(SELECT COUNT(*) FROM dbo.tbl_PromoActivities h 
-			 WHERE h.sku = p.sku AND h.network_name = p.network_name 
-			 AND h.mechanics = p.mechanics AND h.deleted_at IS NULL
-			 AND (h.year < p.year OR (h.year = p.year AND h.month < p.month))) as historical_count,
-			(SELECT AVG(h.plan_roi) FROM dbo.tbl_PromoActivities h 
-			 WHERE h.sku = p.sku AND h.network_name = p.network_name 
-			 AND h.mechanics = p.mechanics AND h.deleted_at IS NULL
-			 AND h.plan_roi IS NOT NULL
-			 AND (h.year < p.year OR (h.year = p.year AND h.month < p.month))) as avg_historical_roi
+			0 as historical_count,
+			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
 		  AND %s IS NULL
+		  AND p.year >= ?
 	`, agreementField)
 
-	args := []interface{}{}
+	args := []interface{}{currentYear - 1}
 
 	if kam != "" {
 		query += " AND p.kam = ?"
 		args = append(args, kam)
 	}
 
-	query += " ORDER BY p.network_name, p.year DESC, p.month DESC"
+	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {

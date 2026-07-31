@@ -47,8 +47,8 @@ const ApprovalCard = memo(function ApprovalCard({
   const isSubmitting = submitting[id] || false;
 
   return (
-    <Grid item xs={12} sm={6} md={4}>
-      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 } }}>
+    <Grid item xs={12} sm={6} md={4} sx={{ display: 'flex' }}>
+      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, width: '100%', display: 'flex', flexDirection: 'column' }}>
         <CardContent sx={{ pb: 1 }}>
           {/* Заголовок: сеть */}
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
