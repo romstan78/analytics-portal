@@ -131,6 +131,9 @@ func main() {
 
 		// Промо — запись (agreement1, agreement2, admin)
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
+		api.GET("/promo/approvals", handlers.GetApprovals)
+		api.GET("/promo/approval-kams", handlers.GetApprovalKAMs)
+		api.POST("/promo/approve", handlers.ApprovePromo)
 
 		// Промо — удаление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)

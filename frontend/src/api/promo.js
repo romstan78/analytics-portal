@@ -89,7 +89,19 @@ export const promoAPI = {
 
   getLastContractPrice: (sku) =>
     fetchWithAuth(`${API_BASE}/api/promo/last-contract-price?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
-};
+  
+  getApprovals: (kam) =>
+    fetchWithAuth(`${API_BASE}/api/promo/approvals?kam=${encodeURIComponent(kam || '')}`).then(r => r.json()),
+
+  getApprovalKAMs: () =>
+      fetchWithAuth(`${API_BASE}/api/promo/approval-kams`).then(r => r.json()),
+
+  approve: (id, value) =>
+      fetchWithAuth(`${API_BASE}/api/promo/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ id, value }),
+      }).then(r => r.json()),
+  };
 
 export const salesAPI = {
   getFilters: () =>

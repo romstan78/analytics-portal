@@ -735,7 +735,7 @@ func SavePromo(c *gin.Context) {
 			calculatePromoFields(existing)
 
 			// Optimistic locking: запоминаем updated_at до изменений
-			oldUpdatedAt := input["updated_at"]
+			oldUpdatedAt := existing["updated_at"]
 
 			setClauses := []string{}
 			values := []interface{}{}
@@ -846,4 +846,160 @@ func DeletePromo(c *gin.Context) {
 
 	config.Logger.Info("promo_deleted", "id", id, "user", "system", "timestamp", time.Now().Format(time.RFC3339))
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
+}
+
+// ─── Согласование ──────────────────────────────────────────────────────────
+
+// GetApprovals возвращает список промо, ожидающих согласования.
+// Для agreement1 — где agreement1 IS NULL, для agreement2 — где agreement2 IS NULL.
+// Включает историческую статистику: количество прошлых аналогичных промо и средний ROI по ним.
+func GetApprovals(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
+	// Определяем, какое поле проверять
+	agreementField := "p.agreement1"
+	if roleStr == "agreement2" {
+		agreementField = "p.agreement2"
+	}
+
+	kam := c.Query("kam")
+
+	query := fmt.Sprintf(`
+		SELECT 
+			p.id, p.network_name, p.sku, p.mechanics, p.year, p.month,
+			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
+			p.plan_investments_rub, p.plan_roi, p.actual_roi,
+			p.conditions, p.agreement1, p.agreement2, p.status,
+			(SELECT COUNT(*) FROM dbo.tbl_PromoActivities h 
+			 WHERE h.sku = p.sku AND h.network_name = p.network_name 
+			 AND h.mechanics = p.mechanics AND h.deleted_at IS NULL
+			 AND (h.year < p.year OR (h.year = p.year AND h.month < p.month))) as historical_count,
+			(SELECT AVG(h.plan_roi) FROM dbo.tbl_PromoActivities h 
+			 WHERE h.sku = p.sku AND h.network_name = p.network_name 
+			 AND h.mechanics = p.mechanics AND h.deleted_at IS NULL
+			 AND h.plan_roi IS NOT NULL
+			 AND (h.year < p.year OR (h.year = p.year AND h.month < p.month))) as avg_historical_roi
+		FROM dbo.tbl_PromoActivities p
+		WHERE p.deleted_at IS NULL
+		  AND %s IS NULL
+	`, agreementField)
+
+	args := []interface{}{}
+
+	if kam != "" {
+		query += " AND p.kam = ?"
+		args = append(args, kam)
+	}
+
+	query += " ORDER BY p.network_name, p.year DESC, p.month DESC"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.ApprovalRow
+	for rows.Next() {
+		var r models.ApprovalRow
+		if err := rows.Scan(
+			&r.ID, &r.NetworkName, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
+			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
+			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
+			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.HistoricalCount, &r.AvgHistoricalROI,
+		); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.ApprovalRow{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
+// ApprovePromo заполняет agreement1 или agreement2 значением «согласовано» или «отклонено».
+// Поле определяется автоматически по роли пользователя.
+func ApprovePromo(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
+	field := "agreement1"
+	if roleStr == "agreement2" {
+		field = "agreement2"
+	}
+
+	var req struct {
+		ID    int    `json:"id"`
+		Value string `json:"value"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+
+	if req.Value != "согласовано" && req.Value != "отклонено" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые значения: согласовано, отклонено"})
+		return
+	}
+
+	_, err := config.DB.Exec(
+		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
+		req.Value, req.ID,
+	)
+	if err != nil {
+		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
+		return
+	}
+
+	config.Logger.Info("promo_approved",
+		"id", req.ID,
+		"field", field,
+		"value", req.Value,
+		"user", "system",
+		"timestamp", time.Now().Format(time.RFC3339),
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Обновлено"})
+}
+
+// GetApprovalKAMs возвращает список KAM'ов, у которых есть промо на согласовании
+// (т.е. agreement1 IS NULL или agreement2 IS NULL в зависимости от роли).
+func GetApprovalKAMs(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
+	field := "agreement1"
+	if roleStr == "agreement2" {
+		field = "agreement2"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.kam 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL AND %s IS NULL AND p.kam IS NOT NULL
+		ORDER BY p.kam
+	`, field)
+
+	rows, err := config.DB.Query(query)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	defer rows.Close()
+
+	var kams []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			kams = append(kams, k)
+		}
+	}
+	if kams == nil {
+		kams = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": kams})
 }

@@ -91,3 +91,24 @@ type DrilldownRow struct {
 	Segment    *string `json:"segment"`
 	Channel    *string `json:"channel"`
 }
+
+type ApprovalRow struct {
+	ID                    int      `json:"id"`
+	NetworkName           *string  `json:"network_name"`
+	SKU                   *string  `json:"sku"`
+	Mechanics             *string  `json:"mechanics"`
+	Year                  int      `json:"year"`
+	Month                 *int     `json:"month"`
+	BaselineUnits         *float64 `json:"baseline_units"`
+	PlanPromoUnits        *float64 `json:"plan_promo_units"`
+	ActualPromoSalesUnits *float64 `json:"actual_promo_sales_units"`
+	PlanInvestmentsRub    *float64 `json:"plan_investments_rub"`
+	PlanROI               *float64 `json:"plan_roi"`
+	ActualROI             *float64 `json:"actual_roi"`
+	Conditions            *string  `json:"conditions"`
+	Agreement1            *string  `json:"agreement1"`
+	Agreement2            *string  `json:"agreement2"`
+	Status                *string  `json:"status"`
+	HistoricalCount       int      `json:"historical_count"`
+	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
+}

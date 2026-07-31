@@ -227,3 +227,5 @@
 {"time":"2026-07-31T02:38:33.079752+07:00","level":"INFO","msg":"promo_created","id":79342,"sku":"TEST-OPTILOCK-001","network":"Тест-OPTILOCK","year":2026,"month":5,"plan_units":200,"plan_rub":30000,"user":"system","timestamp":"2026-07-31T02:38:33+07:00"}
 {"time":"2026-07-31T02:38:33.117203+07:00","level":"INFO","msg":"promo_updated","id":79342,"sku":"TEST-OPTILOCK-001","network":"Тест-OPTILOCK","user":"system","timestamp":"2026-07-31T02:38:33+07:00"}
 {"time":"2026-07-31T02:38:33.134903+07:00","level":"INFO","msg":"promo_update_conflict","id":79342}
+{"time":"2026-07-31T09:50:50.564591+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T09:50:50.56544+07:00","level":"INFO","msg":"server_starting","port":"8080"}
