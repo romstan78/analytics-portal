@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
-  DialogContent, DialogActions, IconButton, MenuItem
+  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
 } from '@mui/material';
 import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
@@ -17,6 +17,45 @@ const MONTH_OPTIONS = [
 const fmtDisplay = (v) => {
   if (v == null || v === '') return '';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
+const AgreementChip = ({ label, value }) => {
+  const text = value || '';
+  if (!text || text === '0') return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Chip label="Ожидает" size="small" variant="outlined" sx={{ borderColor: '#94a3b8', color: '#64748b', fontWeight: 500, height: 28 }} />
+    </Box>
+  );
+
+  const lower = text.toLowerCase();
+  const isApproved = lower.startsWith('согласовано');
+  const isRejected = lower.startsWith('отклонено');
+  const color = isApproved ? '#16a34a' : isRejected ? '#dc2626' : '#6366f1';
+  const bg = isApproved ? '#f0fdf4' : isRejected ? '#fef2f2' : '#eef2ff';
+  const shortLabel = isApproved ? '✓ Согласовано' : isRejected ? '✗ Отклонено' : '💬 Комментарий';
+
+  const chip = (
+    <Chip
+      label={shortLabel}
+      size="small"
+      variant="filled"
+      sx={{
+        bgcolor: bg, color, fontWeight: 600, height: 28, maxWidth: '100%',
+        '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }}
+    />
+  );
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Tooltip title={text} arrow placement="top" slotProps={{ tooltip: { sx: { maxWidth: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } } }}>
+        {chip}
+      </Tooltip>
+    </Box>
+  );
 };
 
 // ─── Подсветка согласований ────────────────────────────────────────────────
@@ -155,10 +194,18 @@ export default function PromoEditDialog({
   
                     <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
                     <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    <TextField label="Согласование 1" size="small" fullWidth value={form.agreement1 || ''}
-                      slotProps={{ input: { readOnly: isKAM } }} sx={renderAgreementSx(form.agreement1)} />
-                    <TextField label="Согласование 2" size="small" fullWidth value={form.agreement2 || ''}
-                      slotProps={{ input: { readOnly: isKAM } }} sx={renderAgreementSx(form.agreement2)} />
+                    {isKAM ? (
+                      <AgreementChip label="Согласование 1" value={form.agreement1} />
+                    ) : (
+                      <TextField label="Согласование 1" size="small" fullWidth value={form.agreement1 || ''}
+                        onChange={updateField('agreement1')} sx={renderAgreementSx(form.agreement1)} />
+                    )}
+                    {isKAM ? (
+                      <AgreementChip label="Согласование 2" value={form.agreement2} />
+                    ) : (
+                      <TextField label="Согласование 2" size="small" fullWidth value={form.agreement2 || ''}
+                        onChange={updateField('agreement2')} sx={renderAgreementSx(form.agreement2)} />
+                    )}
                   </Box>
   
                   {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}

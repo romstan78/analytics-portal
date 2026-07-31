@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Card, CardContent, CardActions,
-  Button, Chip, CircularProgress, Alert,
+  Button, Chip, CircularProgress, Alert, Snackbar,
   FormControl, InputLabel, Select, MenuItem,
-  Collapse, IconButton, Grid, TextField,
+  Collapse, Grid, TextField, Dialog, DialogTitle,
+  DialogContent, DialogActions,
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -23,7 +24,6 @@ const roiColor = (roi) => {
   return roi >= 0 ? '#16a34a' : '#dc2626';
 };
 
-// Месяцы для фильтра
 const MONTHS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
   { label: 'Апрель', value: 4 }, { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 },
@@ -32,7 +32,6 @@ const MONTHS = [
 ];
 
 export default function PromoApproval({ role }) {
-  // Фильтры
   const [kams, setKams] = useState([]);
   const [selectedKam, setSelectedKam] = useState('');
   const [networks, setNetworks] = useState([]);
@@ -42,13 +41,17 @@ export default function PromoApproval({ role }) {
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
 
-  // Данные
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
   const [submitting, setSubmitting] = useState({});
-  const [comments, setComments] = useState({}); // id → текст комментария
+  const [comments, setComments] = useState({});
+
+  // Диалог подтверждения
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
+  // Снекбар
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   // Загрузка KAM'ов
   useEffect(() => {
@@ -87,13 +90,10 @@ export default function PromoApproval({ role }) {
     try {
       const data = await promoAPI.getApprovals(selectedKam);
       let filtered = data.data || [];
-
-      // Клиентская фильтрация (бэкенд тоже фильтрует, но для верности)
       if (selectedNetwork) filtered = filtered.filter(a => a.network_name === selectedNetwork);
-      if (selectedBrand) filtered = filtered.filter(a => a.sku && a.sku.includes(selectedBrand)); // бренд_as не приходит с бэка — фильтруем по SKU как fallback
+      if (selectedBrand) filtered = filtered.filter(a => a.sku && a.sku.includes(selectedBrand));
       if (selectedYear) filtered = filtered.filter(a => a.year === parseInt(selectedYear));
       if (selectedMonth) filtered = filtered.filter(a => a.month === parseInt(selectedMonth));
-
       setApprovals(filtered);
     } catch (err) {
       setError(err.message || 'Ошибка загрузки');
@@ -102,39 +102,41 @@ export default function PromoApproval({ role }) {
     }
   }, [selectedKam, selectedNetwork, selectedBrand, selectedYear, selectedMonth]);
 
+  // Эффект: загрузка при смене любого фильтра (без дублирования fetchApprovals в зависимостях)
   useEffect(() => {
     if (selectedKam) fetchApprovals();
     else setApprovals([]);
-  }, [fetchApprovals, selectedKam]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKam, selectedNetwork, selectedBrand, selectedYear, selectedMonth]);
 
-  // Действия
-  const handleApprove = async (id, status) => {
+  // Запрос подтверждения перед действием
+  const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
+
+  const handleConfirmedAction = async () => {
+    const { id, status } = confirmDialog;
+    setConfirmDialog({ open: false, id: null, status: '' });
+    if (!id) return;
+
     const comment = comments[id] || '';
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
       setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
+      const label = status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён';
+      setSnackbar({ open: true, message: label, severity: 'success' });
     } catch (err) {
-      // остаётся
+      setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
     } finally {
       setSubmitting(prev => ({ ...prev, [id]: false }));
     }
   };
 
+  // Комментарий без решения (третий вариант)
   const handleCommentOnly = async (id) => {
     const comment = comments[id] || '';
     if (!comment.trim()) return;
-    setSubmitting(prev => ({ ...prev, [id]: true }));
-    try {
-      await promoAPI.approve(id, 'comment', comment);
-      setApprovals(prev => prev.filter(a => a.id !== id));
-      setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
-    } catch (err) {
-      // остаётся
-    } finally {
-      setSubmitting(prev => ({ ...prev, [id]: false }));
-    }
+    openConfirm(id, 'comment');
   };
 
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
@@ -208,7 +210,6 @@ export default function PromoApproval({ role }) {
                     <Chip label={a.mechanics || '—'} size="small" color="primary" variant="outlined" />
                   </Box>
 
-                  {/* Дата промо */}
                   {a.year && a.month && (
                     <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
                       Период: {MONTHS.find(m => m.value === a.month)?.label || a.month} {a.year}
@@ -271,13 +272,12 @@ export default function PromoApproval({ role }) {
                     </Box>
                   )}
 
-                  {/* Комментарий согласующего */}
                   <TextField
                     size="small"
                     fullWidth
                     multiline
                     minRows={1}
-                    maxRows={2}
+                    maxRows={3}
                     placeholder="Комментарий (необязательно)"
                     value={comments[a.id] || ''}
                     onChange={(e) => updateComment(a.id, e.target.value)}
@@ -295,14 +295,14 @@ export default function PromoApproval({ role }) {
                   </Button>
                   <Button size="small" variant="contained" color="success"
                     startIcon={<ApproveIcon />}
-                    onClick={() => handleApprove(a.id, 'согласовано')}
+                    onClick={() => openConfirm(a.id, 'согласовано')}
                     disabled={submitting[a.id]}
                     sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
                     Согласовано
                   </Button>
                   <Button size="small" variant="contained" color="error"
                     startIcon={<RejectIcon />}
-                    onClick={() => handleApprove(a.id, 'отклонено')}
+                    onClick={() => openConfirm(a.id, 'отклонено')}
                     disabled={submitting[a.id]}
                     sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
                     Отклонено
@@ -313,6 +313,38 @@ export default function PromoApproval({ role }) {
           ))}
         </Grid>
       )}
+
+      {/* Диалог подтверждения */}
+      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '' })}>
+        <DialogTitle>
+          {confirmDialog.status === 'comment' ? 'Сохранить комментарий?' : 'Подтвердите действие'}
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            {confirmDialog.status === 'согласовано' && 'Вы уверены, что хотите СОГЛАСОВАТЬ это промо?'}
+            {confirmDialog.status === 'отклонено' && 'Вы уверены, что хотите ОТКЛОНИТЬ это промо?'}
+            {confirmDialog.status === 'comment' && 'Комментарий будет сохранён, решение не принято.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDialog({ open: false, id: null, status: '' })}>Отмена</Button>
+          <Button
+            variant="contained"
+            color={confirmDialog.status === 'отклонено' ? 'error' : confirmDialog.status === 'comment' ? 'primary' : 'success'}
+            onClick={handleConfirmedAction}
+          >
+            {confirmDialog.status === 'комментарий' ? 'Сохранить' : confirmDialog.status === 'согласовано' ? 'Согласовать' : 'Отклонить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Снекбар */}
+      <Snackbar open={snackbar.open} autoHideDuration={3000}
+        onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
+        <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

@@ -56,6 +56,15 @@ const modernTheme = createTheme({
         outlined: { borderColor: '#e2e8f0', borderRadius: 16 },
       }
     },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          color: '#475569',
+          '&.Mui-focused': { color: '#6366f1' },
+        },
+        shrink: { color: '#6366f1' },
+      },
+    },
     MuiTextField: { defaultProps: { size: 'small' } },
     MuiOutlinedInput: {
       styleOverrides: {

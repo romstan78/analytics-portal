@@ -4,6 +4,7 @@ import {
   Button, Stack, Box, Typography, CircularProgress, Tabs, Tab, 
   Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Menu, MenuItem, Checkbox, ListItemText, Divider,
+  Tooltip, Chip,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { 
@@ -26,16 +27,52 @@ const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
 
 const renderAgreement = (value) => {
-  // null, undefined, пустая строка, "0" — нет данных
   if (value == null || value === '' || value === '0') return '';
   const v = String(value);
-  if (v.startsWith('согласовано') || v.startsWith('Согласовано') || v === 'согласовано' || v === 'Согласовано') {
-    return <Box component="span" sx={{ color: '#16a34a', fontWeight: 600 }}>✓ {v}</Box>;
+  const lower = v.toLowerCase();
+
+  const isApproved = lower.startsWith('согласовано');
+  const isRejected = lower.startsWith('отклонено');
+
+  if (isApproved) {
+    const comment = v.substring('согласовано'.length).replace(/^[:\s]+/, '');
+    return (
+      <Tooltip title={comment || 'Согласовано'} arrow placement="top" disableHoverListener={!comment}>
+        <Chip
+          label={comment ? '✓ Согл. + комм.' : '✓ Согласовано'}
+          size="small"
+          variant="filled"
+          sx={{ bgcolor: '#f0fdf4', color: '#16a34a', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
+        />
+      </Tooltip>
+    );
   }
-  if (v.startsWith('отклонено') || v.startsWith('Отклонено') || v === 'отклонено' || v === 'Отклонено') {
-    return <Box component="span" sx={{ color: '#dc2626', fontWeight: 600 }}>✗ {v}</Box>;
+
+  if (isRejected) {
+    const comment = v.substring('отклонено'.length).replace(/^[:\s]+/, '');
+    return (
+      <Tooltip title={comment || 'Отклонено'} arrow placement="top" disableHoverListener={!comment}>
+        <Chip
+          label={comment ? '✗ Откл. + комм.' : '✗ Отклонено'}
+          size="small"
+          variant="filled"
+          sx={{ bgcolor: '#fef2f2', color: '#dc2626', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
+        />
+      </Tooltip>
+    );
   }
-  return <Box component="span" sx={{ color: '#6366f1', fontStyle: 'italic' }}>💬 Есть комментарий!</Box>;
+
+  // Только комментарий
+  return (
+    <Tooltip title={v} arrow placement="top">
+      <Chip
+        label="💬 Комм."
+        size="small"
+        variant="filled"
+        sx={{ bgcolor: '#eef2ff', color: '#6366f1', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
+      />
+    </Tooltip>
+  );
 };
 
 // ─── Колонки таблицы просмотра данных ──────────────────────────────────────
