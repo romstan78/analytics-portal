@@ -227,6 +227,13 @@ export default function PromoApproval({ role }) {
     setLoading(true);
     setError(null);
 
+    // Не загружаем ничего, пока не выбран KAM
+    if (!selectedKam) {
+      setApprovals([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const data = await promoAPI.getApprovals(selectedKam);
       if (currentFetchId !== fetchIdRef.current) return;
