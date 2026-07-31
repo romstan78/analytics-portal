@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box, Typography, Card, CardContent, CardActions,
   Button, Chip, CircularProgress, Alert, Snackbar,
@@ -31,6 +31,13 @@ const MONTHS = [
   { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
 ];
 
+// Стиль для InputLabel — гарантирует видимость в любом состоянии
+const inputLabelSx = {
+  color: '#475569 !important',
+  '&.Mui-focused': { color: '#6366f1 !important' },
+  '&.MuiInputLabel-shrink': { color: '#6366f1 !important' },
+};
+
 export default function PromoApproval({ role }) {
   const [kams, setKams] = useState([]);
   const [selectedKam, setSelectedKam] = useState('');
@@ -48,12 +55,14 @@ export default function PromoApproval({ role }) {
   const [submitting, setSubmitting] = useState({});
   const [comments, setComments] = useState({});
 
-  // Диалог подтверждения
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
-  // Снекбар
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
-  // Загрузка KAM'ов
+  // Ref для предотвращения race condition и лишних запросов
+  const abortRef = useRef(null);
+  const fetchIdRef = useRef(0);
+
+  // Загрузка KAM'ов (один раз)
   useEffect(() => {
     promoAPI.getApprovalKAMs()
       .then(data => {
@@ -65,30 +74,47 @@ export default function PromoApproval({ role }) {
 
   // При смене KAM → загружаем сети
   useEffect(() => {
-    if (selectedKam) {
-      promoAPI.getApprovalNetworks(selectedKam)
-        .then(data => setNetworks(data.data || []))
-        .catch(() => {});
-      setSelectedNetwork('');
-      setSelectedBrand('');
+    if (!selectedKam) {
+      setNetworks([]);
+      return;
     }
+    promoAPI.getApprovalNetworks(selectedKam)
+      .then(data => setNetworks(data.data || []))
+      .catch(() => {});
   }, [selectedKam]);
 
-  // При смене сети → загружаем бренды
+  // При смене KAM/сети → загружаем бренды
   useEffect(() => {
-    if (selectedKam) {
-      promoAPI.getApprovalBrands(selectedKam, selectedNetwork)
-        .then(data => setBrands(data.data || []))
-        .catch(() => {});
-      setSelectedBrand('');
+    if (!selectedKam) {
+      setBrands([]);
+      return;
     }
+    promoAPI.getApprovalBrands(selectedKam, selectedNetwork)
+      .then(data => setBrands(data.data || []))
+      .catch(() => {});
   }, [selectedKam, selectedNetwork]);
 
-  // Загрузка промо
+  // Основная загрузка промо — с дебаунсом и защитой от гонок
   const fetchApprovals = useCallback(async () => {
-    setLoading(true); setError(null);
+    if (!selectedKam) {
+      setApprovals([]);
+      return;
+    }
+
+    // Отменяем предыдущий запрос если был
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const currentFetchId = ++fetchIdRef.current;
+    setLoading(true);
+    setError(null);
+
     try {
       const data = await promoAPI.getApprovals(selectedKam);
+      // Игнорируем ответ если пришёл новый запрос или отменён
+      if (controller.signal.aborted || currentFetchId !== fetchIdRef.current) return;
+
       let filtered = data.data || [];
       if (selectedNetwork) filtered = filtered.filter(a => a.network_name === selectedNetwork);
       if (selectedBrand) filtered = filtered.filter(a => a.sku && a.sku.includes(selectedBrand));
@@ -96,20 +122,35 @@ export default function PromoApproval({ role }) {
       if (selectedMonth) filtered = filtered.filter(a => a.month === parseInt(selectedMonth));
       setApprovals(filtered);
     } catch (err) {
+      if (err.name === 'AbortError' || currentFetchId !== fetchIdRef.current) return;
       setError(err.message || 'Ошибка загрузки');
     } finally {
-      setLoading(false);
+      if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
   }, [selectedKam, selectedNetwork, selectedBrand, selectedYear, selectedMonth]);
 
-  // Эффект: загрузка при смене любого фильтра (без дублирования fetchApprovals в зависимостях)
+  // Единый эффект загрузки — вызывается при изменении любого фильтра
   useEffect(() => {
-    if (selectedKam) fetchApprovals();
-    else setApprovals([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKam, selectedNetwork, selectedBrand, selectedYear, selectedMonth]);
+    fetchApprovals();
+  }, [fetchApprovals]);
 
-  // Запрос подтверждения перед действием
+  // При смене KAM сбрасываем зависимые фильтры (но не триггерим лишних загрузок)
+  const handleKamChange = (e) => {
+    const newKam = e.target.value;
+    setSelectedKam(newKam);
+    setSelectedNetwork('');
+    setSelectedBrand('');
+    setNetworks([]);
+    setBrands([]);
+    setApprovals([]);
+  };
+
+  const handleNetworkChange = (e) => {
+    setSelectedNetwork(e.target.value);
+    setSelectedBrand('');
+    setBrands([]);
+  };
+
   const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
 
   const handleConfirmedAction = async () => {
@@ -123,7 +164,9 @@ export default function PromoApproval({ role }) {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
       setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
-      const label = status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён';
+      const label = status === 'согласовано' ? '✅ Согласовано'
+        : status === 'отклонено' ? '❌ Отклонено'
+        : '💬 Комментарий сохранён';
       setSnackbar({ open: true, message: label, severity: 'success' });
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
@@ -132,7 +175,6 @@ export default function PromoApproval({ role }) {
     }
   };
 
-  // Комментарий без решения (третий вариант)
   const handleCommentOnly = async (id) => {
     const comment = comments[id] || '';
     if (!comment.trim()) return;
@@ -147,22 +189,22 @@ export default function PromoApproval({ role }) {
       {/* Фильтры */}
       <Box sx={{ display: 'flex', gap: 1.5, mb: 3, flexWrap: 'wrap', alignItems: 'center' }}>
         <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>KAM</InputLabel>
-          <Select value={selectedKam} label="KAM" onChange={(e) => setSelectedKam(e.target.value)}>
+          <InputLabel sx={inputLabelSx}>KAM</InputLabel>
+          <Select value={selectedKam} label="KAM" onChange={handleKamChange}>
             {kams.map(k => <MenuItem key={k} value={k}>{k}</MenuItem>)}
           </Select>
         </FormControl>
 
         <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>Сеть</InputLabel>
-          <Select value={selectedNetwork} label="Сеть" onChange={(e) => setSelectedNetwork(e.target.value)}>
+          <InputLabel sx={inputLabelSx}>Сеть</InputLabel>
+          <Select value={selectedNetwork} label="Сеть" onChange={handleNetworkChange}>
             <MenuItem value="">Все</MenuItem>
             {networks.map(n => <MenuItem key={n} value={n}>{n}</MenuItem>)}
           </Select>
         </FormControl>
 
         <FormControl size="small" sx={{ minWidth: 160 }}>
-          <InputLabel>Бренд</InputLabel>
+          <InputLabel sx={inputLabelSx}>Бренд</InputLabel>
           <Select value={selectedBrand} label="Бренд" onChange={(e) => setSelectedBrand(e.target.value)}>
             <MenuItem value="">Все</MenuItem>
             {brands.map(b => <MenuItem key={b} value={b}>{b}</MenuItem>)}
@@ -174,7 +216,7 @@ export default function PromoApproval({ role }) {
           sx={{ width: 90 }} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
 
         <FormControl size="small" sx={{ minWidth: 130 }}>
-          <InputLabel>Месяц</InputLabel>
+          <InputLabel sx={inputLabelSx}>Месяц</InputLabel>
           <Select value={selectedMonth} label="Месяц" onChange={(e) => setSelectedMonth(e.target.value)}>
             <MenuItem value="">Все</MenuItem>
             {MONTHS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
