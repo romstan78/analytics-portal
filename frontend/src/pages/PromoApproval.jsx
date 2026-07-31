@@ -291,7 +291,7 @@ export default function PromoApproval({ role }) {
                     onClick={() => handleCommentOnly(a.id)}
                     disabled={submitting[a.id] || !(comments[a.id] || '').trim()}
                     sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-                    Комм.
+                    Комментарий
                   </Button>
                   <Button size="small" variant="contained" color="success"
                     startIcon={<ApproveIcon />}
@@ -333,7 +333,7 @@ export default function PromoApproval({ role }) {
             color={confirmDialog.status === 'отклонено' ? 'error' : confirmDialog.status === 'comment' ? 'primary' : 'success'}
             onClick={handleConfirmedAction}
           >
-            {confirmDialog.status === 'комментарий' ? 'Сохранить' : confirmDialog.status === 'согласовано' ? 'Согласовать' : 'Отклонить'}
+            {confirmDialog.status === 'comment' ? 'Отправить комментарий' : confirmDialog.status === 'согласовано' ? 'Согласовать' : 'Отклонить'}
           </Button>
         </DialogActions>
       </Dialog>

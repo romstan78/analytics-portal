@@ -39,7 +39,7 @@ const renderAgreement = (value) => {
     return (
       <Tooltip title={comment || 'Согласовано'} arrow placement="top" disableHoverListener={!comment}>
         <Chip
-          label={comment ? '✓ Согл. + комм.' : '✓ Согласовано'}
+          label={comment ? '✓ Согласовано + комм.' : '✓ Согласовано'}
           size="small"
           variant="filled"
           sx={{ bgcolor: '#f0fdf4', color: '#16a34a', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
@@ -53,7 +53,7 @@ const renderAgreement = (value) => {
     return (
       <Tooltip title={comment || 'Отклонено'} arrow placement="top" disableHoverListener={!comment}>
         <Chip
-          label={comment ? '✗ Откл. + комм.' : '✗ Отклонено'}
+          label={comment ? '✗ Отклонено + комм.' : '✗ Отклонено'}
           size="small"
           variant="filled"
           sx={{ bgcolor: '#fef2f2', color: '#dc2626', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
@@ -66,7 +66,7 @@ const renderAgreement = (value) => {
   return (
     <Tooltip title={v} arrow placement="top">
       <Chip
-        label="💬 Комм."
+        label="💬 Комментарий"
         size="small"
         variant="filled"
         sx={{ bgcolor: '#eef2ff', color: '#6366f1', fontWeight: 600, height: 24, fontSize: '0.75rem' }}
