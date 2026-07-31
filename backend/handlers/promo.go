@@ -735,7 +735,7 @@ func SavePromo(c *gin.Context) {
 
 			calculatePromoFields(existing)
 
-			oldUpdatedAt := existing["updated_at"]
+			oldUpdatedAt := input["updated_at"]
 
 			setClauses := []string{}
 			values := []interface{}{}

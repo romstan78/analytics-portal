@@ -152,7 +152,6 @@ export default function App() {
           <Route path="/network-registry" element={<PlaceholderPage title="Реестр сетей" description="Справочник торговых сетей" />} />
           <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
           <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
-          <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
         </Routes>
       </Box>
     </ThemeProvider>
