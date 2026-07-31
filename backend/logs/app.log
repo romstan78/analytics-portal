@@ -229,3 +229,34 @@
 {"time":"2026-07-31T02:38:33.134903+07:00","level":"INFO","msg":"promo_update_conflict","id":79342}
 {"time":"2026-07-31T09:50:50.564591+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
 {"time":"2026-07-31T09:50:50.56544+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T10:29:53.678498+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T10:29:53.681317+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T11:27:09.735125+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T11:27:09.735818+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T12:02:17.803432+07:00","level":"INFO","msg":"promo_update_conflict","id":79340}
+{"time":"2026-07-31T12:02:29.104764+07:00","level":"INFO","msg":"promo_update_conflict","id":79340}
+{"time":"2026-07-31T12:02:39.710098+07:00","level":"INFO","msg":"promo_update_conflict","id":79340}
+{"time":"2026-07-31T12:03:22.279163+07:00","level":"INFO","msg":"promo_update_conflict","id":77330}
+{"time":"2026-07-31T12:09:25.217184+07:00","level":"INFO","msg":"promo_update_conflict","id":79340}
+{"time":"2026-07-31T12:09:50.869327+07:00","level":"INFO","msg":"promo_update_conflict","id":77329}
+{"time":"2026-07-31T12:10:13.516944+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T12:10:13.517678+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T12:10:30.439368+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T12:10:30.440421+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T12:10:57.160466+07:00","level":"INFO","msg":"promo_update_conflict","id":79340}
+{"time":"2026-07-31T12:25:46.238854+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T12:25:46.239726+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T12:27:42.379746+07:00","level":"ERROR","msg":"promo_update_failed","error":"mssql: The column name 'updated_at' is specified more than once in the SET clause or column list of an INSERT. A column cannot be assigned more than one value in the same clause. Modify the clause to make sure that a column is updated only once. If this statement updates or inserts columns into a view, column aliasing can conceal the duplication in your code.","id":79340}
+{"time":"2026-07-31T12:51:36.279036+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T12:51:36.280499+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T12:55:24.633421+07:00","level":"INFO","msg":"promo_approved","id":76363,"field":"agreement1","value":"надо посмотреть предыдущие факты по промо","user":"system","timestamp":"2026-07-31T12:55:24+07:00"}
+{"time":"2026-07-31T12:57:52.169345+07:00","level":"INFO","msg":"promo_approved","id":77319,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-07-31T12:57:52+07:00"}
+{"time":"2026-07-31T12:59:54.416308+07:00","level":"INFO","msg":"promo_updated","id":77320,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"Тандер АС","user":"system","timestamp":"2026-07-31T12:59:54+07:00"}
+{"time":"2026-07-31T13:07:08.898254+07:00","level":"INFO","msg":"promo_updated","id":77317,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"Тандер АС","user":"system","timestamp":"2026-07-31T13:07:08+07:00"}
+{"time":"2026-07-31T13:08:59.08637+07:00","level":"INFO","msg":"promo_approved","id":76231,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-07-31T13:08:59+07:00"}
+{"time":"2026-07-31T13:12:21.764059+07:00","level":"INFO","msg":"promo_approved","id":76231,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-07-31T13:12:21+07:00"}
+{"time":"2026-07-31T13:46:34.902467+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-07-31T13:46:34.903441+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-07-31T13:49:26.277777+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T13:49:26+07:00"}
+{"time":"2026-07-31T13:52:21.183556+07:00","level":"INFO","msg":"promo_updated","id":77326,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"Фармгарант АС","user":"system","timestamp":"2026-07-31T13:52:21+07:00"}
+{"time":"2026-07-31T13:52:57.554229+07:00","level":"INFO","msg":"promo_approved","id":76229,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-07-31T13:52:57+07:00"}

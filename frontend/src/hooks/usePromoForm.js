@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { promoAPI } from '../api/promo';
 
+// ─── Пустая форма ──────────────────────────────────────────────────────────
 const EMPTY_FORM = {
   id: null, network_name: '', kam: '', brand: '', sku: '',
   year: new Date().getFullYear(), month: new Date().getMonth() + 1,
@@ -13,15 +14,24 @@ const EMPTY_FORM = {
   actual_external_ecom_units: '', actual_corrected_baseline: '',
   agreement1: '', agreement2: '',
   conditions: '', comments: '',
+  id_directum: '', ds_number: '',
+  total_pharmacies: '', promo_pharmacies: '',
   status: '',
+  updated_at: null, // ← для optimistic locking
 };
 
+// ─── Хук ────────────────────────────────────────────────────────────────────
+// Колбэки:
+//   onEditSuccess(id, data) — после успешного редактирования
+//   onDeleteSuccess(id)     — после успешного удаления
+//   onCreateSuccess()       — после создания нового промо
 export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
   const handleRowClick = useCallback((row) => {
     setForm({
       id: row.id,
@@ -61,11 +71,12 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
       id_directum: row.id_directum ?? '',
       ds_number: row.ds_number ?? '',
       status: row.status ?? '',
-      updated_at: row.updated_at ?? null,
+      updated_at: row.updated_at ?? null, // ← критично для optimistic locking
     });
     setEditMode(true);
   }, []);
 
+  // ─── Сохранение (INSERT или UPDATE) ─────────────────────────────────────
   const handleSave = useCallback(async () => {
     if (!form.sku || !form.network_name) {
       return { success: false, message: '⚠️ Заполните Сеть и SKU' };
@@ -100,7 +111,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         agreement1: form.agreement1 ?? null,
         agreement2: form.agreement2 ?? null,
         status: form.status,
-        updated_at: form.updated_at,
+        updated_at: form.updated_at, // ← для optimistic locking
       };
 
       const result = await promoAPI.save(payload);
@@ -117,8 +128,9 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
       return { success: true, message: '✅ Сохранено' };
     } catch (err) {
+      // 409 — конфликт версий (optimistic locking)
       if (err.status === 409) {
-        return { success: false, message: '⚠️ ' + err.message };
+        return { success: false, message: '⚠️ Запись изменена другим пользователем. Обновите страницу.' };
       }
       return { success: false, message: '❌ ' + (err.message || 'Ошибка сохранения') };
     } finally {
@@ -126,6 +138,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
     }
   }, [form, onEditSuccess, onCreateSuccess]);
 
+  // ─── Удаление (soft-delete) ─────────────────────────────────────────────
   const handleDelete = useCallback(async () => {
     if (!form.id) return { success: false, message: 'Нет ID' };
     setDeleting(true);
@@ -140,6 +153,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
     }
   }, [form.id, onDeleteSuccess]);
 
+  // ─── Сброс формы ────────────────────────────────────────────────────────
   const resetForm = useCallback(() => {
     setForm({ ...EMPTY_FORM });
     setEditMode(false);

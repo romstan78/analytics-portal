@@ -15,6 +15,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import FilterPanel from '../components/FilterPanel';
 import PromoForm from './PromoForm';
 import PromoEditDialog from '../components/PromoEditDialog';
+import PromoApproval from './PromoApproval';
 import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
@@ -24,6 +25,20 @@ import { usePromoCalculations } from '../hooks/usePromoCalculations';
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
 
+const renderAgreement = (value) => {
+  // null, undefined, пустая строка, "0" — нет данных
+  if (value == null || value === '' || value === '0') return '';
+  const v = String(value);
+  if (v.startsWith('согласовано') || v.startsWith('Согласовано') || v === 'согласовано' || v === 'Согласовано') {
+    return <Box component="span" sx={{ color: '#16a34a', fontWeight: 600 }}>✓ {v}</Box>;
+  }
+  if (v.startsWith('отклонено') || v.startsWith('Отклонено') || v === 'отклонено' || v === 'Отклонено') {
+    return <Box component="span" sx={{ color: '#dc2626', fontWeight: 600 }}>✗ {v}</Box>;
+  }
+  return <Box component="span" sx={{ color: '#6366f1', fontStyle: 'italic' }}>💬 Есть комментарий!</Box>;
+};
+
+// ─── Колонки таблицы просмотра данных ──────────────────────────────────────
 const COLUMNS = [
   { field: 'year', headerName: 'Год', width: 70, type: 'number', valueFormatter: (v) => v },
   { field: 'month', headerName: 'Мес', width: 60, type: 'number' }, 
@@ -40,6 +55,10 @@ const COLUMNS = [
     valueFormatter: (v) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
   { field: 'actual_investments', headerName: 'Факт инвест.', width: 130, type: 'number', 
     valueFormatter: (v) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
+  { field: 'agreement1', headerName: 'Согласование 1', width: 160,
+    renderCell: (params) => renderAgreement(params.value) },
+  { field: 'agreement2', headerName: 'Согласование 2', width: 160,
+    renderCell: (params) => renderAgreement(params.value) },
   { field: 'status', headerName: 'Статус', width: 140 },
 ];
 
@@ -54,7 +73,9 @@ const EXTRA_FILTERS = [
 ];
 const PROMO_VISIBLE_FILTERS = ['kam', 'brand', 'sku', 'network_name', 'mechanics', 'channel', 'status'];
 
-export default function PromoAnalysis() {
+// ─── Компонент ─────────────────────────────────────────────────────────────
+// role — передаётся из App.jsx (admin / agreement1 / agreement2)
+export default function PromoAnalysis({ role }) {
   const navigate = useNavigate();
   const [tab, setTab] = useState(0);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -65,7 +86,7 @@ export default function PromoAnalysis() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
-  // Тулбар
+  // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
@@ -75,31 +96,35 @@ export default function PromoAnalysis() {
   });
   const apiRef = useRef(null);
 
+  // ─── Фильтры и данные ─────────────────────────────────────────────────
   const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta } = 
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
   const { rows, setRows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters, refreshTrigger);
 
-  // Локальное обновление после редактирования
+  // ─── Локальные обновления UI (без перезагрузки всей таблицы) ──────────
+  // После редактирования: заменяем одну строку в массиве
   const handleEditSuccess = useCallback((editedId, updatedData) => {
     setRows(prev => prev.map(row => 
       row.id === editedId ? { ...row, ...updatedData } : row
     ));
   }, [setRows]);
 
-  // Локальное удаление
+  // После удаления: убираем строку из массива
   const handleDeleteSuccess = useCallback((deletedId) => {
     setRows(prev => prev.filter(row => row.id !== deletedId));
   }, [setRows]);
 
-  // После создания нового промо — перезагрузка
+  // После создания нового промо: перезагружаем таблицу полностью
   const handleCreateSuccess = useCallback(() => {
     setRefreshTrigger(prev => prev + 1);
   }, []);
 
+  // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete, resetForm } = 
     usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
+  // ─── Загрузка справочников ────────────────────────────────────────────
   useEffect(() => { promoAPI.getInvestmentTypes().then(data => setInvestmentTypes(data.data || [])); }, []);
   useEffect(() => { 
     promoAPI.getFilters().then(data => { 
@@ -114,6 +139,7 @@ export default function PromoAnalysis() {
     channel: meta.channel || [], status: meta.status || []
   }), [meta]);
 
+  // ─── Обработчики действий ─────────────────────────────────────────────
   const handleRowClick = (params) => { formHandleRowClick(params.row); setEditDialogOpen(true); };
 
   const handleSave = async () => { 
@@ -133,7 +159,7 @@ export default function PromoAnalysis() {
     setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
   };
 
-  // Поиск по таблице (клиентский)
+  // ─── Поиск по таблице (клиентский) ────────────────────────────────────
   const filteredRows = useMemo(() => {
     if (!searchText.trim()) return rows;
     const lower = searchText.toLowerCase();
@@ -151,6 +177,7 @@ export default function PromoAnalysis() {
 
   const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
 
+  // ─── Экспорт CSV ──────────────────────────────────────────────────────
   const handleExport = async () => {
     try {
       const params = new URLSearchParams();
@@ -184,8 +211,10 @@ export default function PromoAnalysis() {
     } catch (e) { console.error('Export error:', e); }
   };
 
+  // ─── Рендер ───────────────────────────────────────────────────────────
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2 }}>
+      {/* Шапка */}
       <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Анализ промо</Typography>
@@ -194,11 +223,16 @@ export default function PromoAnalysis() {
           <Typography variant="body2" color="text.secondary">Загружено: {rows.length} записей</Typography>}
       </Stack>
 
+      {/* ─── Вкладки ─────────────────────────────────────────────────── */}
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Просмотр данных" />
         <Tab label="Новое промо" />
+        {(role === 'agreement1' || role === 'agreement2' || role === 'admin') && (
+          <Tab label="Согласование" />
+        )}
       </Tabs>
 
+      {/* ─── Tab 0: Просмотр данных ──────────────────────────────────── */}
       {tab === 0 && (<>
         <Box sx={{ mb: 2 }}>
           <FilterPanel filters={filters} filterOptions={filterOptions} onFiltersChange={setFilters}
@@ -211,7 +245,8 @@ export default function PromoAnalysis() {
             Ошибка загрузки справочников. Повторить
           </Button>}
 
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+          {/* Пользовательский тулбар */}
           <Box sx={{ 
             display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
             bgcolor: '#f1f5f9', borderRadius: '12px 12px 0 0',
@@ -272,15 +307,18 @@ export default function PromoAnalysis() {
           />
         </Box>
 
+        {/* Диалог редактирования */}
         <PromoEditDialog 
           open={editDialogOpen} onClose={() => setEditDialogOpen(false)}
           form={form} setForm={setForm} recalcPlan={recalcPlan} recalcActual={recalcActual}
           onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
           saving={saving} deleting={deleting} meta={meta} 
           allSkuOptions={allSkuOptions} allNetworkOptions={allNetworkOptions} 
-          investmentTypes={investmentTypes} 
+          investmentTypes={investmentTypes}
+          role={role}
         />
 
+        {/* Диалог подтверждения удаления */}
         <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
           <DialogTitle>Удалить промо #{form.id}?</DialogTitle>
           <DialogContent><Typography>Это действие нельзя отменить.</Typography></DialogContent>
@@ -293,8 +331,13 @@ export default function PromoAnalysis() {
         </Dialog>
       </>)}
 
+      {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
 
+      {/* ─── Tab 2: Согласование ──────────────────────────────────────── */}
+      {tab === 2 && <PromoApproval role={role} />}
+
+      {/* Снекбар уведомлений */}
       <Snackbar open={snackbar.open} autoHideDuration={3000} 
         onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>

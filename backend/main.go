@@ -133,6 +133,8 @@ func main() {
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
 		api.GET("/promo/approvals", handlers.GetApprovals)
 		api.GET("/promo/approval-kams", handlers.GetApprovalKAMs)
+		api.GET("/promo/approval-networks", handlers.GetApprovalNetworks)
+		api.GET("/promo/approval-brands", handlers.GetApprovalBrands)
 		api.POST("/promo/approve", handlers.ApprovePromo)
 
 		// Промо — удаление (только admin)

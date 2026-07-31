@@ -103,6 +103,8 @@ FLOAT_FIELDS = [
     'plan_promo_uplift_cip_olap', 'fact_promo_uplift_cip_olap',
 ]
 
+AGREEMENT_FIELDS = ['agreement1', 'agreement2']
+
 MONTH_NAMES = {
     'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4,
     'май': 5, 'июнь': 6, 'июль': 7, 'август': 8,
@@ -171,6 +173,12 @@ def convert_value(col_name, value):
         return safe_float(value)
     elif col_name == 'date':
         return safe_date(value)
+    elif col_name in ['agreement1', 'agreement2']:
+        # Согласование: '0' → None, иначе чистый текст
+        cleaned = clean_string(value)
+        if cleaned == '0':
+            return None
+        return cleaned
     else:
         return clean_string(value)
 

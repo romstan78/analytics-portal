@@ -64,7 +64,7 @@ func calculatePromoFields(input map[string]interface{}) {
 	sku := safeString(input, "sku")
 	networkName := safeString(input, "network_name")
 
-	// key_region и top20_segment — приоритет: фронтенд > tbl_NetworkGeoMapping > tbl_PromoActivities
+	// key_region и top20_segment — приоритет: фронтенд > tbl_NetworkGeoMapping
 	if safeString(input, "key_region") == "" || safeString(input, "top20_segment") == "" {
 		var kr, t20 sql.NullString
 		config.DB.QueryRow(
@@ -673,6 +673,7 @@ var allPromoFields = []string{
 	"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
 	"plan_vs_fact_rub", "plan_vs_fact_investments",
 	"turnover_per_point", "turnover_per_point_promo",
+	"updated_at",
 }
 
 func fetchExistingRow(id int) (map[string]interface{}, error) {
@@ -734,12 +735,15 @@ func SavePromo(c *gin.Context) {
 
 			calculatePromoFields(existing)
 
-			// Optimistic locking: запоминаем updated_at до изменений
 			oldUpdatedAt := existing["updated_at"]
 
 			setClauses := []string{}
 			values := []interface{}{}
 			for _, field := range allPromoFields {
+				if field == "updated_at" {
+					// пропускаем — задаётся через GETDATE()
+					continue
+				}
 				if val, ok := existing[field]; ok {
 					setClauses = append(setClauses, field+" = ?")
 					values = append(values, val)
@@ -851,13 +855,12 @@ func DeletePromo(c *gin.Context) {
 // ─── Согласование ──────────────────────────────────────────────────────────
 
 // GetApprovals возвращает список промо, ожидающих согласования.
-// Для agreement1 — где agreement1 IS NULL, для agreement2 — где agreement2 IS NULL.
-// Включает историческую статистику: количество прошлых аналогичных промо и средний ROI по ним.
+// agreement1 IS NULL — для роли agreement1, agreement2 IS NULL — для agreement2.
+// Фильтры: kam, network_name, brand, year, month (клиентские, бэкенд не фильтрует).
 func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
 
-	// Определяем, какое поле проверять
 	agreementField := "p.agreement1"
 	if roleStr == "agreement2" {
 		agreementField = "p.agreement2"
@@ -921,8 +924,11 @@ func GetApprovals(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": results})
 }
 
-// ApprovePromo заполняет agreement1 или agreement2 значением «согласовано» или «отклонено».
-// Поле определяется автоматически по роли пользователя.
+// ApprovePromo — три режима:
+//
+//	status="comment"      → только комментарий в agreement поле
+//	status="согласовано"  → "согласовано" + опционально ": комментарий"
+//	status="отклонено"    → "отклонено"   + опционально ": комментарий"
 func ApprovePromo(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
@@ -933,22 +939,41 @@ func ApprovePromo(c *gin.Context) {
 	}
 
 	var req struct {
-		ID    int    `json:"id"`
-		Value string `json:"value"`
+		ID      int    `json:"id"`
+		Status  string `json:"status"`
+		Comment string `json:"comment"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
 		return
 	}
 
-	if req.Value != "согласовано" && req.Value != "отклонено" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые значения: согласовано, отклонено"})
+	var value string
+	switch req.Status {
+	case "comment":
+		if req.Comment == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "комментарий не может быть пустым"})
+			return
+		}
+		value = req.Comment
+	case "согласовано":
+		value = "согласовано"
+		if req.Comment != "" {
+			value = "согласовано: " + req.Comment
+		}
+	case "отклонено":
+		value = "отклонено"
+		if req.Comment != "" {
+			value = "отклонено: " + req.Comment
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые status: comment, согласовано, отклонено"})
 		return
 	}
 
 	_, err := config.DB.Exec(
 		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
-		req.Value, req.ID,
+		value, req.ID,
 	)
 	if err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
@@ -959,15 +984,14 @@ func ApprovePromo(c *gin.Context) {
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,
-		"value", req.Value,
+		"value", value,
 		"user", "system",
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Обновлено"})
 }
 
-// GetApprovalKAMs возвращает список KAM'ов, у которых есть промо на согласовании
-// (т.е. agreement1 IS NULL или agreement2 IS NULL в зависимости от роли).
+// GetApprovalKAMs возвращает список KAM'ов, у которых есть промо на согласовании.
 func GetApprovalKAMs(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
@@ -1002,4 +1026,102 @@ func GetApprovalKAMs(c *gin.Context) {
 		kams = []string{}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": kams})
+}
+
+// GetApprovalNetworks возвращает сети для выбранного KAM на согласовании.
+func GetApprovalNetworks(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+	kam := c.Query("kam")
+	if kam == "" {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+
+	field := "p.agreement1"
+	if roleStr == "agreement2" {
+		field = "p.agreement2"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.network_name 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL 
+		  AND %s IS NULL 
+		  AND p.kam = ? 
+		  AND p.network_name IS NOT NULL
+		ORDER BY p.network_name
+	`, field)
+
+	rows, err := config.DB.Query(query, kam)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	defer rows.Close()
+
+	var networks []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			networks = append(networks, n)
+		}
+	}
+	if networks == nil {
+		networks = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": networks})
+}
+
+// GetApprovalBrands возвращает бренды для выбранного KAM и сети на согласовании.
+func GetApprovalBrands(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+	kam := c.Query("kam")
+	network := c.Query("network_name")
+	if kam == "" {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+
+	field := "p.agreement1"
+	if roleStr == "agreement2" {
+		field = "p.agreement2"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.brand_as 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL 
+		  AND %s IS NULL 
+		  AND p.kam = ? 
+		  AND p.brand_as IS NOT NULL
+	`, field)
+	args := []interface{}{kam}
+
+	if network != "" {
+		query += " AND p.network_name = ?"
+		args = append(args, network)
+	}
+
+	query += " ORDER BY p.brand_as"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": []string{}})
+		return
+	}
+	defer rows.Close()
+
+	var brands []string
+	for rows.Next() {
+		var b string
+		if rows.Scan(&b) == nil {
+			brands = append(brands, b)
+		}
+	}
+	if brands == nil {
+		brands = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": brands})
 }
