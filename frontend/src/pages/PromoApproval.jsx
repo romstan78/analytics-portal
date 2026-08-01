@@ -48,8 +48,8 @@ const ApprovalCard = memo(function ApprovalCard({
 
   return (
     <Grid item xs={12} sm={6} md={4} sx={{ display: 'flex' }}>
-      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, width: '100%', display: 'flex', flexDirection: 'column' }}>
-        <CardContent sx={{ pb: 1 }}>
+      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <CardContent sx={{ flex: 1, pb: 1 }}>
           {/* Заголовок: сеть */}
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
             {item.network_name || '—'}
@@ -142,7 +142,7 @@ const ApprovalCard = memo(function ApprovalCard({
           />
         </CardContent>
 
-        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5 }}>
+        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
           <Button size="small" variant="outlined"
             startIcon={<CommentIcon />}
             onClick={() => onCommentOnly(id)}
@@ -211,14 +211,14 @@ export default function PromoApproval({ role }) {
   // ═══════ Загрузка справочников (один раз) ═══════
   useEffect(() => {
     Promise.all([
-      promoAPI.getApprovalKAMs(),
-      promoAPI.getFilters(),
+      promoAPI.getApprovalKAMs().catch(err => { console.error('Ошибка загрузки KAM:', err); return { data: [] }; }),
+      promoAPI.getFilters().catch(err => { console.error('Ошибка загрузки фильтров:', err); return { network_name: [], brand: [], mechanics: [] }; }),
     ]).then(([kamData, filterData]) => {
       setKams(kamData.data || []);
       setNetworks(filterData.network_name || []);
       setBrands(filterData.brand || []);
       setMechanicsOptions(filterData.mechanics || []);
-    }).catch(() => {});
+    });
   }, []);
 
   // ═══════ Загрузка промо при изменении фильтров ═══════
