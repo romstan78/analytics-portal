@@ -868,7 +868,7 @@ func GetApprovals(c *gin.Context) {
 
 	kam := c.Query("kam")
 
-	// Ограничиваем только последними 2 годами (не исторические данные)
+	// Только текущий год (исторические не выводим)
 	currentYear := time.Now().Year()
 
 	query := fmt.Sprintf(`
@@ -882,10 +882,10 @@ func GetApprovals(c *gin.Context) {
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
 		  AND %s IS NULL
-		  AND p.year >= ?
+		  AND p.year = ?
 	`, agreementField)
 
-	args := []interface{}{currentYear - 1}
+	args := []interface{}{currentYear}
 
 	if kam != "" {
 		query += " AND p.kam = ?"
