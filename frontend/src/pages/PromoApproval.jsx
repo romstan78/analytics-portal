@@ -45,14 +45,6 @@ const ApprovalCard = memo(function ApprovalCard({
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
-  const inputRef = useRef(null);
-
-  // Передаём реф родителю один раз при монтировании
-  useEffect(() => {
-    if (onCommentRef && inputRef.current) {
-      onCommentRef(id, inputRef.current);
-    }
-  }, [id, onCommentRef]);
 
   return (
     <Box>
@@ -129,6 +121,7 @@ const ApprovalCard = memo(function ApprovalCard({
             </Box>
           )}
 
+          {/* ref callback: вызывается при каждом рендере — реф всегда актуален */}
           <TextField
             size="small"
             fullWidth
@@ -136,7 +129,7 @@ const ApprovalCard = memo(function ApprovalCard({
             minRows={1}
             maxRows={3}
             placeholder="Комментарий (необязательно)"
-            inputRef={inputRef}
+            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
             sx={{ mb: 1 }}
           />
         </CardContent>
