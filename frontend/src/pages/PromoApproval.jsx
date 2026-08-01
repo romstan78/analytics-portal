@@ -252,11 +252,6 @@ export default function PromoApproval({ role }) {
     fetchApprovals();
   }, [fetchApprovals]);
 
-  // Очистка рефов при смене данных
-  useEffect(() => {
-    commentRefs.current = {};
-  }, [approvals]);
-
   // Колбек для получения рефа из карточки
   const handleCommentRef = useCallback((id, el) => {
     commentRefs.current[id] = el;
