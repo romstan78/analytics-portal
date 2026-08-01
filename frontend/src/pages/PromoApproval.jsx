@@ -40,35 +40,39 @@ const MONTHS = [
 // ═══════════════════════════════════════════════════════════════════════════
 
 const ApprovalCard = memo(function ApprovalCard({
-  item, expanded, submitting, commentRef,
+  item, expanded, submitting, onCommentRef,
   onToggleExpand, onOpenConfirm, onCommentOnly,
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
+  const inputRef = useRef(null);
+
+  // Передаём реф родителю один раз при монтировании
+  useEffect(() => {
+    if (onCommentRef && inputRef.current) {
+      onCommentRef(id, inputRef.current);
+    }
+  }, [id, onCommentRef]);
 
   return (
     <Box>
       <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
         <CardContent sx={{ flex: 1, pb: 1 }}>
-          {/* Заголовок: сеть */}
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
             {item.network_name || '—'}
           </Typography>
 
-          {/* Чипы: SKU + Механика */}
           <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
             <Chip label={item.sku || '—'} size="small" variant="outlined" />
             <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
           </Box>
 
-          {/* Период */}
           {item.year && item.month && (
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
               Период: {MONTHS.find(m => m.value === item.month)?.label || item.month} {item.year}
             </Typography>
           )}
 
-          {/* Показатели */}
           <Grid container spacing={1} sx={{ mb: 1 }}>
             <Grid item xs={6}>
               <Typography variant="caption" color="text.secondary">Baseline</Typography>
@@ -88,7 +92,6 @@ const ApprovalCard = memo(function ApprovalCard({
             </Grid>
           </Grid>
 
-          {/* ROI */}
           <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
             <Box>
               <Typography variant="caption" color="text.secondary">ROI план</Typography>
@@ -104,7 +107,6 @@ const ApprovalCard = memo(function ApprovalCard({
             </Box>
           </Box>
 
-          {/* История */}
           <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
             <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
             <Typography variant="caption" color="text.secondary">
@@ -112,7 +114,6 @@ const ApprovalCard = memo(function ApprovalCard({
             </Typography>
           </Box>
 
-          {/* Условия (сворачиваемые) */}
           {item.conditions && (
             <Box sx={{ mb: 1 }}>
               <Button size="small" onClick={() => onToggleExpand(id)}
@@ -128,7 +129,6 @@ const ApprovalCard = memo(function ApprovalCard({
             </Box>
           )}
 
-          {/* Комментарий — используем defaultValue + ref, чтобы не триггерить ререндер родителя */}
           <TextField
             size="small"
             fullWidth
@@ -136,8 +136,7 @@ const ApprovalCard = memo(function ApprovalCard({
             minRows={1}
             maxRows={3}
             placeholder="Комментарий (необязательно)"
-            defaultValue=""
-            inputRef={(el) => { commentRef.current[id] = el; }}
+            inputRef={inputRef}
             sx={{ mb: 1 }}
           />
         </CardContent>
@@ -264,6 +263,11 @@ export default function PromoApproval({ role }) {
   useEffect(() => {
     commentRefs.current = {};
   }, [approvals]);
+
+  // Колбек для получения рефа из карточки
+  const handleCommentRef = useCallback((id, el) => {
+    commentRefs.current[id] = el;
+  }, []);
 
   // ═══════ Действия ═══════
   const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
@@ -403,7 +407,7 @@ export default function PromoApproval({ role }) {
                 item={a}
                 expanded={expandedCards[a.id] || false}
                 submitting={submitting}
-                commentRef={commentRefs}
+                onCommentRef={handleCommentRef}
                 onToggleExpand={toggleExpand}
                 onOpenConfirm={openConfirm}
                 onCommentOnly={handleCommentOnly}
