@@ -868,8 +868,9 @@ func GetApprovals(c *gin.Context) {
 
 	kam := c.Query("kam")
 
-	// Только текущий год (исторические не выводим)
+	// Только промо с текущего месяца и далее (не исторические)
 	currentYear := time.Now().Year()
+	currentMonth := int(time.Now().Month())
 
 	query := fmt.Sprintf(`
 		SELECT TOP 500
@@ -882,10 +883,10 @@ func GetApprovals(c *gin.Context) {
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
 		  AND %s IS NULL
-		  AND p.year = ?
+		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`, agreementField)
 
-	args := []interface{}{currentYear}
+	args := []interface{}{currentYear, currentYear, currentMonth}
 
 	if kam != "" {
 		query += " AND p.kam = ?"
