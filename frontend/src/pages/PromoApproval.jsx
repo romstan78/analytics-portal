@@ -47,7 +47,7 @@ const ApprovalCard = memo(function ApprovalCard({
   const isSubmitting = submitting[id] || false;
 
   return (
-    <Grid item xs={12} sm={6} md={4} lg={3}>
+    <Box>
       <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
         <CardContent sx={{ flex: 1, pb: 1 }}>
           {/* Заголовок: сеть */}
@@ -166,7 +166,7 @@ const ApprovalCard = memo(function ApprovalCard({
           </Button>
         </CardActions>
       </Card>
-    </Grid>
+    </Box>
   );
 });
 
@@ -392,7 +392,11 @@ export default function PromoApproval({ role }) {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Найдено: {approvals.length} промо
           </Typography>
-          <Grid container spacing={2}>
+          <Box sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' },
+            gap: 2,
+          }}>
             {approvals.map(a => (
               <ApprovalCard
                 key={a.id}
@@ -405,7 +409,7 @@ export default function PromoApproval({ role }) {
                 onCommentOnly={handleCommentOnly}
               />
             ))}
-          </Grid>
+          </Box>
         </>
       )}
 
