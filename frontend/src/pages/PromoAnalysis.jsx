@@ -372,7 +372,7 @@ export default function PromoAnalysis({ role }) {
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
 
       {/* ─── Tab 2: Согласование ──────────────────────────────────────── */}
-      {tab === 2 && <PromoApproval role={role} />}
+      {tab === 2 && <PromoApproval role={role} onDataChanged={() => setRefreshTrigger(prev => prev + 1)} />}
 
       {/* Снекбар уведомлений */}
       <Snackbar open={snackbar.open} autoHideDuration={3000} 

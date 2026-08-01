@@ -166,7 +166,7 @@ const ApprovalCard = memo(function ApprovalCard({
 // Основной компонент
 // ═══════════════════════════════════════════════════════════════════════════
 
-export default function PromoApproval({ role }) {
+export default function PromoApproval({ role, onDataChanged }) {
   // Фильтры
   const [kams, setKams] = useState([]);
   const [networks, setNetworks] = useState([]);
@@ -278,6 +278,7 @@ export default function PromoApproval({ role }) {
         : status === 'отклонено' ? '❌ Отклонено'
         : '💬 Комментарий сохранён';
       setSnackbar({ open: true, message: label, severity: 'success' });
+      if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
     } finally {
