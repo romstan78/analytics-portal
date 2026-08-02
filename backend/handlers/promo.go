@@ -896,7 +896,12 @@ func GetApprovals(c *gin.Context) {
 		y, _ := strconv.Atoi(yearStr)
 		query += " AND p.year = ?"
 		args = append(args, y)
+	} else if monthStr != "" {
+		// Указан только месяц — ищем в текущем и будущих годах
+		query += " AND p.year >= ?"
+		args = append(args, currentYear)
 	} else {
+		// Ни год, ни месяц не указаны — только от текущего месяца
 		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
 		args = append(args, currentYear, currentYear, currentMonth)
 	}
