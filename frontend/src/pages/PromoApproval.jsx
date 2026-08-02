@@ -179,9 +179,9 @@ export default function PromoApproval({ role, onDataChanged }) {
       .catch(err => console.error('Ошибка KAM:', err));
   }, []);
 
-  // Загрузка справочников при смене appliedStatus
+  // Загрузка справочников при смене appliedStatus и применённого KAM
   useEffect(() => {
-    promoAPI.getApprovalFilters(appliedStatus)
+    promoAPI.getApprovalFilters(appliedStatus, appliedKam)
       .then(data => {
         setNetworks(data.networks || []);
         setBrands(data.brands || []);

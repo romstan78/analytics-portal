@@ -890,6 +890,13 @@ func GetApprovals(c *gin.Context) {
 	args := []interface{}{currentYear, currentYear, currentMonth}
 
 	// Фильтр по состоянию согласования (CHARINDEX для надёжного Unicode-поиска)
+	// Фильтр по KAM
+	if kam != "" {
+		query += " AND p.kam = ?"
+		args = append(args, kam)
+	}
+
+	// Тот же фильтр что в GetApprovals
 	switch approvalStatus {
 	case "pending":
 		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
@@ -901,11 +908,6 @@ func GetApprovals(c *gin.Context) {
 	case "rejected":
 		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'отклонено', %s) = 1", agreementField, agreementField)
 		// "all" — без дополнительного фильтра
-	}
-
-	if kam != "" {
-		query += " AND p.kam = ?"
-		args = append(args, kam)
 	}
 
 	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
@@ -1007,6 +1009,7 @@ func ApprovePromo(c *gin.Context) {
 // GetApprovalFilters возвращает справочники для страницы согласования
 func GetApprovalFilters(c *gin.Context) {
 	approvalStatus := c.DefaultQuery("approval_status", "pending")
+	kam := c.Query("kam")
 
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
@@ -1018,6 +1021,12 @@ func GetApprovalFilters(c *gin.Context) {
 		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`
 	args := []interface{}{currentYear, currentYear, currentMonth}
+
+	// Фильтр по KAM
+	if kam != "" {
+		query += " AND p.kam = ?"
+		args = append(args, kam)
+	}
 
 	// Тот же фильтр что в GetApprovals
 	switch approvalStatus {
