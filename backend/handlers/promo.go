@@ -886,7 +886,6 @@ func GetApprovals(c *gin.Context) {
 			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
-		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`
 
 	args := []interface{}{}
