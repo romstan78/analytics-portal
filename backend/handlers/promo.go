@@ -888,20 +888,17 @@ func GetApprovals(c *gin.Context) {
 
 	args := []interface{}{currentYear, currentYear, currentMonth}
 
-	// Фильтр по состоянию согласования (строим до форматирования)
+	// Фильтр по состоянию согласования (CHARINDEX для надёжного Unicode-поиска)
 	switch approvalStatus {
 	case "pending":
 		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
 	case "commented":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND %s NOT LIKE '%s' AND %s NOT LIKE '%s'",
-			agreementField, agreementField,
-			"согласовано%", // значение LIKE идёт как аргумент, а не в строке формата
-			agreementField,
-			"отклонено%")
+		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) <> 1 AND CHARINDEX(N'отклонено', %s) <> 1",
+			agreementField, agreementField, agreementField)
 	case "approved":
-		query += fmt.Sprintf(" AND %s LIKE '%s'", agreementField, "согласовано%")
+		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) = 1", agreementField, agreementField)
 	case "rejected":
-		query += fmt.Sprintf(" AND %s LIKE '%s'", agreementField, "отклонено%")
+		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'отклонено', %s) = 1", agreementField, agreementField)
 		// "all" — без дополнительного фильтра
 	}
 
