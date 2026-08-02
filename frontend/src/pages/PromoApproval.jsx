@@ -200,14 +200,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const fetchIdRef = useRef(0);
 
-  // Загрузка KAM'ов (один раз)
-  useEffect(() => {
-    promoAPI.getApprovalKAMs()
-      .then(data => setKams(data.data || []))
-      .catch(err => console.error('Ошибка KAM:', err));
-  }, []);
-
-  // Загрузка справочников при смене appliedStatus и применённого KAM
+  // Загрузка справочников при смене фильтров (включая KAM из того же запроса)
   useEffect(() => {
     promoAPI.getApprovalFilters({
       approval_status: appliedStatus,
@@ -219,6 +212,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       month: appliedMonth,
     })
       .then(data => {
+        setKams(data.kams || []);
         setNetworks(data.networks || []);
         setBrands(data.brands || []);
         setMechanicsOptions(data.mechanics || []);

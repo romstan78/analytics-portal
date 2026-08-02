@@ -1042,7 +1042,7 @@ func GetApprovalFilters(c *gin.Context) {
 	currentMonth := int(time.Now().Month())
 
 	query := `
-		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics
+		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics, p.kam
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
 	`
@@ -1110,10 +1110,11 @@ func GetApprovalFilters(c *gin.Context) {
 	networkSet := make(map[string]bool)
 	brandSet := make(map[string]bool)
 	mechSet := make(map[string]bool)
+	kamSet := make(map[string]bool)
 
 	for rows.Next() {
-		var nw, br, mech sql.NullString
-		if rows.Scan(&nw, &br, &mech) == nil {
+		var nw, br, mech, k sql.NullString
+		if rows.Scan(&nw, &br, &mech, &k) == nil {
 			if nw.Valid {
 				networkSet[nw.String] = true
 			}
@@ -1123,27 +1124,35 @@ func GetApprovalFilters(c *gin.Context) {
 			if mech.Valid {
 				mechSet[mech.String] = true
 			}
+			if k.Valid {
+				kamSet[k.String] = true
+			}
 		}
 	}
 
 	networks := make([]string, 0, len(networkSet))
-	for k := range networkSet {
-		networks = append(networks, k)
+	for v := range networkSet {
+		networks = append(networks, v)
 	}
 	brands := make([]string, 0, len(brandSet))
-	for k := range brandSet {
-		brands = append(brands, k)
+	for v := range brandSet {
+		brands = append(brands, v)
 	}
 	mechanics := make([]string, 0, len(mechSet))
-	for k := range mechSet {
-		mechanics = append(mechanics, k)
+	for v := range mechSet {
+		mechanics = append(mechanics, v)
+	}
+	kams := make([]string, 0, len(kamSet))
+	for v := range kamSet {
+		kams = append(kams, v)
 	}
 
 	sort.Strings(networks)
 	sort.Strings(brands)
 	sort.Strings(mechanics)
+	sort.Strings(kams)
 
-	c.JSON(http.StatusOK, gin.H{"networks": networks, "brands": brands, "mechanics": mechanics})
+	c.JSON(http.StatusOK, gin.H{"networks": networks, "brands": brands, "mechanics": mechanics, "kams": kams})
 }
 
 // GetApprovalKAMs возвращает список KAM'ов, у которых есть промо на согласовании.
