@@ -873,7 +873,7 @@ func GetApprovals(c *gin.Context) {
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT TOP 500
 			p.id, p.network_name, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
@@ -884,20 +884,24 @@ func GetApprovals(c *gin.Context) {
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
 		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
-	`, agreementField)
+	`
 
 	args := []interface{}{currentYear, currentYear, currentMonth}
 
-	// Фильтр по состоянию согласования
+	// Фильтр по состоянию согласования (строим до форматирования)
 	switch approvalStatus {
 	case "pending":
 		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
 	case "commented":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND %s NOT LIKE 'согласовано%%' AND %s NOT LIKE 'отклонено%%'", agreementField, agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s IS NOT NULL AND %s NOT LIKE '%s' AND %s NOT LIKE '%s'",
+			agreementField, agreementField,
+			"согласовано%", // значение LIKE идёт как аргумент, а не в строке формата
+			agreementField,
+			"отклонено%")
 	case "approved":
-		query += fmt.Sprintf(" AND %s LIKE 'согласовано%%'", agreementField)
+		query += fmt.Sprintf(" AND %s LIKE '%s'", agreementField, "согласовано%")
 	case "rejected":
-		query += fmt.Sprintf(" AND %s LIKE 'отклонено%%'", agreementField)
+		query += fmt.Sprintf(" AND %s LIKE '%s'", agreementField, "отклонено%")
 		// "all" — без дополнительного фильтра
 	}
 

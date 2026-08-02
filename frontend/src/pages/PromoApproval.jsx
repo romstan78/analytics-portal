@@ -42,7 +42,6 @@ const APPROVAL_STATUSES = [
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting, onCommentRef,
   onToggleExpand, onOpenConfirm, onCommentOnly,
-  showActions,
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
@@ -122,45 +121,41 @@ const ApprovalCard = memo(function ApprovalCard({
             </Box>
           )}
 
-          {showActions && (
-            <TextField
-              size="small"
-              fullWidth
-              multiline
-              minRows={1}
-              maxRows={3}
-              placeholder="Комментарий (необязательно)"
-              inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
-              sx={{ mb: 1 }}
-            />
-          )}
+          <TextField
+            size="small"
+            fullWidth
+            multiline
+            minRows={1}
+            maxRows={3}
+            placeholder="Комментарий (необязательно)"
+            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
+            sx={{ mb: 1 }}
+          />
         </CardContent>
 
-        {showActions && (
-          <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
-            <Button size="small" variant="outlined"
-              startIcon={<CommentIcon />}
-              onClick={() => onCommentOnly(id)}
-              disabled={isSubmitting}
-              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-              Комментарий
-            </Button>
-            <Button size="small" variant="contained" color="success"
-              startIcon={<ApproveIcon />}
-              onClick={() => onOpenConfirm(id, 'согласовано')}
-              disabled={isSubmitting}
-              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-              Согласовано
-            </Button>
-            <Button size="small" variant="contained" color="error"
-              startIcon={<RejectIcon />}
-              onClick={() => onOpenConfirm(id, 'отклонено')}
-              disabled={isSubmitting}
-              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-              Отклонено
-            </Button>
-          </CardActions>
-        )}
+        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
+          <Button size="small" variant="outlined"
+            startIcon={<CommentIcon />}
+            onClick={() => onCommentOnly(id)}
+            disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+            Комментарий
+          </Button>
+          <Button size="small" variant="contained" color="success"
+            startIcon={<ApproveIcon />}
+            onClick={() => onOpenConfirm(id, 'согласовано')}
+            disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+            Согласовано
+          </Button>
+          <Button size="small" variant="contained" color="error"
+            startIcon={<RejectIcon />}
+            onClick={() => onOpenConfirm(id, 'отклонено')}
+            disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+            Отклонено
+          </Button>
+        </CardActions>
       </Card>
     </Box>
   );
@@ -191,7 +186,6 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const fetchIdRef = useRef(0);
 
-  // Справочники
   useEffect(() => {
     Promise.all([
       promoAPI.getApprovalKAMs().catch(err => { console.error('Ошибка KAM:', err); return { data: [] }; }),
@@ -204,7 +198,6 @@ export default function PromoApproval({ role, onDataChanged }) {
     });
   }, []);
 
-  // Загрузка промо
   const fetchApprovals = useCallback(async () => {
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
@@ -285,8 +278,6 @@ export default function PromoApproval({ role, onDataChanged }) {
     setSelectedYear('');
     setSelectedMonth('');
   };
-
-  const showActions = selectedApprovalStatus === 'pending';
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
@@ -375,7 +366,6 @@ export default function PromoApproval({ role, onDataChanged }) {
                 onToggleExpand={toggleExpand}
                 onOpenConfirm={openConfirm}
                 onCommentOnly={handleCommentOnly}
-                showActions={showActions}
               />
             ))}
           </Box>
