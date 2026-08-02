@@ -869,6 +869,8 @@ func GetApprovals(c *gin.Context) {
 
 	kam := c.Query("kam")
 	approvalStatus := c.DefaultQuery("approval_status", "pending")
+	yearStr := c.Query("year")
+	monthStr := c.Query("month")
 
 	// Только промо с текущего месяца и далее (не исторические)
 	currentYear := time.Now().Year()
@@ -887,7 +889,23 @@ func GetApprovals(c *gin.Context) {
 		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`
 
-	args := []interface{}{currentYear, currentYear, currentMonth}
+	args := []interface{}{}
+
+	// Фильтр по дате
+	if yearStr != "" {
+		y, _ := strconv.Atoi(yearStr)
+		query += " AND p.year = ?"
+		args = append(args, y)
+	} else {
+		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		args = append(args, currentYear, currentYear, currentMonth)
+	}
+
+	if monthStr != "" {
+		m, _ := strconv.Atoi(monthStr)
+		query += " AND p.month = ?"
+		args = append(args, m)
+	}
 
 	// Фильтр по состоянию согласования (CHARINDEX для надёжного Unicode-поиска)
 	// Фильтр по KAM

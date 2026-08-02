@@ -121,6 +121,8 @@ export const promoAPI = {
     if (params.kam) qs.set('kam', params.kam);
     if (params.approval_status) qs.set('approval_status', params.approval_status);
     else qs.set('approval_status', 'pending');
+    if (params.year) qs.set('year', params.year);
+    if (params.month) qs.set('month', params.month);
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
   },
 

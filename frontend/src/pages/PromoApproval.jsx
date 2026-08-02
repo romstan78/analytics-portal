@@ -237,6 +237,8 @@ export default function PromoApproval({ role, onDataChanged }) {
       const data = await promoAPI.getApprovals({
         kam: appliedKam || undefined,
         approval_status: appliedStatus,
+        year: appliedYear,
+        month: appliedMonth,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
@@ -348,7 +350,8 @@ export default function PromoApproval({ role, onDataChanged }) {
             <MenuItem value="">Все</MenuItem>
             {MONTHS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
           </TextField>
-          <Button variant="contained" size="small" onClick={handleApply} sx={{ alignSelf: 'center' }}>
+          <Button variant="contained" size="small" onClick={handleApply} sx={{ alignSelf: 'center' }}
+            disabled={!draftKam}>
             Применить
           </Button>
           <Button variant="outlined" size="small" onClick={handleReset} sx={{ alignSelf: 'center' }}>
