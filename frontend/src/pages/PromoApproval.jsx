@@ -188,7 +188,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [appliedStatus]);
+  }, [appliedStatus, appliedKam]);
 
   // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
