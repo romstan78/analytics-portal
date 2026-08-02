@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1001,6 +1002,79 @@ func ApprovePromo(c *gin.Context) {
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Обновлено"})
+}
+
+// GetApprovalFilters возвращает справочники для страницы согласования
+func GetApprovalFilters(c *gin.Context) {
+	approvalStatus := c.DefaultQuery("approval_status", "pending")
+
+	currentYear := time.Now().Year()
+	currentMonth := int(time.Now().Month())
+
+	query := `
+		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics
+		FROM dbo.tbl_PromoActivities p
+		WHERE p.deleted_at IS NULL
+		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
+	`
+	args := []interface{}{currentYear, currentYear, currentMonth}
+
+	// Тот же фильтр что в GetApprovals
+	switch approvalStatus {
+	case "pending":
+		query += " AND (p.agreement1 IS NULL OR p.agreement2 IS NULL)"
+	case "commented":
+		query += " AND ((p.agreement1 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement1) <> 1 AND CHARINDEX(N'отклонено', p.agreement1) <> 1) OR (p.agreement2 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement2) <> 1 AND CHARINDEX(N'отклонено', p.agreement2) <> 1))"
+	case "approved":
+		query += " AND (CHARINDEX(N'согласовано', p.agreement1) = 1 OR CHARINDEX(N'согласовано', p.agreement2) = 1)"
+	case "rejected":
+		query += " AND (CHARINDEX(N'отклонено', p.agreement1) = 1 OR CHARINDEX(N'отклонено', p.agreement2) = 1)"
+	}
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"networks": []string{}, "brands": []string{}, "mechanics": []string{}})
+		return
+	}
+	defer rows.Close()
+
+	networkSet := make(map[string]bool)
+	brandSet := make(map[string]bool)
+	mechSet := make(map[string]bool)
+
+	for rows.Next() {
+		var nw, br, mech sql.NullString
+		if rows.Scan(&nw, &br, &mech) == nil {
+			if nw.Valid {
+				networkSet[nw.String] = true
+			}
+			if br.Valid {
+				brandSet[br.String] = true
+			}
+			if mech.Valid {
+				mechSet[mech.String] = true
+			}
+		}
+	}
+
+	networks := make([]string, 0, len(networkSet))
+	for k := range networkSet {
+		networks = append(networks, k)
+	}
+	brands := make([]string, 0, len(brandSet))
+	for k := range brandSet {
+		brands = append(brands, k)
+	}
+	mechanics := make([]string, 0, len(mechSet))
+	for k := range mechSet {
+		mechanics = append(mechanics, k)
+	}
+
+	sort.Strings(networks)
+	sort.Strings(brands)
+	sort.Strings(mechanics)
+
+	c.JSON(http.StatusOK, gin.H{"networks": networks, "brands": brands, "mechanics": mechanics})
 }
 
 // GetApprovalKAMs возвращает список KAM'ов, у которых есть промо на согласовании.

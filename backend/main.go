@@ -132,6 +132,7 @@ func main() {
 		// Промо — запись (agreement1, agreement2, admin)
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
 		api.GET("/promo/approvals", handlers.GetApprovals)
+		api.GET("/promo/approval-filters", handlers.GetApprovalFilters)
 		api.GET("/promo/approval-kams", handlers.GetApprovalKAMs)
 		api.GET("/promo/approval-networks", handlers.GetApprovalNetworks)
 		api.GET("/promo/approval-brands", handlers.GetApprovalBrands)

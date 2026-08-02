@@ -124,6 +124,10 @@ export const promoAPI = {
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
   },
 
+  // Справочники сетей/брендов/механик для страницы согласования
+  getApprovalFilters: (status = 'pending') =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-filters?approval_status=${status}`).then(r => r.json()),
+
   // Действие согласования: comment / согласовано / отклонено
   approve: (id, status, comment = '') =>
     fetchWithAuth(`${API_BASE}/api/promo/approve`, {
