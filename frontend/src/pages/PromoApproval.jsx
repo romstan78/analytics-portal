@@ -350,8 +350,7 @@ export default function PromoApproval({ role, onDataChanged }) {
             <MenuItem value="">Все</MenuItem>
             {MONTHS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
           </TextField>
-          <Button variant="contained" size="small" onClick={handleApply} sx={{ alignSelf: 'center' }}
-            disabled={!draftKam}>
+          <Button variant="contained" size="small" onClick={handleApply} sx={{ alignSelf: 'center' }}>
             Применить
           </Button>
           <Button variant="outlined" size="small" onClick={handleReset} sx={{ alignSelf: 'center' }}>
