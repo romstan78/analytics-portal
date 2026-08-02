@@ -143,6 +143,9 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [draftYear, setDraftYear] = useState('');
   const [draftMonth, setDraftMonth] = useState('');
 
+  // Флаг: была ли нажата кнопка «Применить»
+  const [hasApplied, setHasApplied] = useState(false);
+
   // Применённые фильтры (по кнопке «Применить»)
   const [appliedKam, setAppliedKam] = useState('');
   const [appliedNetwork, setAppliedNetwork] = useState('');
@@ -187,8 +190,9 @@ export default function PromoApproval({ role, onDataChanged }) {
       .catch(err => console.error('Ошибка справочников:', err));
   }, [appliedStatus]);
 
-  // Загрузка данных при изменении применённых фильтров
+  // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
+    if (!hasApplied) return;
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
@@ -214,7 +218,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
+  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
 
   useEffect(() => {
     fetchApprovals();
@@ -222,6 +226,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   // Кнопка «Применить»
   const handleApply = () => {
+    setHasApplied(true);
     setAppliedKam(draftKam);
     setAppliedNetwork(draftNetwork);
     setAppliedBrand(draftBrand);
@@ -236,6 +241,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setDraftStatus('pending'); setDraftYear(''); setDraftMonth('');
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
     setAppliedStatus('pending'); setAppliedYear(''); setAppliedMonth('');
+    setHasApplied(false);
   };
 
   const handleCommentRef = useCallback((id, el) => { commentRefs.current[id] = el; }, []);
