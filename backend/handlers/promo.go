@@ -867,6 +867,7 @@ func GetApprovals(c *gin.Context) {
 	}
 
 	kam := c.Query("kam")
+	approvalStatus := c.DefaultQuery("approval_status", "pending")
 
 	// Только промо с текущего месяца и далее (не исторические)
 	currentYear := time.Now().Year()
@@ -882,11 +883,23 @@ func GetApprovals(c *gin.Context) {
 			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
-		  AND %s IS NULL
 		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`, agreementField)
 
 	args := []interface{}{currentYear, currentYear, currentMonth}
+
+	// Фильтр по состоянию согласования
+	switch approvalStatus {
+	case "pending":
+		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
+	case "commented":
+		query += fmt.Sprintf(" AND %s IS NOT NULL AND %s NOT LIKE 'согласовано%%' AND %s NOT LIKE 'отклонено%%'", agreementField, agreementField, agreementField)
+	case "approved":
+		query += fmt.Sprintf(" AND %s LIKE 'согласовано%%'", agreementField)
+	case "rejected":
+		query += fmt.Sprintf(" AND %s LIKE 'отклонено%%'", agreementField)
+		// "all" — без дополнительного фильтра
+	}
 
 	if kam != "" {
 		query += " AND p.kam = ?"

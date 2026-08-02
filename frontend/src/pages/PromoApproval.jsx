@@ -14,10 +14,6 @@ import {
 } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Утилиты
-// ═══════════════════════════════════════════════════════════════════════════
-
 const fmtNum = (v, decimals = 0) => {
   if (v == null) return '—';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -35,13 +31,18 @@ const MONTHS = [
   { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
 ];
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Карточка промо (вынесена в memo для производительности)
-// ═══════════════════════════════════════════════════════════════════════════
+const APPROVAL_STATUSES = [
+  { label: 'На согласовании', value: 'pending' },
+  { label: 'С комментариями', value: 'commented' },
+  { label: 'Согласовано', value: 'approved' },
+  { label: 'Отклонено', value: 'rejected' },
+  { label: 'Все', value: 'all' },
+];
 
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting, onCommentRef,
   onToggleExpand, onOpenConfirm, onCommentOnly,
+  showActions,
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
@@ -121,90 +122,80 @@ const ApprovalCard = memo(function ApprovalCard({
             </Box>
           )}
 
-          {/* ref callback: вызывается при каждом рендере — реф всегда актуален */}
-          <TextField
-            size="small"
-            fullWidth
-            multiline
-            minRows={1}
-            maxRows={3}
-            placeholder="Комментарий (необязательно)"
-            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
-            sx={{ mb: 1 }}
-          />
+          {showActions && (
+            <TextField
+              size="small"
+              fullWidth
+              multiline
+              minRows={1}
+              maxRows={3}
+              placeholder="Комментарий (необязательно)"
+              inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
+              sx={{ mb: 1 }}
+            />
+          )}
         </CardContent>
 
-        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
-          <Button size="small" variant="outlined"
-            startIcon={<CommentIcon />}
-            onClick={() => onCommentOnly(id)}
-            disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-            Комментарий
-          </Button>
-          <Button size="small" variant="contained" color="success"
-            startIcon={<ApproveIcon />}
-            onClick={() => onOpenConfirm(id, 'согласовано')}
-            disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-            Согласовано
-          </Button>
-          <Button size="small" variant="contained" color="error"
-            startIcon={<RejectIcon />}
-            onClick={() => onOpenConfirm(id, 'отклонено')}
-            disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
-            Отклонено
-          </Button>
-        </CardActions>
+        {showActions && (
+          <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
+            <Button size="small" variant="outlined"
+              startIcon={<CommentIcon />}
+              onClick={() => onCommentOnly(id)}
+              disabled={isSubmitting}
+              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+              Комментарий
+            </Button>
+            <Button size="small" variant="contained" color="success"
+              startIcon={<ApproveIcon />}
+              onClick={() => onOpenConfirm(id, 'согласовано')}
+              disabled={isSubmitting}
+              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+              Согласовано
+            </Button>
+            <Button size="small" variant="contained" color="error"
+              startIcon={<RejectIcon />}
+              onClick={() => onOpenConfirm(id, 'отклонено')}
+              disabled={isSubmitting}
+              sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>
+              Отклонено
+            </Button>
+          </CardActions>
+        )}
       </Card>
     </Box>
   );
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Основной компонент
-// ═══════════════════════════════════════════════════════════════════════════
-
 export default function PromoApproval({ role, onDataChanged }) {
-  // Фильтры
   const [kams, setKams] = useState([]);
   const [networks, setNetworks] = useState([]);
   const [brands, setBrands] = useState([]);
   const [mechanicsOptions, setMechanicsOptions] = useState([]);
-  const [statusOptions] = useState(['Новый', 'В работе', 'Завершено', 'Отменено']);
 
   const [selectedKam, setSelectedKam] = useState('');
   const [selectedNetwork, setSelectedNetwork] = useState('');
   const [selectedBrand, setSelectedBrand] = useState('');
   const [selectedMechanics, setSelectedMechanics] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('');
+  const [selectedApprovalStatus, setSelectedApprovalStatus] = useState('pending');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
 
-  // Данные
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
   const [submitting, setSubmitting] = useState({});
 
-  // Рефы для комментариев (избегаем ререндера родителя при вводе)
   const commentRefs = useRef({});
-
-  // Диалог подтверждения
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
-  // Снекбар
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-
-  // Защита от гонок запросов
   const fetchIdRef = useRef(0);
 
-  // ═══════ Загрузка справочников (один раз) ═══════
+  // Справочники
   useEffect(() => {
     Promise.all([
-      promoAPI.getApprovalKAMs().catch(err => { console.error('Ошибка загрузки KAM:', err); return { data: [] }; }),
-      promoAPI.getFilters().catch(err => { console.error('Ошибка загрузки фильтров:', err); return { network_name: [], brand: [], mechanics: [] }; }),
+      promoAPI.getApprovalKAMs().catch(err => { console.error('Ошибка KAM:', err); return { data: [] }; }),
+      promoAPI.getFilters().catch(err => { console.error('Ошибка фильтров:', err); return { network_name: [], brand: [], mechanics: [] }; }),
     ]).then(([kamData, filterData]) => {
       setKams(kamData.data || []);
       setNetworks(filterData.network_name || []);
@@ -213,29 +204,23 @@ export default function PromoApproval({ role, onDataChanged }) {
     });
   }, []);
 
-  // ═══════ Загрузка промо при изменении фильтров ═══════
+  // Загрузка промо
   const fetchApprovals = useCallback(async () => {
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
 
-    // Не загружаем ничего, пока не выбран KAM
-    if (!selectedKam) {
-      setApprovals([]);
-      setLoading(false);
-      return;
-    }
-
     try {
-      const data = await promoAPI.getApprovals(selectedKam);
+      const data = await promoAPI.getApprovals({
+        kam: selectedKam || undefined,
+        approval_status: selectedApprovalStatus,
+      });
       if (currentFetchId !== fetchIdRef.current) return;
 
       let filtered = data.data || [];
-
       if (selectedNetwork) filtered = filtered.filter(a => a.network_name === selectedNetwork);
       if (selectedBrand) filtered = filtered.filter(a => a.sku && a.sku.includes(selectedBrand));
       if (selectedMechanics) filtered = filtered.filter(a => a.mechanics === selectedMechanics);
-      if (selectedStatus) filtered = filtered.filter(a => a.status === selectedStatus);
       if (selectedYear) filtered = filtered.filter(a => a.year === parseInt(selectedYear));
       if (selectedMonth) filtered = filtered.filter(a => a.month === parseInt(selectedMonth));
 
@@ -246,18 +231,16 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [selectedKam, selectedNetwork, selectedBrand, selectedMechanics, selectedStatus, selectedYear, selectedMonth]);
+  }, [selectedKam, selectedApprovalStatus, selectedNetwork, selectedBrand, selectedMechanics, selectedYear, selectedMonth]);
 
   useEffect(() => {
     fetchApprovals();
   }, [fetchApprovals]);
 
-  // Колбек для получения рефа из карточки
   const handleCommentRef = useCallback((id, el) => {
     commentRefs.current[id] = el;
   }, []);
 
-  // ═══════ Действия ═══════
   const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
 
   const handleConfirmedAction = async () => {
@@ -265,7 +248,6 @@ export default function PromoApproval({ role, onDataChanged }) {
     setConfirmDialog({ open: false, id: null, status: '' });
     if (!id) return;
 
-    // Читаем комментарий из DOM-рефа (без state)
     const inputEl = commentRefs.current[id];
     const comment = inputEl ? inputEl.value : '';
 
@@ -295,18 +277,19 @@ export default function PromoApproval({ role, onDataChanged }) {
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
 
   const handleResetFilters = () => {
+    setSelectedKam('');
     setSelectedNetwork('');
     setSelectedBrand('');
     setSelectedMechanics('');
-    setSelectedStatus('');
+    setSelectedApprovalStatus('pending');
     setSelectedYear('');
     setSelectedMonth('');
   };
 
-  // ═══════ Рендер ═══════
+  const showActions = selectedApprovalStatus === 'pending';
+
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
-      {/* Панель фильтров — в стиле FilterPanel (Paper + Grid) */}
       <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 3 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>🔍 Фильтры</Typography>
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
@@ -338,11 +321,10 @@ export default function PromoApproval({ role, onDataChanged }) {
             {mechanicsOptions.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
           </TextField>
 
-          <TextField select size="small" label="Статус" value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            sx={{ minWidth: 140 }}>
-            <MenuItem value="">Все</MenuItem>
-            {statusOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+          <TextField select size="small" label="Состояние" value={selectedApprovalStatus}
+            onChange={(e) => setSelectedApprovalStatus(e.target.value)}
+            sx={{ minWidth: 170 }}>
+            {APPROVAL_STATUSES.map(s => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
           </TextField>
 
           <TextField label="Год" type="number" size="small" value={selectedYear}
@@ -362,7 +344,6 @@ export default function PromoApproval({ role, onDataChanged }) {
         </Stack>
       </Paper>
 
-      {/* Состояния загрузки / ошибки / пусто */}
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
@@ -371,15 +352,9 @@ export default function PromoApproval({ role, onDataChanged }) {
           <Typography color="text.secondary" variant="h6">
             {selectedKam || selectedNetwork || selectedBrand ? 'Ничего не найдено' : 'Выберите фильтры для отображения промо'}
           </Typography>
-          {approvals.length === 0 && !selectedKam && !selectedNetwork && !selectedBrand && (
-            <Typography color="text.secondary" variant="body2" sx={{ mt: 1 }}>
-              Нажмите «Сброс» и выберите KAM для начала работы
-            </Typography>
-          )}
         </Box>
       )}
 
-      {/* Карточки */}
       {!loading && approvals.length > 0 && (
         <>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -400,13 +375,13 @@ export default function PromoApproval({ role, onDataChanged }) {
                 onToggleExpand={toggleExpand}
                 onOpenConfirm={openConfirm}
                 onCommentOnly={handleCommentOnly}
+                showActions={showActions}
               />
             ))}
           </Box>
         </>
       )}
 
-      {/* Диалог подтверждения */}
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '' })}>
         <DialogTitle>
           {confirmDialog.status === 'comment' ? 'Сохранить комментарий?' : 'Подтвердите действие'}
@@ -430,7 +405,6 @@ export default function PromoApproval({ role, onDataChanged }) {
         </DialogActions>
       </Dialog>
 
-      {/* Снекбар */}
       <Snackbar open={snackbar.open} autoHideDuration={3000}
         onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>

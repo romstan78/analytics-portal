@@ -116,8 +116,13 @@ export const promoAPI = {
     fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}`).then(r => r.json()),
 
   // Список промо на согласование
-  getApprovals: (kam = '') =>
-    fetchWithAuth(`${API_BASE}/api/promo/approvals?kam=${encodeURIComponent(kam)}`).then(r => r.json()),
+  getApprovals: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.kam) qs.set('kam', params.kam);
+    if (params.approval_status) qs.set('approval_status', params.approval_status);
+    else qs.set('approval_status', 'pending');
+    return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
+  },
 
   // Действие согласования: comment / согласовано / отклонено
   approve: (id, status, comment = '') =>
