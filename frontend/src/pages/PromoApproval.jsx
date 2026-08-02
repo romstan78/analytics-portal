@@ -181,7 +181,15 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   // Загрузка справочников при смене appliedStatus и применённого KAM
   useEffect(() => {
-    promoAPI.getApprovalFilters(appliedStatus, appliedKam)
+    promoAPI.getApprovalFilters({
+      approval_status: appliedStatus,
+      kam: appliedKam,
+      network_name: appliedNetwork,
+      brand: appliedBrand,
+      mechanics: appliedMechanics,
+      year: appliedYear,
+      month: appliedMonth,
+    })
       .then(data => {
         setNetworks(data.networks || []);
         setBrands(data.brands || []);

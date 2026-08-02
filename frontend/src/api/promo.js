@@ -125,8 +125,15 @@ export const promoAPI = {
   },
 
   // Справочники сетей/брендов/механик для страницы согласования
-  getApprovalFilters: (status = 'pending', kam = '') => {
-    const qs = `approval_status=${status}${kam ? '&kam=' + encodeURIComponent(kam) : ''}`;
+  getApprovalFilters: (params = {}) => {
+    const qs = new URLSearchParams();
+    qs.set('approval_status', params.approval_status || 'pending');
+    if (params.kam) qs.set('kam', params.kam);
+    if (params.network_name) qs.set('network_name', params.network_name);
+    if (params.brand) qs.set('brand', params.brand);
+    if (params.mechanics) qs.set('mechanics', params.mechanics);
+    if (params.year) qs.set('year', params.year);
+    if (params.month) qs.set('month', params.month);
     return fetchWithAuth(`${API_BASE}/api/promo/approval-filters?${qs}`).then(r => r.json());
   },
 

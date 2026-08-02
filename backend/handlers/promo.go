@@ -1010,6 +1010,11 @@ func ApprovePromo(c *gin.Context) {
 func GetApprovalFilters(c *gin.Context) {
 	approvalStatus := c.DefaultQuery("approval_status", "pending")
 	kam := c.Query("kam")
+	network := c.Query("network_name")
+	brand := c.Query("brand")
+	mechFilter := c.Query("mechanics")
+	yearStr := c.Query("year")
+	monthStr := c.Query("month")
 
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
@@ -1018,14 +1023,47 @@ func GetApprovalFilters(c *gin.Context) {
 		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics
 		FROM dbo.tbl_PromoActivities p
 		WHERE p.deleted_at IS NULL
-		  AND (p.year > ? OR (p.year = ? AND p.month >= ?))
 	`
-	args := []interface{}{currentYear, currentYear, currentMonth}
+	args := []interface{}{}
+
+	// Фильтр по дате (из параметров, или по умолчанию — от текущего месяца)
+	if yearStr != "" {
+		y, _ := strconv.Atoi(yearStr)
+		query += " AND p.year = ?"
+		args = append(args, y)
+	} else {
+		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		args = append(args, currentYear, currentYear, currentMonth)
+	}
+
+	if monthStr != "" {
+		m, _ := strconv.Atoi(monthStr)
+		query += " AND p.month = ?"
+		args = append(args, m)
+	}
 
 	// Фильтр по KAM
 	if kam != "" {
 		query += " AND p.kam = ?"
 		args = append(args, kam)
+	}
+
+	// Фильтр по сети
+	if network != "" {
+		query += " AND p.network_name = ?"
+		args = append(args, network)
+	}
+
+	// Фильтр по бренду
+	if brand != "" {
+		query += " AND p.brand_as = ?"
+		args = append(args, brand)
+	}
+
+	// Фильтр по механике
+	if mechFilter != "" {
+		query += " AND p.mechanics = ?"
+		args = append(args, mechFilter)
 	}
 
 	// Тот же фильтр что в GetApprovals
