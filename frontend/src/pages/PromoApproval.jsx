@@ -241,6 +241,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setDraftStatus('pending'); setDraftYear(''); setDraftMonth('');
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
     setAppliedStatus('pending'); setAppliedYear(''); setAppliedMonth('');
+    setApprovals([]);
     setHasApplied(false);
   };
 
