@@ -100,6 +100,34 @@ const ApprovalCard = memo(function ApprovalCard({
               Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
             </Typography>
           </Box>
+          {/* Комментарии согласующих */}
+          {(item.agreement1 || item.agreement2) && (
+            <Box sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {item.agreement1 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement1).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement1).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement1).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement1).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 1:</b> {item.agreement1}
+                </Typography>
+              )}
+              {item.agreement2 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement2).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement2).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement2).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement2).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 2:</b> {item.agreement2}
+                </Typography>
+              )}
+            </Box>
+          )}
+
           {item.conditions && (
             <Box sx={{ mb: 1 }}>
               <Button size="small" onClick={() => onToggleExpand(id)}
@@ -196,7 +224,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [appliedStatus, appliedKam]);
+  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
 
   // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
