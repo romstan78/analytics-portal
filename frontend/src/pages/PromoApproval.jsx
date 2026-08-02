@@ -222,7 +222,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
-    if (!hasApplied) return;
+    if (!hasApplied || (!appliedKam && !appliedNetwork && !appliedBrand && !appliedMechanics && !appliedYear && !appliedMonth)) return;
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
@@ -256,8 +256,10 @@ export default function PromoApproval({ role, onDataChanged }) {
     fetchApprovals();
   }, [fetchApprovals]);
 
-  // Кнопка «Применить»
+  // Кнопка «Применить» — только если выбран хоть один фильтр
   const handleApply = () => {
+    const hasAnyFilter = draftKam || draftNetwork || draftBrand || draftMechanics || draftYear || draftMonth;
+    if (!hasAnyFilter) return;
     setHasApplied(true);
     setAppliedKam(draftKam);
     setAppliedNetwork(draftNetwork);
