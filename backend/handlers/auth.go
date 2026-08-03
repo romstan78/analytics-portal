@@ -5,19 +5,11 @@ import (
 	"time"
 
 	"backend/config"
+	"backend/repository"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
-
-// Простая таблица пользователей. В будущем — из БД tbl_Users.
-var users = map[string]struct {
-	Password string
-	Role     string
-}{
-	"manager1": {Password: "promo2024!", Role: "agreement1"},
-	"manager2": {Password: "promo2024!", Role: "agreement2"},
-	"admin":    {Password: "admin2024!", Role: "admin"},
-}
 
 func Login(c *gin.Context) {
 	var req struct {
@@ -29,8 +21,15 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	user, ok := users[req.Username]
-	if !ok || user.Password != req.Password {
+	// Ищем пользователя в БД
+	user, err := repository.GetUserByUsername(req.Username)
+	if err != nil {
+		config.Logger.Error("login_db_error", "error", err.Error(), "username", req.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+
+	if user == nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
 		return
 	}

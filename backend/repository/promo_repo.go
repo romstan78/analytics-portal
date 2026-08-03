@@ -558,11 +558,6 @@ type ApprovalParams struct {
 }
 
 func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
-	agreementField := "p.agreement1"
-	if params.Role == "agreement2" {
-		agreementField = "p.agreement2"
-	}
-
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
@@ -572,6 +567,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
 			p.conditions, p.agreement1, p.agreement2, p.status,
+			p.agreement1_status, p.agreement1_comment,
+			p.agreement2_status, p.agreement2_comment,
 			0 as historical_count,
 			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
@@ -603,16 +600,21 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		args = append(args, params.KAM)
 	}
 
+	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
+	statusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		statusField = "p.agreement2_status"
+	}
+
 	switch params.ApprovalStatus {
 	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
+		query += fmt.Sprintf(" AND %s IS NULL", statusField)
 	case "commented":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) <> 1 AND CHARINDEX(N'отклонено', %s) <> 1",
-			agreementField, agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'commented'", statusField)
 	case "approved":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) = 1", agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'approved'", statusField)
 	case "rejected":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'отклонено', %s) = 1", agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
 	}
 
 	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
@@ -631,6 +633,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
 			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
 			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Agreement1Status, &r.Agreement1Comment,
+			&r.Agreement2Status, &r.Agreement2Comment,
 			&r.HistoricalCount, &r.AvgHistoricalROI,
 		); err != nil {
 			continue
@@ -643,6 +647,21 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	return results, nil
 }
 
+// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
+func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
+	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
+	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
+	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+
+	query := fmt.Sprintf(
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		agreementField, statusField, commentField,
+	)
+	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
+	return err
+}
+
+// Deprecated: используйте ApprovePromoWithStatus
 func ApprovePromo(field string, id int, value string) error {
 	_, err := config.DB.Exec(
 		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
@@ -654,7 +673,7 @@ func ApprovePromo(field string, id int, value string) error {
 // ─── Approval Filters ───────────────────────────────────────────────────────
 
 type ApprovalFilterParams struct {
-	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr string
+	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
 }
 
 func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
@@ -703,15 +722,21 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 		args = append(args, params.MechFilter)
 	}
 
+	// Фильтруем по статусу конкретной роли (а не по OR двух полей)
+	filterStatusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		filterStatusField = "p.agreement2_status"
+	}
+
 	switch params.ApprovalStatus {
 	case "pending":
-		query += " AND (p.agreement1 IS NULL OR p.agreement2 IS NULL)"
+		query += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
 	case "commented":
-		query += " AND ((p.agreement1 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement1) <> 1 AND CHARINDEX(N'отклонено', p.agreement1) <> 1) OR (p.agreement2 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement2) <> 1 AND CHARINDEX(N'отклонено', p.agreement2) <> 1))"
+		query += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
 	case "approved":
-		query += " AND (CHARINDEX(N'согласовано', p.agreement1) = 1 OR CHARINDEX(N'согласовано', p.agreement2) = 1)"
+		query += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
 	case "rejected":
-		query += " AND (CHARINDEX(N'отклонено', p.agreement1) = 1 OR CHARINDEX(N'отклонено', p.agreement2) = 1)"
+		query += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
 	}
 
 	rows, err := config.DB.Query(query, args...)

@@ -1,0 +1,7 @@
+node/modules
+.git
+dist/
+build/
+*.log
+*.map
+upload/

@@ -60,16 +60,15 @@ export default function PromoApproval({ role, onDataChanged }) {
   const commentRefs = useRef({});
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
 
   // Загрузка справочников при смене фильтров (включая KAM из того же запроса)
   useEffect(() => {
+    // Не передаём brand/network/mechanics — иначе фильтруем сами себя
     promoAPI.getApprovalFilters({
       approval_status: appliedStatus,
       kam: appliedKam,
-      network_name: appliedNetwork,
-      brand: appliedBrand,
-      mechanics: appliedMechanics,
       year: appliedYear,
       month: appliedMonth,
     })
@@ -80,7 +79,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
+  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
   // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
@@ -158,6 +157,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       setApprovals(prev => prev.filter(a => a.id !== id));
       delete commentRefs.current[id];
       setSnackbar({ open: true, message: status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён', severity: 'success' });
+      setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });

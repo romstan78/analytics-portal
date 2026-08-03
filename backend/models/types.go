@@ -123,8 +123,12 @@ type ApprovalRow struct {
 	PlanROI               *float64 `json:"plan_roi"`
 	ActualROI             *float64 `json:"actual_roi"`
 	Conditions            *string  `json:"conditions"`
-	Agreement1            *string  `json:"agreement1"`
-	Agreement2            *string  `json:"agreement2"`
+	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
+	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
+	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
+	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
+	Agreement2Status      *string  `json:"agreement2_status"`
+	Agreement2Comment     *string  `json:"agreement2_comment"`
 	Status                *string  `json:"status"`
 	HistoricalCount       int      `json:"historical_count"`
 	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`

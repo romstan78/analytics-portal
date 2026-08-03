@@ -38,3 +38,5 @@ Thumbs.db
 upload/
 upload/
 backend/server
+backend/logs/
+backend/backend

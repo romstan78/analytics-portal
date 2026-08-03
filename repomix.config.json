@@ -1,0 +1,34 @@
+{
+    "output": {
+        "filePath": "project_code.md",
+        "style": "markdown"
+    },
+    "ignore":{
+        "UseGitignore": true,
+        "UseDefaultPatterns": true,
+        "customPatterns": [
+            "node_modules/**",
+            "dist/**",
+            "build/**",
+            ".venv/**",
+            "__pycache__/**",
+            "vendor/**",
+            "**/*.md",
+            "upload/**",
+            "sync_script/**",
+            "**/*.xlsx",
+            "**/*.docx",
+            "**/*.csv",
+            ".clinerules",
+            ".clineignore",
+            ".gitignore",
+            ".env*",
+            "**/*.lock",
+            "**/package-lock.json",
+            "repomix-output.*",
+            "project_code.md",
+            "repomix.config.json",
+            "**/*.svg"
+        ]
+    }
+}

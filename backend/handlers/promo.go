@@ -13,6 +13,7 @@ import (
 	"backend/middleware"
 	"backend/models"
 	"backend/repository"
+	"backend/services"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
@@ -270,7 +271,10 @@ func SavePromo(c *gin.Context) {
 				}
 			}
 
-			calculatePromoFields(existing)
+			dto := services.MapToDTO(existing)
+			calcCtx := services.EnrichFromRepo(&dto)
+			calc := services.CalculateFields(&dto, calcCtx)
+			services.MergeCalculatedIntoMap(existing, calc)
 
 			rowsAffected, err := repository.UpdatePromo(idInt, existing, updatedAt)
 			if err != nil {
@@ -298,7 +302,10 @@ func SavePromo(c *gin.Context) {
 	}
 
 	// INSERT
-	calculatePromoFields(input)
+	dto := services.MapToDTO(input)
+	calcCtx := services.EnrichFromRepo(&dto)
+	calc := services.CalculateFields(&dto, calcCtx)
+	services.MergeCalculatedIntoMap(input, calc)
 	delete(input, "id")
 
 	newID, err := repository.InsertPromo(input)
@@ -391,30 +398,43 @@ func ApprovePromo(c *gin.Context) {
 		return
 	}
 
-	var value string
+	var status string
+	var comment string
+	var legacyValue string
 	switch req.Status {
 	case "comment":
 		if req.Comment == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "комментарий не может быть пустым"})
 			return
 		}
-		value = req.Comment
+		status = "commented"
+		comment = req.Comment
+		legacyValue = req.Comment
 	case "согласовано":
-		value = "согласовано"
+		status = "approved"
+		comment = req.Comment
+		legacyValue = "согласовано"
 		if req.Comment != "" {
-			value = "согласовано: " + req.Comment
+			legacyValue = "согласовано: " + req.Comment
 		}
 	case "отклонено":
-		value = "отклонено"
+		status = "rejected"
+		comment = req.Comment
+		legacyValue = "отклонено"
 		if req.Comment != "" {
-			value = "отклонено: " + req.Comment
+			legacyValue = "отклонено: " + req.Comment
 		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые status: comment, согласовано, отклонено"})
 		return
 	}
 
-	if err := repository.ApprovePromo(field, req.ID, value); err != nil {
+	agreementNum := 1
+	if roleStr == "agreement2" {
+		agreementNum = 2
+	}
+
+	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
@@ -423,7 +443,8 @@ func ApprovePromo(c *gin.Context) {
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,
-		"value", value,
+		"status", status,
+		"comment", comment,
 		"user", "system",
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
@@ -433,6 +454,9 @@ func ApprovePromo(c *gin.Context) {
 // ─── Approval Filters ─────────────────────────────────────────────────────
 
 func GetApprovalFilters(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
 	params := repository.ApprovalFilterParams{
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		KAM:            c.Query("kam"),
@@ -441,6 +465,7 @@ func GetApprovalFilters(c *gin.Context) {
 		MechFilter:     c.Query("mechanics"),
 		YearStr:        c.Query("year"),
 		MonthStr:       c.Query("month"),
+		Role:           roleStr,
 	}
 
 	networks, brands, mechanics, kams, err := repository.GetApprovalFilters(params)

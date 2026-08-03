@@ -270,8 +270,8 @@ export default function PromoEditDialog({
       {/* Уменьшили отступы в подвале (py: 1.5) */}
       <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
         <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
-        <Box>
-          <Button onClick={onClose} sx={{ mr: 2 }}>Отмена</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" onClick={onClose}>Закрыть</Button>
           <Button variant="contained" startIcon={<SaveIcon />} onClick={onSave} disabled={saving}>
             {saving ? 'Сохранение...' : 'Сохранить'}
           </Button>

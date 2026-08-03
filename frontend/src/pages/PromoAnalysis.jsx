@@ -181,7 +181,6 @@ export default function PromoAnalysis({ role }) {
 
   const handleSave = async () => { 
     const result = await formHandleSave(); 
-    if (result.success) setEditDialogOpen(false);
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
 

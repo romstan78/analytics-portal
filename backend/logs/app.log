@@ -260,3 +260,136 @@
 {"time":"2026-07-31T13:49:26.277777+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-07-31T13:49:26+07:00"}
 {"time":"2026-07-31T13:52:21.183556+07:00","level":"INFO","msg":"promo_updated","id":77326,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"Фармгарант АС","user":"system","timestamp":"2026-07-31T13:52:21+07:00"}
 {"time":"2026-07-31T13:52:57.554229+07:00","level":"INFO","msg":"promo_approved","id":76229,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-07-31T13:52:57+07:00"}
+{"time":"2026-08-01T01:00:00.852827+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-01T01:00:00.853369+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-01T01:00:20.122093+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-01T01:00:20+07:00"}
+{"time":"2026-08-01T01:01:41.822355+07:00","level":"INFO","msg":"promo_approved","id":77168,"field":"agreement1","value":"нужна дополнительная информация","user":"system","timestamp":"2026-08-01T01:01:41+07:00"}
+{"time":"2026-08-01T01:25:43.593741+07:00","level":"INFO","msg":"promo_approved","id":77017,"field":"agreement1","value":"надо подумать над промо, проблема с рентабельностью.","user":"system","timestamp":"2026-08-01T01:25:43+07:00"}
+{"time":"2026-08-01T01:53:12.028544+07:00","level":"INFO","msg":"promo_approved","id":72465,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-01T01:53:12+07:00"}
+{"time":"2026-08-01T01:53:24.271161+07:00","level":"INFO","msg":"promo_approved","id":72533,"field":"agreement1","value":"отклонено","user":"system","timestamp":"2026-08-01T01:53:24+07:00"}
+{"time":"2026-08-01T01:53:32.030765+07:00","level":"INFO","msg":"promo_approved","id":72449,"field":"agreement1","value":"надо переделать","user":"system","timestamp":"2026-08-01T01:53:32+07:00"}
+{"time":"2026-08-01T02:18:39.133484+07:00","level":"INFO","msg":"promo_approved","id":77026,"field":"agreement1","value":"отклонено: средний РОИ отрицательный","user":"system","timestamp":"2026-08-01T02:18:39+07:00"}
+{"time":"2026-08-01T02:20:17.476863+07:00","level":"INFO","msg":"promo_approved","id":77301,"field":"agreement1","value":"отклонено","user":"system","timestamp":"2026-08-01T02:20:17+07:00"}
+{"time":"2026-08-01T02:33:05.640921+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-01T02:33:05.641903+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T00:47:13.340729+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T00:47:13.342523+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T00:52:31.347792+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-02T00:52:31+07:00"}
+{"time":"2026-08-02T00:54:59.594854+07:00","level":"INFO","msg":"promo_updated","id":79340,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-02T00:54:59+07:00"}
+{"time":"2026-08-02T01:34:27.833638+07:00","level":"INFO","msg":"promo_approved","id":77052,"field":"agreement1","value":"ну и зачем оно нам? не работает же!","user":"system","timestamp":"2026-08-02T01:34:27+07:00"}
+{"time":"2026-08-02T01:36:46.641303+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T01:36:46.642106+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T01:39:16.699285+07:00","level":"INFO","msg":"promo_approved","id":77070,"field":"agreement1","value":"на бренд не планируем промо!","user":"system","timestamp":"2026-08-02T01:39:16+07:00"}
+{"time":"2026-08-02T01:39:41.21942+07:00","level":"INFO","msg":"promo_approved","id":77071,"field":"agreement1","value":"отклонено","user":"system","timestamp":"2026-08-02T01:39:41+07:00"}
+{"time":"2026-08-02T01:43:32.156907+07:00","level":"INFO","msg":"promo_approved","id":76972,"field":"agreement1","value":"предлагаю проверить план промо","user":"system","timestamp":"2026-08-02T01:43:32+07:00"}
+{"time":"2026-08-02T01:45:09.171084+07:00","level":"INFO","msg":"promo_approved","id":77039,"field":"agreement1","value":"точно нужно?","user":"system","timestamp":"2026-08-02T01:45:09+07:00"}
+{"time":"2026-08-02T01:45:53.209042+07:00","level":"INFO","msg":"promo_approved","id":77014,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-02T01:45:53+07:00"}
+{"time":"2026-08-02T01:46:39.879122+07:00","level":"INFO","msg":"promo_approved","id":76955,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-02T01:46:39+07:00"}
+{"time":"2026-08-02T01:49:50.829168+07:00","level":"INFO","msg":"promo_approved","id":77318,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-02T01:49:50+07:00"}
+{"time":"2026-08-02T01:52:29.886715+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T01:52:29.888188+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T01:56:28.172782+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T01:56:28.175156+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T01:56:28.175319+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-02T01:56:28.175338+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-02T02:01:36.993275+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T02:01:36.994531+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T02:02:50.860838+07:00","level":"INFO","msg":"promo_approved","id":77025,"field":"agreement1","value":"оно тебе надо?","user":"system","timestamp":"2026-08-02T02:02:50+07:00"}
+{"time":"2026-08-02T02:03:58.653621+07:00","level":"INFO","msg":"promo_approved","id":77076,"field":"agreement1","value":"отклонено: не эффективно","user":"system","timestamp":"2026-08-02T02:03:58+07:00"}
+{"time":"2026-08-02T23:05:40.193692+07:00","level":"ERROR","msg":"db_ping_failed","error":"unable to open tcp connection with host 'localhost:1433': dial tcp [::1]:1433: connect: connection refused"}
+{"time":"2026-08-02T23:05:40.194116+07:00","level":"INFO","msg":"Нет соединения с БД: unable to open tcp connection with host 'localhost:1433': dial tcp [::1]:1433: connect: connection refused"}
+{"time":"2026-08-02T23:06:12.865957+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T23:06:12.868407+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T23:08:40.426954+07:00","level":"INFO","msg":"promo_deleted","id":"79340","user":"system","timestamp":"2026-08-02T23:08:40+07:00"}
+{"time":"2026-08-02T23:11:32.150972+07:00","level":"INFO","msg":"promo_approved","id":76973,"field":"agreement1","value":"отклонено","user":"system","timestamp":"2026-08-02T23:11:32+07:00"}
+{"time":"2026-08-02T23:20:49.252262+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T23:20:49.254058+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T23:29:46.097444+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T23:29:46.098043+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T23:38:54.962989+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T23:38:54.963601+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-02T23:41:12.431865+07:00","level":"INFO","msg":"promo_approved","id":76973,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-02T23:41:12+07:00"}
+{"time":"2026-08-02T23:46:20.504615+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-02T23:46:20.50537+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:00:29.974299+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T00:00:29.975534+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:12:39.626866+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T00:12:39.628324+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:25:32.981642+07:00","level":"INFO","msg":"promo_approved","id":77039,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T00:25:32+07:00"}
+{"time":"2026-08-03T00:34:13.618923+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T00:34:13.619626+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:45:09.82963+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T00:45:09.831449+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:50:05.483454+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T00:50:05.484614+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T00:56:35.939342+07:00","level":"INFO","msg":"promo_approved","id":76972,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T00:56:35+07:00"}
+{"time":"2026-08-03T01:00:48.818387+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T01:00:48.819109+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T01:00:48.819378+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-03T01:00:48.819408+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-03T01:01:08.978686+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T01:01:08.979085+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T01:03:13.666509+07:00","level":"INFO","msg":"promo_approved","id":77076,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T01:03:13+07:00"}
+{"time":"2026-08-03T01:03:45.2+07:00","level":"INFO","msg":"promo_approved","id":77071,"field":"agreement1","value":"согласовано: по ошибке отклонил","user":"system","timestamp":"2026-08-03T01:03:45+07:00"}
+{"time":"2026-08-03T01:11:43.596841+07:00","level":"INFO","msg":"promo_approved","id":77076,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T01:11:43+07:00"}
+{"time":"2026-08-03T01:41:12.490481+07:00","level":"INFO","msg":"promo_created","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","year":2026,"month":12,"plan_units":17,"plan_rub":52615,"user":"system","timestamp":"2026-08-03T01:41:12+07:00"}
+{"time":"2026-08-03T10:27:30.189894+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T10:27:30.190791+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T10:51:10.471045+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T10:51:10.47164+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T10:55:08.345177+07:00","level":"INFO","msg":"promo_update_conflict","id":79343}
+{"time":"2026-08-03T10:55:13.717047+07:00","level":"INFO","msg":"promo_update_conflict","id":79343}
+{"time":"2026-08-03T10:56:39.137045+07:00","level":"INFO","msg":"promo_approved","id":76738,"field":"agreement1","value":"согласовано: попробуем","user":"system","timestamp":"2026-08-03T10:56:39+07:00"}
+{"time":"2026-08-03T10:56:59.926931+07:00","level":"INFO","msg":"promo_update_conflict","id":79343}
+{"time":"2026-08-03T11:00:10.934485+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T11:00:10.935092+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T11:00:46.839403+07:00","level":"INFO","msg":"promo_update_conflict","id":79343}
+{"time":"2026-08-03T11:01:09.643135+07:00","level":"INFO","msg":"promo_update_conflict","id":79343}
+{"time":"2026-08-03T11:12:05.144566+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T11:12:05.145087+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T11:19:29.296491+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T11:19:29.297437+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T11:20:35.809714+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T11:20:35+07:00"}
+{"time":"2026-08-03T11:21:00.191549+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T11:21:00+07:00"}
+{"time":"2026-08-03T11:23:02.553559+07:00","level":"INFO","msg":"promo_created","id":79344,"sku":"КЕЛО-КОТ 6 ГР","network":"Эдельвейс АС","year":2027,"month":1,"plan_units":33,"plan_rub":66495,"user":"system","timestamp":"2026-08-03T11:23:02+07:00"}
+{"time":"2026-08-03T11:23:18.695595+07:00","level":"INFO","msg":"promo_updated","id":79344,"sku":"КЕЛО-КОТ 6 ГР","network":"Эдельвейс АС","user":"system","timestamp":"2026-08-03T11:23:18+07:00"}
+{"time":"2026-08-03T11:24:13.921913+07:00","level":"INFO","msg":"promo_approved","id":79344,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T11:24:13+07:00"}
+{"time":"2026-08-03T12:31:50.787121+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T12:31:50.788921+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T12:32:21.133273+07:00","level":"INFO","msg":"promo_updated","id":79344,"sku":"КЕЛО-КОТ 6 ГР","network":"Эдельвейс АС","user":"system","timestamp":"2026-08-03T12:32:21+07:00"}
+{"time":"2026-08-03T12:34:23.978427+07:00","level":"INFO","msg":"promo_created","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","year":2027,"month":1,"plan_units":176,"plan_rub":142208,"user":"system","timestamp":"2026-08-03T12:34:23+07:00"}
+{"time":"2026-08-03T12:34:44.570987+07:00","level":"INFO","msg":"promo_approved","id":79345,"field":"agreement1","value":"согласовано: OK","user":"system","timestamp":"2026-08-03T12:34:44+07:00"}
+{"time":"2026-08-03T12:37:37.213346+07:00","level":"INFO","msg":"promo_approved","id":79344,"field":"agreement1","value":"отклонено: согласовано ошибочно","user":"system","timestamp":"2026-08-03T12:37:37+07:00"}
+{"time":"2026-08-03T12:57:18.019621+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T12:57:18.020446+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T12:58:24.756297+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T12:58:24.757082+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T12:58:50.610108+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"system","timestamp":"2026-08-03T12:58:50+07:00"}
+{"time":"2026-08-03T12:59:37.590155+07:00","level":"INFO","msg":"promo_approved","id":77025,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T12:59:37+07:00"}
+{"time":"2026-08-03T13:02:21.252329+07:00","level":"INFO","msg":"promo_created","id":79346,"sku":"АЛЬФА","network":"OZON","year":2027,"month":1,"plan_units":250,"plan_rub":352750,"user":"system","timestamp":"2026-08-03T13:02:21+07:00"}
+{"time":"2026-08-03T13:02:52.699624+07:00","level":"INFO","msg":"promo_approved","id":79346,"field":"agreement1","value":"отклонено","user":"system","timestamp":"2026-08-03T13:02:52+07:00"}
+{"time":"2026-08-03T13:03:23.000335+07:00","level":"INFO","msg":"promo_updated","id":79346,"sku":"АЛЬФА","network":"OZON","user":"system","timestamp":"2026-08-03T13:03:23+07:00"}
+{"time":"2026-08-03T13:06:44.632773+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T13:06:44.633368+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T13:07:09.992138+07:00","level":"INFO","msg":"promo_updated","id":79346,"sku":"АЛЬФА","network":"OZON","user":"system","timestamp":"2026-08-03T13:07:09+07:00"}
+{"time":"2026-08-03T13:08:58.99481+07:00","level":"INFO","msg":"promo_updated","id":79346,"sku":"АЛЬФА","network":"OZON","user":"system","timestamp":"2026-08-03T13:08:58+07:00"}
+{"time":"2026-08-03T13:09:36.502819+07:00","level":"INFO","msg":"promo_approved","id":79346,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T13:09:36+07:00"}
+{"time":"2026-08-03T13:12:14.08908+07:00","level":"INFO","msg":"promo_updated","id":79346,"sku":"АЛЬФА","network":"OZON","user":"system","timestamp":"2026-08-03T13:12:14+07:00"}
+{"time":"2026-08-03T13:13:04.288062+07:00","level":"INFO","msg":"promo_created","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","year":2027,"month":1,"plan_units":900,"plan_rub":458100,"user":"system","timestamp":"2026-08-03T13:13:04+07:00"}
+{"time":"2026-08-03T13:13:28.361544+07:00","level":"INFO","msg":"promo_approved","id":79347,"field":"agreement1","value":"согласовано: ждем эффект","user":"system","timestamp":"2026-08-03T13:13:28+07:00"}
+{"time":"2026-08-03T13:15:03.965952+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"system","timestamp":"2026-08-03T13:15:03+07:00"}
+{"time":"2026-08-03T15:35:54.810447+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"system","timestamp":"2026-08-03T15:35:54+07:00"}
+{"time":"2026-08-03T15:36:28.466183+07:00","level":"INFO","msg":"promo_approved","id":79344,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T15:36:28+07:00"}
+{"time":"2026-08-03T15:37:11.059212+07:00","level":"INFO","msg":"promo_approved","id":77156,"field":"agreement1","value":"надо посчитать еще","user":"system","timestamp":"2026-08-03T15:37:11+07:00"}
+{"time":"2026-08-03T15:38:27.564379+07:00","level":"INFO","msg":"promo_approved","id":77156,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T15:38:27+07:00"}
+{"time":"2026-08-03T15:38:57.127794+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T15:38:57+07:00"}
+{"time":"2026-08-03T15:44:52.375688+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T15:44:52+07:00"}
+{"time":"2026-08-03T15:46:51.836976+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T15:46:51+07:00"}
+{"time":"2026-08-03T15:48:22.203144+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T15:48:22+07:00"}
+{"time":"2026-08-03T15:59:30.147926+07:00","level":"INFO","msg":"promo_approved","id":77206,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T15:59:30+07:00"}
+{"time":"2026-08-03T16:04:38.975586+07:00","level":"INFO","msg":"promo_updated","id":77033,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"ЗдравСити","user":"system","timestamp":"2026-08-03T16:04:38+07:00"}
+{"time":"2026-08-03T16:05:14.143983+07:00","level":"INFO","msg":"promo_approved","id":77191,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T16:05:14+07:00"}
+{"time":"2026-08-03T16:05:17.101874+07:00","level":"INFO","msg":"promo_approved","id":77192,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T16:05:17+07:00"}
+{"time":"2026-08-03T16:14:38.404846+07:00","level":"INFO","msg":"promo_approved","id":77206,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:38+07:00"}
+{"time":"2026-08-03T16:14:41.989474+07:00","level":"INFO","msg":"promo_approved","id":77192,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:41+07:00"}
+{"time":"2026-08-03T16:14:44.68042+07:00","level":"INFO","msg":"promo_approved","id":77191,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:44+07:00"}
