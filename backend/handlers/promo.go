@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend/config"
@@ -32,6 +33,13 @@ func GetPromoFilters(c *gin.Context) {
 		Networks:    c.QueryArray("network_name"),
 		Mechanics:   c.QueryArray("mechanics"),
 		Statuses:    c.QueryArray("status"),
+	}
+
+	// Кэшируем только если фильтры по году/месяцу не заданы (дефолтная страница)
+	cacheKey := "filters:" + params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
+	if cached, ok := config.FiltersCache.Get(cacheKey); ok {
+		c.JSON(http.StatusOK, cached)
+		return
 	}
 
 	baseWhere, baseArgs := repository.BuildBaseWhere(params)
@@ -78,7 +86,7 @@ func GetPromoFilters(c *gin.Context) {
 
 	_ = g.Wait()
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"kam":          resKam,
 		"brand":        resBrand,
 		"sku":          resSKU,
@@ -86,7 +94,11 @@ func GetPromoFilters(c *gin.Context) {
 		"mechanics":    resMechanics,
 		"status":       resStatus,
 		"channel":      resChannel,
-	})
+	}
+
+	config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
+
+	c.JSON(http.StatusOK, result)
 }
 
 func GetPromoData(c *gin.Context) {
@@ -243,6 +255,88 @@ func GetLastSKUData(c *gin.Context) {
 
 // ─── Save / Delete ─────────────────────────────────────────────────────────
 
+func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
+	for k, v := range input {
+		if k == "id" || k == "deleted_at" || k == "updated_at" || k == "status" || strings.HasPrefix(k, "agreement") {
+			continue
+		}
+		switch k {
+		case "network_name":
+			r.NetworkName = fmt.Sprint(v)
+		case "kam":
+			r.KAM = fmt.Sprint(v)
+		case "brand":
+			r.Brand = fmt.Sprint(v)
+		case "brand_as":
+			r.BrandAS = fmt.Sprint(v)
+		case "sku":
+			r.SKU = fmt.Sprint(v)
+		case "year":
+			r.Year, _ = strconv.Atoi(fmt.Sprint(v))
+		case "month":
+			r.Month, _ = strconv.Atoi(fmt.Sprint(v))
+		case "quarter":
+			r.Quarter, _ = strconv.Atoi(fmt.Sprint(v))
+		case "mechanics":
+			r.Mechanics = fmt.Sprint(v)
+		case "gtn_opex":
+			r.GTNOpex = fmt.Sprint(v)
+		case "baseline_units":
+			r.BaselineUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "baseline_rub":
+			r.BaselineRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_promo_units":
+			r.PlanPromoUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_promo_rub":
+			r.PlanPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_investments_rub":
+			r.PlanInvestmentsRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "contract_price":
+			r.ContractPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "gm":
+			r.GM, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "id_directum":
+			r.IDDirectum = fmt.Sprint(v)
+		case "ds_number":
+			r.DSNumber = fmt.Sprint(v)
+		case "discount_amount":
+			r.DiscountAmount, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "conditions":
+			r.Conditions = fmt.Sprint(v)
+		case "comments":
+			r.Comments = fmt.Sprint(v)
+		case "ecom_segment":
+			r.EcomSegment = fmt.Sprint(v)
+		case "total_pharmacies":
+			r.TotalPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+		case "promo_pharmacies":
+			r.PromoPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+		case "date":
+			r.Date = fmt.Sprint(v)
+		case "key_region":
+			r.KeyRegion = fmt.Sprint(v)
+		case "top20_segment":
+			r.Top20Segment = fmt.Sprint(v)
+		case "olap_price":
+			r.OlapPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_sales_units":
+			r.ActualPromoSalesUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_investments":
+			r.ActualInvestments, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_rub":
+			r.ActualPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_uplift_units":
+			r.ActualPromoUpliftUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_uplift_rub":
+			r.ActualPromoUpliftRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_external_ecom_units":
+			r.ActualExternalEcomUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_corrected_baseline":
+			r.ActualCorrectedBaseline, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		}
+	}
+}
+
 func SavePromo(c *gin.Context) {
 	var input map[string]interface{}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -255,28 +349,25 @@ func SavePromo(c *gin.Context) {
 		idFloat, _ := strconv.ParseFloat(fmt.Sprint(id), 64)
 		idInt := int(idFloat)
 		if idInt > 0 {
-			existing, err := repository.FetchExistingRow(idInt)
+			row, err := repository.FetchExistingRow(idInt)
 			if err != nil {
 				config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Запись не найдена"})
 				return
 			}
 
-			// Сохраняем текущий updated_at для Optimistic Locking
-			updatedAt := safeString(existing, "updated_at")
+			updatedAt := row.UpdatedAt
 
-			for k, v := range input {
-				if k != "id" && k != "deleted_at" && k != "updated_at" && k != "agreement1" && k != "agreement2" {
-					existing[k] = v
-				}
-			}
+			// Применяем входящие данные поверх существующей строки
+			applyJSONToRow(row, input)
 
-			dto := services.MapToDTO(existing)
+			// Пересчитываем вычисляемые поля
+			dto := services.DBRowToDTO(row)
 			calcCtx := services.EnrichFromRepo(&dto)
 			calc := services.CalculateFields(&dto, calcCtx)
-			services.MergeCalculatedIntoMap(existing, calc)
+			services.MergeCalculatedIntoDBRow(row, calc)
 
-			rowsAffected, err := repository.UpdatePromo(idInt, existing, updatedAt)
+			rowsAffected, err := repository.UpdatePromo(idInt, row, updatedAt)
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -287,16 +378,16 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			existing["updated_at"] = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
+			row.UpdatedAt = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
 
 			config.Logger.Info("promo_updated",
 				"id", idInt,
-				"sku", fmt.Sprint(existing["sku"]),
-				"network", fmt.Sprint(existing["network_name"]),
+				"sku", row.SKU,
+				"network", row.NetworkName,
 				"user", "system",
 				"timestamp", time.Now().Format(time.RFC3339),
 			)
-			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": existing})
+			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
 			return
 		}
 	}
@@ -305,32 +396,33 @@ func SavePromo(c *gin.Context) {
 	dto := services.MapToDTO(input)
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
-	services.MergeCalculatedIntoMap(input, calc)
-	delete(input, "id")
+	row := services.DTOToDBRow(dto, calc)
 
-	newID, err := repository.InsertPromo(input)
+	newID, err := repository.InsertPromo(row)
 	if err != nil {
 		config.Logger.Error("promo_insert_failed",
 			"error", err.Error(),
-			"sku", fmt.Sprint(input["sku"]),
-			"network", fmt.Sprint(input["network_name"]),
+			"sku", dto.SKU,
+			"network", dto.NetworkName,
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	row.ID = int(newID)
+
 	config.Logger.Info("promo_created",
 		"id", newID,
-		"sku", fmt.Sprint(input["sku"]),
-		"network", fmt.Sprint(input["network_name"]),
-		"year", safeInt(input, "year"),
-		"month", safeInt(input, "month"),
-		"plan_units", safeFloat(input, "plan_promo_units"),
-		"plan_rub", safeFloat(input, "plan_promo_rub"),
+		"sku", dto.SKU,
+		"network", dto.NetworkName,
+		"year", dto.Year,
+		"month", dto.Month,
+		"plan_units", dto.PlanPromoUnits,
+		"plan_rub", dto.PlanPromoRub,
 		"user", "system",
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
-	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": input})
+	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": services.DBRowToMap(row)})
 }
 
 func DeletePromo(c *gin.Context) {

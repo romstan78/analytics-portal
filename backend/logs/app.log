@@ -393,3 +393,11 @@
 {"time":"2026-08-03T16:14:38.404846+07:00","level":"INFO","msg":"promo_approved","id":77206,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:38+07:00"}
 {"time":"2026-08-03T16:14:41.989474+07:00","level":"INFO","msg":"promo_approved","id":77192,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:41+07:00"}
 {"time":"2026-08-03T16:14:44.68042+07:00","level":"INFO","msg":"promo_approved","id":77191,"field":"agreement2","value":"согласовано","user":"system","timestamp":"2026-08-03T16:14:44+07:00"}
+{"time":"2026-08-03T17:01:56.092113+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"system","timestamp":"2026-08-03T17:01:56+07:00"}
+{"time":"2026-08-03T17:03:58.973226+07:00","level":"INFO","msg":"promo_updated","id":67983,"sku":"АЛЬФЛОРЕКС","network":"Ригла АС","user":"system","timestamp":"2026-08-03T17:03:58+07:00"}
+{"time":"2026-08-03T17:06:58.793775+07:00","level":"INFO","msg":"promo_approved","id":76044,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T17:06:58+07:00"}
+{"time":"2026-08-03T17:08:05.147181+07:00","level":"INFO","msg":"promo_approved","id":77115,"field":"agreement1","value":"согласовано","user":"system","timestamp":"2026-08-03T17:08:05+07:00"}
+{"time":"2026-08-03T17:08:30.692272+07:00","level":"INFO","msg":"promo_approved","id":77115,"field":"agreement1","value":"согласовано: сработает?","user":"system","timestamp":"2026-08-03T17:08:30+07:00"}
+{"time":"2026-08-03T17:18:35.289184+07:00","level":"INFO","msg":"promo_updated","id":76862,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"Эркафарм АС","user":"system","timestamp":"2026-08-03T17:18:35+07:00"}
+{"time":"2026-08-03T17:19:40.709282+07:00","level":"INFO","msg":"promo_created","id":79348,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"OZON","year":2027,"month":1,"plan_units":5500,"plan_rub":6688000,"user":"system","timestamp":"2026-08-03T17:19:40+07:00"}
+{"time":"2026-08-03T17:20:18.412189+07:00","level":"INFO","msg":"promo_approved","id":79348,"field":"agreement1","value":"это мы еще посмотрим","user":"system","timestamp":"2026-08-03T17:20:18+07:00"}

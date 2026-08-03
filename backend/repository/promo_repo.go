@@ -364,120 +364,225 @@ func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models
 
 // ─── Save / Delete ──────────────────────────────────────────────────────────
 
-func FetchExistingRow(id int) (map[string]interface{}, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
-
+func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 	row := config.DB.QueryRow(
-		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL",
+		"SELECT network_name, kam, brand, brand_as, sku, "+
+			"year, month, quarter, mechanics, gtn_opex, "+
+			"baseline_units, baseline_rub, "+
+			"plan_promo_units, plan_promo_rub, plan_investments_rub, "+
+			"plan_promo_uplift_units, plan_promo_uplift_rub, "+
+			"plan_promo_uplift_pct_units, plan_promo_uplift_pct_rub, "+
+			"plan_investments_pct, plan_roi, "+
+			"contract_price, gm, "+
+			"id_directum, ds_number, discount_amount, "+
+			"conditions, comments, ecom_segment, "+
+			"total_pharmacies, promo_pharmacies, "+
+			"status, date, "+
+			"key_region, top20_segment, olap_price, "+
+			"plan_promo_cip_olap, fact_promo_cip_olap, "+
+			"plan_promo_uplift_cip_olap, fact_promo_uplift_cip_olap, "+
+			"actual_promo_sales_units, actual_investments, "+
+			"actual_promo_rub, actual_promo_uplift_units, actual_promo_uplift_rub, "+
+			"actual_external_ecom_units, actual_corrected_baseline, "+
+			"agreement1, agreement2, "+
+			"net_promo_uplift_rub, net_promo_uplift_pct, "+
+			"actual_investments_pct, actual_roi, "+
+			"actual_promo_rub_wo_ecom, actual_promo_uplift_units_wo_ecom, "+
+			"actual_promo_uplift_rub_wo_ecom, "+
+			"net_promo_uplift_rub_wo_ecom, net_promo_uplift_pct_wo_ecom, "+
+			"actual_investments_pct_wo_ecom, actual_roi_wo_ecom, "+
+			"plan_vs_fact_rub, plan_vs_fact_investments, "+
+			"turnover_per_point, turnover_per_point_promo, "+
+			"updated_at "+
+			"FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL",
 		id,
 	)
 
-	existing := make(map[string]interface{})
-	dest := make([]interface{}, len(allPromoFields))
-	for i := range allPromoFields {
-		var v sql.NullString
-		dest[i] = &v
-	}
+	var r models.PromoRowDB
+	var nsNetworkName, nsKAM, nsBrand, nsBrandAS, nsSKU sql.NullString
+	var nsMechanics, nsGTNOpex sql.NullString
+	var nsIDDirectum, nsDSNumber, nsConditions, nsComments, nsEcomSegment, nsStatus, nsDate sql.NullString
+	var nsKeyRegion, nsTop20Segment sql.NullString
+	var nsAgreement1, nsAgreement2 sql.NullString
+	var nsUpdatedAt sql.NullString
+	var nQuarter, nTotalPharmacies, nPromoPharmacies sql.NullInt64
+	var nBaselineUnits, nBaselineRub sql.NullFloat64
+	var nPlanPromoUnits, nPlanPromoRub, nPlanInvestmentsRub sql.NullFloat64
+	var nPlanPromoUpliftUnits, nPlanPromoUpliftRub sql.NullFloat64
+	var nPlanPromoUpliftPctUnits, nPlanPromoUpliftPctRub, nPlanInvestmentsPct, nPlanROI sql.NullFloat64
+	var nContractPrice, nGM, nDiscountAmount sql.NullFloat64
+	var nOlapPrice, nPlanPromoCipOlap, nFactPromoCipOlap, nPlanPromoUpliftCipOlap, nFactPromoUpliftCipOlap sql.NullFloat64
+	var nActualPromoSalesUnits, nActualInvestments, nActualPromoRub, nActualPromoUpliftUnits, nActualPromoUpliftRub sql.NullFloat64
+	var nActualExternalEcomUnits, nActualCorrectedBaseline sql.NullFloat64
+	var nNetPromoUpliftRub, nNetPromoUpliftPct, nActualInvestmentsPct, nActualROI sql.NullFloat64
+	var nActualPromoRubWoEcom, nActualPromoUpliftUnitsWoEcom, nActualPromoUpliftRubWoEcom sql.NullFloat64
+	var nNetPromoUpliftRubWoEcom, nNetPromoUpliftPctWoEcom, nActualInvestmentsPctWoEcom, nActualROIWoEcom sql.NullFloat64
+	var nPlanVsFactRub, nPlanVsFactInvestments, nTurnoverPerPoint, nTurnoverPerPointPromo sql.NullFloat64
 
-	if err := row.Scan(dest...); err != nil {
+	err := row.Scan(
+		&nsNetworkName, &nsKAM, &nsBrand, &nsBrandAS, &nsSKU,
+		&r.Year, &r.Month, &nQuarter, &nsMechanics, &nsGTNOpex,
+		&nBaselineUnits, &nBaselineRub,
+		&nPlanPromoUnits, &nPlanPromoRub, &nPlanInvestmentsRub,
+		&nPlanPromoUpliftUnits, &nPlanPromoUpliftRub,
+		&nPlanPromoUpliftPctUnits, &nPlanPromoUpliftPctRub,
+		&nPlanInvestmentsPct, &nPlanROI,
+		&nContractPrice, &nGM,
+		&nsIDDirectum, &nsDSNumber, &nDiscountAmount,
+		&nsConditions, &nsComments, &nsEcomSegment,
+		&nTotalPharmacies, &nPromoPharmacies,
+		&nsStatus, &nsDate,
+		&nsKeyRegion, &nsTop20Segment, &nOlapPrice,
+		&nPlanPromoCipOlap, &nFactPromoCipOlap,
+		&nPlanPromoUpliftCipOlap, &nFactPromoUpliftCipOlap,
+		&nActualPromoSalesUnits, &nActualInvestments,
+		&nActualPromoRub, &nActualPromoUpliftUnits, &nActualPromoUpliftRub,
+		&nActualExternalEcomUnits, &nActualCorrectedBaseline,
+		&nsAgreement1, &nsAgreement2,
+		&nNetPromoUpliftRub, &nNetPromoUpliftPct,
+		&nActualInvestmentsPct, &nActualROI,
+		&nActualPromoRubWoEcom, &nActualPromoUpliftUnitsWoEcom,
+		&nActualPromoUpliftRubWoEcom,
+		&nNetPromoUpliftRubWoEcom, &nNetPromoUpliftPctWoEcom,
+		&nActualInvestmentsPctWoEcom, &nActualROIWoEcom,
+		&nPlanVsFactRub, &nPlanVsFactInvestments,
+		&nTurnoverPerPoint, &nTurnoverPerPointPromo,
+		&nsUpdatedAt,
+	)
+	if err != nil {
 		return nil, err
 	}
 
-	for i, field := range allPromoFields {
-		ns := dest[i].(*sql.NullString)
-		if ns.Valid {
-			if f, err := strconv.ParseFloat(ns.String, 64); err == nil {
-				existing[field] = f
-			} else if i, err := strconv.Atoi(ns.String); err == nil {
-				existing[field] = i
-			} else {
-				existing[field] = ns.String
-			}
-		}
-	}
-	return existing, nil
+	r.ID = id
+	r.NetworkName = nsNetworkName.String
+	r.KAM = nsKAM.String
+	r.Brand = nsBrand.String
+	r.BrandAS = nsBrandAS.String
+	r.SKU = nsSKU.String
+	r.Quarter = int(nQuarter.Int64)
+	r.Mechanics = nsMechanics.String
+	r.GTNOpex = nsGTNOpex.String
+	r.BaselineUnits = nBaselineUnits.Float64
+	r.BaselineRub = nBaselineRub.Float64
+	r.PlanPromoUnits = nPlanPromoUnits.Float64
+	r.PlanPromoRub = nPlanPromoRub.Float64
+	r.PlanInvestmentsRub = nPlanInvestmentsRub.Float64
+	r.PlanPromoUpliftUnits = nPlanPromoUpliftUnits.Float64
+	r.PlanPromoUpliftRub = nPlanPromoUpliftRub.Float64
+	r.PlanPromoUpliftPctUnits = nPlanPromoUpliftPctUnits.Float64
+	r.PlanPromoUpliftPctRub = nPlanPromoUpliftPctRub.Float64
+	r.PlanInvestmentsPct = nPlanInvestmentsPct.Float64
+	r.PlanROI = nPlanROI.Float64
+	r.ContractPrice = nContractPrice.Float64
+	r.GM = nGM.Float64
+	r.IDDirectum = nsIDDirectum.String
+	r.DSNumber = nsDSNumber.String
+	r.DiscountAmount = nDiscountAmount.Float64
+	r.Conditions = nsConditions.String
+	r.Comments = nsComments.String
+	r.EcomSegment = nsEcomSegment.String
+	r.TotalPharmacies = int(nTotalPharmacies.Int64)
+	r.PromoPharmacies = int(nPromoPharmacies.Int64)
+	r.Status = nsStatus.String
+	r.Date = nsDate.String
+	r.KeyRegion = nsKeyRegion.String
+	r.Top20Segment = nsTop20Segment.String
+	r.OlapPrice = nOlapPrice.Float64
+	r.PlanPromoCipOlap = nPlanPromoCipOlap.Float64
+	r.FactPromoCipOlap = nFactPromoCipOlap.Float64
+	r.PlanPromoUpliftCipOlap = nPlanPromoUpliftCipOlap.Float64
+	r.FactPromoUpliftCipOlap = nFactPromoUpliftCipOlap.Float64
+	r.ActualPromoSalesUnits = nActualPromoSalesUnits.Float64
+	r.ActualInvestments = nActualInvestments.Float64
+	r.ActualPromoRub = nActualPromoRub.Float64
+	r.ActualPromoUpliftUnits = nActualPromoUpliftUnits.Float64
+	r.ActualPromoUpliftRub = nActualPromoUpliftRub.Float64
+	r.ActualExternalEcomUnits = nActualExternalEcomUnits.Float64
+	r.ActualCorrectedBaseline = nActualCorrectedBaseline.Float64
+	r.Agreement1 = nsAgreement1.String
+	r.Agreement2 = nsAgreement2.String
+	r.NetPromoUpliftRub = nNetPromoUpliftRub.Float64
+	r.NetPromoUpliftPct = nNetPromoUpliftPct.Float64
+	r.ActualInvestmentsPct = nActualInvestmentsPct.Float64
+	r.ActualROI = nActualROI.Float64
+	r.ActualPromoRubWoEcom = nActualPromoRubWoEcom.Float64
+	r.ActualPromoUpliftUnitsWoEcom = nActualPromoUpliftUnitsWoEcom.Float64
+	r.ActualPromoUpliftRubWoEcom = nActualPromoUpliftRubWoEcom.Float64
+	r.NetPromoUpliftRubWoEcom = nNetPromoUpliftRubWoEcom.Float64
+	r.NetPromoUpliftPctWoEcom = nNetPromoUpliftPctWoEcom.Float64
+	r.ActualInvestmentsPctWoEcom = nActualInvestmentsPctWoEcom.Float64
+	r.ActualROIWoEcom = nActualROIWoEcom.Float64
+	r.PlanVsFactRub = nPlanVsFactRub.Float64
+	r.PlanVsFactInvestments = nPlanVsFactInvestments.Float64
+	r.TurnoverPerPoint = nTurnoverPerPoint.Float64
+	r.TurnoverPerPointPromo = nTurnoverPerPointPromo.Float64
+	r.UpdatedAt = nsUpdatedAt.String
+
+	return &r, nil
 }
 
 // UpdatePromo возвращает rowsAffected (0 = конфликт версий)
-func UpdatePromo(id int, existing map[string]interface{}, updatedAt string) (int64, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
+func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) {
+	query := `UPDATE dbo.tbl_PromoActivities SET 
+		network_name = ?, kam = ?, brand = ?, brand_as = ?, sku = ?,
+		year = ?, month = ?, quarter = ?, mechanics = ?, gtn_opex = ?,
+		baseline_units = ?, baseline_rub = ?,
+		plan_promo_units = ?, plan_promo_rub = ?, plan_investments_rub = ?,
+		plan_promo_uplift_units = ?, plan_promo_uplift_rub = ?,
+		plan_promo_uplift_pct_units = ?, plan_promo_uplift_pct_rub = ?,
+		plan_investments_pct = ?, plan_roi = ?,
+		contract_price = ?, gm = ?,
+		id_directum = ?, ds_number = ?, discount_amount = ?,
+		conditions = ?, comments = ?, ecom_segment = ?,
+		total_pharmacies = ?, promo_pharmacies = ?,
+		status = ?, date = ?,
+		key_region = ?, top20_segment = ?, olap_price = ?,
+		plan_promo_cip_olap = ?, fact_promo_cip_olap = ?,
+		plan_promo_uplift_cip_olap = ?, fact_promo_uplift_cip_olap = ?,
+		actual_promo_sales_units = ?, actual_investments = ?,
+		actual_promo_rub = ?, actual_promo_uplift_units = ?, actual_promo_uplift_rub = ?,
+		actual_external_ecom_units = ?, actual_corrected_baseline = ?,
+		agreement1 = ?, agreement2 = ?,
+		net_promo_uplift_rub = ?, net_promo_uplift_pct = ?,
+		actual_investments_pct = ?, actual_roi = ?,
+		actual_promo_rub_wo_ecom = ?, actual_promo_uplift_units_wo_ecom = ?,
+		actual_promo_uplift_rub_wo_ecom = ?,
+		net_promo_uplift_rub_wo_ecom = ?, net_promo_uplift_pct_wo_ecom = ?,
+		actual_investments_pct_wo_ecom = ?, actual_roi_wo_ecom = ?,
+		plan_vs_fact_rub = ?, plan_vs_fact_investments = ?,
+		turnover_per_point = ?, turnover_per_point_promo = ?,
+		updated_at = GETDATE()
+		WHERE id = ? AND updated_at = ?`
 
-	setClauses := []string{}
-	values := []interface{}{}
-	for _, field := range allPromoFields {
-		if field == "updated_at" {
-			continue
-		}
-		if val, ok := existing[field]; ok {
-			setClauses = append(setClauses, field+" = ?")
-			values = append(values, val)
-		}
-	}
-	setClauses = append(setClauses, "updated_at = GETDATE()")
-	values = append(values, id)
-
-	query := "UPDATE dbo.tbl_PromoActivities SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	if updatedAt != "" {
-		query += " AND updated_at = ?"
-		values = append(values, updatedAt)
+	values := []interface{}{
+		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
+		r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
+		r.BaselineUnits, r.BaselineRub,
+		r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
+		r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
+		r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
+		r.PlanInvestmentsPct, r.PlanROI,
+		r.ContractPrice, r.GM,
+		r.IDDirectum, r.DSNumber, r.DiscountAmount,
+		r.Conditions, r.Comments, r.EcomSegment,
+		r.TotalPharmacies, r.PromoPharmacies,
+		r.Status, r.Date,
+		r.KeyRegion, r.Top20Segment, r.OlapPrice,
+		r.PlanPromoCipOlap, r.FactPromoCipOlap,
+		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
+		r.ActualPromoSalesUnits, r.ActualInvestments,
+		r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
+		r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
+		r.Agreement1, r.Agreement2,
+		r.NetPromoUpliftRub, r.NetPromoUpliftPct,
+		r.ActualInvestmentsPct, r.ActualROI,
+		r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
+		r.ActualPromoUpliftRubWoEcom,
+		r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
+		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
+		r.PlanVsFactRub, r.PlanVsFactInvestments,
+		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
+		id, updatedAt,
 	}
 
 	result, err := config.DB.Exec(query, values...)
@@ -487,55 +592,95 @@ func UpdatePromo(id int, existing map[string]interface{}, updatedAt string) (int
 	return result.RowsAffected()
 }
 
-func InsertPromo(input map[string]interface{}) (int64, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
-
-	placeholders := make([]string, len(allPromoFields))
-	values := make([]interface{}, len(allPromoFields))
-	for i, f := range allPromoFields {
-		placeholders[i] = "?"
-		if val, ok := input[f]; ok {
-			values[i] = val
-		} else {
-			values[i] = nil
-		}
-	}
+func InsertPromo(r *models.PromoRowDB) (int64, error) {
+	query := `INSERT INTO dbo.tbl_PromoActivities (
+		network_name, kam, brand, brand_as, sku,
+		year, month, quarter, mechanics, gtn_opex,
+		baseline_units, baseline_rub,
+		plan_promo_units, plan_promo_rub, plan_investments_rub,
+		plan_promo_uplift_units, plan_promo_uplift_rub,
+		plan_promo_uplift_pct_units, plan_promo_uplift_pct_rub,
+		plan_investments_pct, plan_roi,
+		contract_price, gm,
+		id_directum, ds_number, discount_amount,
+		conditions, comments, ecom_segment,
+		total_pharmacies, promo_pharmacies,
+		status, date,
+		key_region, top20_segment, olap_price,
+		plan_promo_cip_olap, fact_promo_cip_olap,
+		plan_promo_uplift_cip_olap, fact_promo_uplift_cip_olap,
+		actual_promo_sales_units, actual_investments,
+		actual_promo_rub, actual_promo_uplift_units, actual_promo_uplift_rub,
+		actual_external_ecom_units, actual_corrected_baseline,
+		agreement1, agreement2,
+		net_promo_uplift_rub, net_promo_uplift_pct,
+		actual_investments_pct, actual_roi,
+		actual_promo_rub_wo_ecom, actual_promo_uplift_units_wo_ecom,
+		actual_promo_uplift_rub_wo_ecom,
+		net_promo_uplift_rub_wo_ecom, net_promo_uplift_pct_wo_ecom,
+		actual_investments_pct_wo_ecom, actual_roi_wo_ecom,
+		plan_vs_fact_rub, plan_vs_fact_investments,
+		turnover_per_point, turnover_per_point_promo,
+		updated_at
+	) OUTPUT INSERTED.id VALUES (
+		?, ?, ?, ?, ?,
+		?, ?, ?, ?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?, ?,
+		?, ?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		GETDATE()
+	)`
 
 	var newID int64
-	err := config.DB.QueryRow(
-		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) OUTPUT INSERTED.id VALUES (%s)",
-			strings.Join(allPromoFields, ", "),
-			strings.Join(placeholders, ", ")),
-		values...,
+	err := config.DB.QueryRow(query,
+		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
+		r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
+		r.BaselineUnits, r.BaselineRub,
+		r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
+		r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
+		r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
+		r.PlanInvestmentsPct, r.PlanROI,
+		r.ContractPrice, r.GM,
+		r.IDDirectum, r.DSNumber, r.DiscountAmount,
+		r.Conditions, r.Comments, r.EcomSegment,
+		r.TotalPharmacies, r.PromoPharmacies,
+		r.Status, r.Date,
+		r.KeyRegion, r.Top20Segment, r.OlapPrice,
+		r.PlanPromoCipOlap, r.FactPromoCipOlap,
+		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
+		r.ActualPromoSalesUnits, r.ActualInvestments,
+		r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
+		r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
+		r.Agreement1, r.Agreement2,
+		r.NetPromoUpliftRub, r.NetPromoUpliftPct,
+		r.ActualInvestmentsPct, r.ActualROI,
+		r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
+		r.ActualPromoUpliftRubWoEcom,
+		r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
+		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
+		r.PlanVsFactRub, r.PlanVsFactInvestments,
+		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
 	).Scan(&newID)
 	return newID, err
 }
@@ -658,15 +803,6 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 		agreementField, statusField, commentField,
 	)
 	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
-	return err
-}
-
-// Deprecated: используйте ApprovePromoWithStatus
-func ApprovePromo(field string, id int, value string) error {
-	_, err := config.DB.Exec(
-		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
-		value, id,
-	)
 	return err
 }
 

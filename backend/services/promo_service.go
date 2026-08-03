@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"backend/models"
 	"backend/repository"
 )
 
@@ -109,23 +110,20 @@ type CalculationContext struct {
 }
 
 // EnrichFromRepo — заполняет недостающие данные из БД через репозиторий.
-// Раньше это делалось прямыми SQL-запросами в calculatePromoFields.
 func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
 	ctx := CalculationContext{}
 
-	// GM: если не задан — ищем последнюю запись по SKU
 	if input.GM == 0 {
 		lastData, err := repository.GetLastSKUData(input.SKU)
 		if err == nil && lastData != nil && lastData.GM != 0 {
 			ctx.GM = lastData.GM
 		} else {
-			ctx.GM = 1 // fallback по умолчанию
+			ctx.GM = 1
 		}
 	} else {
 		ctx.GM = input.GM
 	}
 
-	// KeyRegion / Top20Segment: если не заданы — ищем из Geo-маппинга
 	if input.KeyRegion == "" || input.Top20Segment == "" {
 		geo, err := repository.GetNetworkGeoMapping(input.NetworkName)
 		if err == nil && geo != nil {
@@ -140,7 +138,6 @@ func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
 	ctx.KeyRegion = input.KeyRegion
 	ctx.Top20Segment = input.Top20Segment
 
-	// OLAP price
 	if input.OlapPrice == 0 {
 		lastData, err := repository.GetLastSKUData(input.SKU)
 		if err == nil && lastData != nil && lastData.OlapPrice != 0 {
@@ -154,7 +151,6 @@ func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
 }
 
 // CalculateFields — чистая функция расчета всех вычисляемых полей.
-// Не делает запросов в БД, только математика.
 func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFields {
 	ppu := input.PlanPromoUnits
 	cp := input.ContractPrice
@@ -296,114 +292,254 @@ func PromoDate(year, month int) string {
 	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 }
 
-// ToMap — преобразует CalculatedFields в map[string]interface{} для обратной
-// совместимости с текущими repository.InsertPromo / UpdatePromo.
-// TODO: удалить после полного перехода на типизированные структуры.
-func (c CalculatedFields) ToMap() map[string]interface{} {
-	return map[string]interface{}{
-		"year":                              c.Year,
-		"month":                             c.Month,
-		"quarter":                           c.Quarter,
-		"gm":                                c.GM,
-		"plan_promo_rub":                    c.PlanPromoRub,
-		"plan_promo_uplift_units":           c.PlanPromoUpliftUnits,
-		"plan_promo_uplift_rub":             c.PlanPromoUpliftRub,
-		"plan_promo_uplift_pct_units":       c.PlanPromoUpliftPctUnits,
-		"plan_promo_uplift_pct_rub":         c.PlanPromoUpliftPctRub,
-		"plan_investments_pct":              c.PlanInvestmentsPct,
-		"plan_roi":                          c.PlanROI,
-		"baseline_rub":                      c.BaselineRub,
-		"net_promo_uplift_rub":              c.NetPromoUpliftRub,
-		"net_promo_uplift_pct":              c.NetPromoUpliftPct,
-		"actual_investments_pct":            c.ActualInvestmentsPct,
-		"actual_roi":                        c.ActualROI,
-		"actual_promo_rub_wo_ecom":          c.ActualPromoRubWoEcom,
-		"actual_promo_uplift_units_wo_ecom": c.ActualPromoUpliftUnitsWoEcom,
-		"actual_promo_uplift_rub_wo_ecom":   c.ActualPromoUpliftRubWoEcom,
-		"net_promo_uplift_rub_wo_ecom":      c.NetPromoUpliftRubWoEcom,
-		"net_promo_uplift_pct_wo_ecom":      c.NetPromoUpliftPctWoEcom,
-		"actual_investments_pct_wo_ecom":    c.ActualInvestmentsPctWoEcom,
-		"actual_roi_wo_ecom":                c.ActualROIWoEcom,
-		"plan_vs_fact_rub":                  c.PlanVsFactRub,
-		"plan_vs_fact_investments":          c.PlanVsFactInvestments,
-		"turnover_per_point":                c.TurnoverPerPoint,
-		"turnover_per_point_promo":          c.TurnoverPerPointPromo,
-		"plan_promo_cip_olap":               c.PlanPromoCipOlap,
-		"fact_promo_cip_olap":               c.FactPromoCipOlap,
-		"plan_promo_uplift_cip_olap":        c.PlanPromoUpliftCipOlap,
-		"fact_promo_uplift_cip_olap":        c.FactPromoUpliftCipOlap,
-		"date":                              c.Date,
-		"olap_price":                        c.OlapPrice,
-	}
+// MergeCalculatedIntoDBRow — записывает вычисленные поля напрямую в структуру БД.
+func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
+	r.Year = c.Year
+	r.Month = c.Month
+	r.Quarter = c.Quarter
+	r.GM = c.GM
+	r.PlanPromoRub = c.PlanPromoRub
+	r.PlanPromoUpliftUnits = c.PlanPromoUpliftUnits
+	r.PlanPromoUpliftRub = c.PlanPromoUpliftRub
+	r.PlanPromoUpliftPctUnits = c.PlanPromoUpliftPctUnits
+	r.PlanPromoUpliftPctRub = c.PlanPromoUpliftPctRub
+	r.PlanInvestmentsPct = c.PlanInvestmentsPct
+	r.PlanROI = c.PlanROI
+	r.BaselineRub = c.BaselineRub
+	r.NetPromoUpliftRub = c.NetPromoUpliftRub
+	r.NetPromoUpliftPct = c.NetPromoUpliftPct
+	r.ActualInvestmentsPct = c.ActualInvestmentsPct
+	r.ActualROI = c.ActualROI
+	r.ActualPromoRubWoEcom = c.ActualPromoRubWoEcom
+	r.ActualPromoUpliftUnitsWoEcom = c.ActualPromoUpliftUnitsWoEcom
+	r.ActualPromoUpliftRubWoEcom = c.ActualPromoUpliftRubWoEcom
+	r.NetPromoUpliftRubWoEcom = c.NetPromoUpliftRubWoEcom
+	r.NetPromoUpliftPctWoEcom = c.NetPromoUpliftPctWoEcom
+	r.ActualInvestmentsPctWoEcom = c.ActualInvestmentsPctWoEcom
+	r.ActualROIWoEcom = c.ActualROIWoEcom
+	r.PlanVsFactRub = c.PlanVsFactRub
+	r.PlanVsFactInvestments = c.PlanVsFactInvestments
+	r.TurnoverPerPoint = c.TurnoverPerPoint
+	r.TurnoverPerPointPromo = c.TurnoverPerPointPromo
+	r.PlanPromoCipOlap = c.PlanPromoCipOlap
+	r.FactPromoCipOlap = c.FactPromoCipOlap
+	r.PlanPromoUpliftCipOlap = c.PlanPromoUpliftCipOlap
+	r.FactPromoUpliftCipOlap = c.FactPromoUpliftCipOlap
+	r.Date = c.Date
+	r.OlapPrice = c.OlapPrice
 }
 
-// MapToDTO — преобразует map[string]interface{} в PromoInputDTO.
-// Используется для обратной совместимости в SavePromo.
+// DTOToDBRow — создаёт PromoRowDB из DTO и вычисленных полей (для INSERT).
+func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
+	r := &models.PromoRowDB{
+		NetworkName:             dto.NetworkName,
+		KAM:                     dto.KAM,
+		Brand:                   dto.Brand,
+		BrandAS:                 dto.BrandAS,
+		SKU:                     dto.SKU,
+		Mechanics:               dto.Mechanics,
+		GTNOpex:                 dto.GTNOpex,
+		IDDirectum:              dto.IDDirectum,
+		DSNumber:                dto.DSNumber,
+		DiscountAmount:          dto.DiscountAmount,
+		Conditions:              dto.Conditions,
+		Comments:                dto.Comments,
+		EcomSegment:             dto.EcomSegment,
+		TotalPharmacies:         dto.TotalPharmacies,
+		PromoPharmacies:         dto.PromoPharmacies,
+		Status:                  dto.Status,
+		BaselineUnits:           dto.BaselineUnits,
+		PlanPromoUnits:          dto.PlanPromoUnits,
+		PlanInvestmentsRub:      dto.PlanInvestmentsRub,
+		ContractPrice:           dto.ContractPrice,
+		KeyRegion:               dto.KeyRegion,
+		Top20Segment:            dto.Top20Segment,
+		ActualPromoSalesUnits:   dto.ActualPromoSalesUnits,
+		ActualPromoRub:          dto.ActualPromoRub,
+		ActualInvestments:       dto.ActualInvestments,
+		ActualPromoUpliftUnits:  dto.ActualPromoUpliftUnits,
+		ActualPromoUpliftRub:    dto.ActualPromoUpliftRub,
+		ActualExternalEcomUnits: dto.ActualExternalEcomUnits,
+		ActualCorrectedBaseline: dto.ActualCorrectedBaseline,
+		Agreement1:              dto.Agreement1,
+		Agreement2:              dto.Agreement2,
+	}
+	MergeCalculatedIntoDBRow(r, c)
+	return r
+}
+
+// MapToDTO — парсит JSON (map[string]interface{}) в PromoInputDTO (для INSERT).
 func MapToDTO(input map[string]interface{}) PromoInputDTO {
 	return PromoInputDTO{
-		NetworkName:             safeString(input, "network_name"),
-		KAM:                     safeString(input, "kam"),
-		Brand:                   safeString(input, "brand"),
-		BrandAS:                 safeString(input, "brand_as"),
-		SKU:                     safeString(input, "sku"),
-		Year:                    safeInt(input, "year"),
-		Month:                   safeInt(input, "month"),
-		Quarter:                 safeInt(input, "quarter"),
-		Mechanics:               safeString(input, "mechanics"),
-		GTNOpex:                 safeString(input, "gtn_opex"),
-		IDDirectum:              safeString(input, "id_directum"),
-		DSNumber:                safeString(input, "ds_number"),
-		DiscountAmount:          safeFloat(input, "discount_amount"),
-		Conditions:              safeString(input, "conditions"),
-		Comments:                safeString(input, "comments"),
-		EcomSegment:             safeString(input, "ecom_segment"),
-		TotalPharmacies:         safeInt(input, "total_pharmacies"),
-		PromoPharmacies:         safeInt(input, "promo_pharmacies"),
-		Status:                  safeString(input, "status"),
-		Date:                    safeString(input, "date"),
-		BaselineUnits:           safeFloat(input, "baseline_units"),
-		BaselineRub:             safeFloat(input, "baseline_rub"),
-		PlanPromoUnits:          safeFloat(input, "plan_promo_units"),
-		PlanPromoRub:            safeFloat(input, "plan_promo_rub"),
-		PlanInvestmentsRub:      safeFloat(input, "plan_investments_rub"),
-		ContractPrice:           safeFloat(input, "contract_price"),
-		GM:                      safeFloat(input, "gm"),
-		KeyRegion:               safeString(input, "key_region"),
-		Top20Segment:            safeString(input, "top20_segment"),
-		OlapPrice:               safeFloat(input, "olap_price"),
-		ActualPromoSalesUnits:   safeFloat(input, "actual_promo_sales_units"),
-		ActualPromoRub:          safeFloat(input, "actual_promo_rub"),
-		ActualInvestments:       safeFloat(input, "actual_investments"),
-		ActualPromoUpliftUnits:  safeFloat(input, "actual_promo_uplift_units"),
-		ActualPromoUpliftRub:    safeFloat(input, "actual_promo_uplift_rub"),
-		ActualExternalEcomUnits: safeFloat(input, "actual_external_ecom_units"),
-		ActualCorrectedBaseline: safeFloat(input, "actual_corrected_baseline"),
-		Agreement1:              safeString(input, "agreement1"),
-		Agreement2:              safeString(input, "agreement2"),
+		NetworkName:             stringVal(input, "network_name"),
+		KAM:                     stringVal(input, "kam"),
+		Brand:                   stringVal(input, "brand"),
+		BrandAS:                 stringVal(input, "brand_as"),
+		SKU:                     stringVal(input, "sku"),
+		Year:                    intVal(input, "year"),
+		Month:                   intVal(input, "month"),
+		Quarter:                 intVal(input, "quarter"),
+		Mechanics:               stringVal(input, "mechanics"),
+		GTNOpex:                 stringVal(input, "gtn_opex"),
+		IDDirectum:              stringVal(input, "id_directum"),
+		DSNumber:                stringVal(input, "ds_number"),
+		DiscountAmount:          floatVal(input, "discount_amount"),
+		Conditions:              stringVal(input, "conditions"),
+		Comments:                stringVal(input, "comments"),
+		EcomSegment:             stringVal(input, "ecom_segment"),
+		TotalPharmacies:         intVal(input, "total_pharmacies"),
+		PromoPharmacies:         intVal(input, "promo_pharmacies"),
+		Status:                  stringVal(input, "status"),
+		Date:                    stringVal(input, "date"),
+		BaselineUnits:           floatVal(input, "baseline_units"),
+		BaselineRub:             floatVal(input, "baseline_rub"),
+		PlanPromoUnits:          floatVal(input, "plan_promo_units"),
+		PlanPromoRub:            floatVal(input, "plan_promo_rub"),
+		PlanInvestmentsRub:      floatVal(input, "plan_investments_rub"),
+		ContractPrice:           floatVal(input, "contract_price"),
+		GM:                      floatVal(input, "gm"),
+		KeyRegion:               stringVal(input, "key_region"),
+		Top20Segment:            stringVal(input, "top20_segment"),
+		OlapPrice:               floatVal(input, "olap_price"),
+		ActualPromoSalesUnits:   floatVal(input, "actual_promo_sales_units"),
+		ActualPromoRub:          floatVal(input, "actual_promo_rub"),
+		ActualInvestments:       floatVal(input, "actual_investments"),
+		ActualPromoUpliftUnits:  floatVal(input, "actual_promo_uplift_units"),
+		ActualPromoUpliftRub:    floatVal(input, "actual_promo_uplift_rub"),
+		ActualExternalEcomUnits: floatVal(input, "actual_external_ecom_units"),
+		ActualCorrectedBaseline: floatVal(input, "actual_corrected_baseline"),
+		Agreement1:              stringVal(input, "agreement1"),
+		Agreement2:              stringVal(input, "agreement2"),
 	}
 }
 
-// MergeCalculatedIntoMap — сливает CalculatedFields в существующий map.
-func MergeCalculatedIntoMap(m map[string]interface{}, c CalculatedFields) {
-	for k, v := range c.ToMap() {
-		m[k] = v
+// DBRowToDTO — конвертирует строку БД в DTO (для расчета вычисляемых полей при UPDATE).
+func DBRowToDTO(r *models.PromoRowDB) PromoInputDTO {
+	return PromoInputDTO{
+		NetworkName:             r.NetworkName,
+		KAM:                     r.KAM,
+		Brand:                   r.Brand,
+		BrandAS:                 r.BrandAS,
+		SKU:                     r.SKU,
+		Year:                    r.Year,
+		Month:                   r.Month,
+		Quarter:                 r.Quarter,
+		Mechanics:               r.Mechanics,
+		GTNOpex:                 r.GTNOpex,
+		IDDirectum:              r.IDDirectum,
+		DSNumber:                r.DSNumber,
+		DiscountAmount:          r.DiscountAmount,
+		Conditions:              r.Conditions,
+		Comments:                r.Comments,
+		EcomSegment:             r.EcomSegment,
+		TotalPharmacies:         r.TotalPharmacies,
+		PromoPharmacies:         r.PromoPharmacies,
+		Status:                  r.Status,
+		Date:                    r.Date,
+		BaselineUnits:           r.BaselineUnits,
+		BaselineRub:             r.BaselineRub,
+		PlanPromoUnits:          r.PlanPromoUnits,
+		PlanPromoRub:            r.PlanPromoRub,
+		PlanInvestmentsRub:      r.PlanInvestmentsRub,
+		ContractPrice:           r.ContractPrice,
+		GM:                      r.GM,
+		KeyRegion:               r.KeyRegion,
+		Top20Segment:            r.Top20Segment,
+		OlapPrice:               r.OlapPrice,
+		ActualPromoSalesUnits:   r.ActualPromoSalesUnits,
+		ActualPromoRub:          r.ActualPromoRub,
+		ActualInvestments:       r.ActualInvestments,
+		ActualPromoUpliftUnits:  r.ActualPromoUpliftUnits,
+		ActualPromoUpliftRub:    r.ActualPromoUpliftRub,
+		ActualExternalEcomUnits: r.ActualExternalEcomUnits,
+		ActualCorrectedBaseline: r.ActualCorrectedBaseline,
+		Agreement1:              r.Agreement1,
+		Agreement2:              r.Agreement2,
 	}
 }
 
-// ─── helpers (копия из promo_utils.go для независимости) ───
+// ─── helpers ────────────────────────────────────────────────────────────────
 
-func safeFloat(input map[string]interface{}, key string) float64 {
-	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
-	return val
+func floatVal(m map[string]interface{}, key string) float64 {
+	v, _ := strconv.ParseFloat(fmt.Sprint(m[key]), 64)
+	return v
+}
+func intVal(m map[string]interface{}, key string) int {
+	v, _ := strconv.Atoi(fmt.Sprint(m[key]))
+	return v
+}
+func stringVal(m map[string]interface{}, key string) string {
+	return fmt.Sprint(m[key])
 }
 
-func safeInt(input map[string]interface{}, key string) int {
-	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
-	return val
+// DBRowToMap — конвертирует PromoRowDB в map для JSON-ответа (обратная совместимость с фронтендом).
+func DBRowToMap(r *models.PromoRowDB) map[string]interface{} {
+	return map[string]interface{}{
+		"id":                                r.ID,
+		"network_name":                      r.NetworkName,
+		"kam":                               r.KAM,
+		"brand":                             r.Brand,
+		"brand_as":                          r.BrandAS,
+		"sku":                               r.SKU,
+		"year":                              r.Year,
+		"month":                             r.Month,
+		"quarter":                           r.Quarter,
+		"mechanics":                         r.Mechanics,
+		"gtn_opex":                          r.GTNOpex,
+		"baseline_units":                    r.BaselineUnits,
+		"baseline_rub":                      r.BaselineRub,
+		"plan_promo_units":                  r.PlanPromoUnits,
+		"plan_promo_rub":                    r.PlanPromoRub,
+		"plan_investments_rub":              r.PlanInvestmentsRub,
+		"plan_promo_uplift_units":           r.PlanPromoUpliftUnits,
+		"plan_promo_uplift_rub":             r.PlanPromoUpliftRub,
+		"plan_promo_uplift_pct_units":       r.PlanPromoUpliftPctUnits,
+		"plan_promo_uplift_pct_rub":         r.PlanPromoUpliftPctRub,
+		"plan_investments_pct":              r.PlanInvestmentsPct,
+		"plan_roi":                          r.PlanROI,
+		"contract_price":                    r.ContractPrice,
+		"gm":                                r.GM,
+		"id_directum":                       r.IDDirectum,
+		"ds_number":                         r.DSNumber,
+		"discount_amount":                   r.DiscountAmount,
+		"conditions":                        r.Conditions,
+		"comments":                          r.Comments,
+		"ecom_segment":                      r.EcomSegment,
+		"total_pharmacies":                  r.TotalPharmacies,
+		"promo_pharmacies":                  r.PromoPharmacies,
+		"status":                            r.Status,
+		"date":                              r.Date,
+		"key_region":                        r.KeyRegion,
+		"top20_segment":                     r.Top20Segment,
+		"olap_price":                        r.OlapPrice,
+		"plan_promo_cip_olap":               r.PlanPromoCipOlap,
+		"fact_promo_cip_olap":               r.FactPromoCipOlap,
+		"plan_promo_uplift_cip_olap":        r.PlanPromoUpliftCipOlap,
+		"fact_promo_uplift_cip_olap":        r.FactPromoUpliftCipOlap,
+		"actual_promo_sales_units":          r.ActualPromoSalesUnits,
+		"actual_investments":                r.ActualInvestments,
+		"actual_promo_rub":                  r.ActualPromoRub,
+		"actual_promo_uplift_units":         r.ActualPromoUpliftUnits,
+		"actual_promo_uplift_rub":           r.ActualPromoUpliftRub,
+		"actual_external_ecom_units":        r.ActualExternalEcomUnits,
+		"actual_corrected_baseline":         r.ActualCorrectedBaseline,
+		"agreement1":                        r.Agreement1,
+		"agreement2":                        r.Agreement2,
+		"net_promo_uplift_rub":              r.NetPromoUpliftRub,
+		"net_promo_uplift_pct":              r.NetPromoUpliftPct,
+		"actual_investments_pct":            r.ActualInvestmentsPct,
+		"actual_roi":                        r.ActualROI,
+		"actual_promo_rub_wo_ecom":          r.ActualPromoRubWoEcom,
+		"actual_promo_uplift_units_wo_ecom": r.ActualPromoUpliftUnitsWoEcom,
+		"actual_promo_uplift_rub_wo_ecom":   r.ActualPromoUpliftRubWoEcom,
+		"net_promo_uplift_rub_wo_ecom":      r.NetPromoUpliftRubWoEcom,
+		"net_promo_uplift_pct_wo_ecom":      r.NetPromoUpliftPctWoEcom,
+		"actual_investments_pct_wo_ecom":    r.ActualInvestmentsPctWoEcom,
+		"actual_roi_wo_ecom":                r.ActualROIWoEcom,
+		"plan_vs_fact_rub":                  r.PlanVsFactRub,
+		"plan_vs_fact_investments":          r.PlanVsFactInvestments,
+		"turnover_per_point":                r.TurnoverPerPoint,
+		"turnover_per_point_promo":          r.TurnoverPerPointPromo,
+		"updated_at":                        r.UpdatedAt,
+	}
 }
-
-func safeString(input map[string]interface{}, key string) string {
-	return fmt.Sprint(input[key])
-}
-
-// Выше нужны импорты "fmt" и "strconv", оставлены намеренно.

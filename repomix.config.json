@@ -28,7 +28,17 @@
             "repomix-output.*",
             "project_code.md",
             "repomix.config.json",
-            "**/*.svg"
+            "**/*.svg",
+            "**.*.png",
+            "**/*.jpg",
+            "**/*.jpeg",
+            "**/*.gif",
+            "**/*.ico",
+            "**/*.webp",
+            "**/*.woff",
+            "**/*.woff2",
+            "**/*.ttf",
+            "**/*.eot"
         ]
     }
 }

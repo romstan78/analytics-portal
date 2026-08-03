@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"backend/config"
@@ -50,11 +51,11 @@ func Login(c *gin.Context) {
 	c.SetCookie(
 		"refresh_token",
 		refreshToken,
-		int(7*24*time.Hour.Seconds()), // 7 дней
-		"/api/auth",                   // доступен только для /api/auth/*
-		"",                            // domain (текущий)
-		false,                         // secure (false для localhost)
-		true,                          // httpOnly
+		int(7*24*time.Hour.Seconds()),    // 7 дней
+		"/api/auth",                      // доступен только для /api/auth/*
+		"",                               // domain (текущий)
+		os.Getenv("ENV") == "production", // secure (true только на проде)
+		true,                             // httpOnly
 	)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -96,7 +97,7 @@ func RefreshToken(c *gin.Context) {
 		int(7*24*time.Hour.Seconds()),
 		"/api/auth",
 		"",
-		false,
+		os.Getenv("ENV") == "production",
 		true,
 	)
 

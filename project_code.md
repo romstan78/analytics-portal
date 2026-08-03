@@ -28,7 +28,7 @@ The content is organized as follows:
 ## Notes
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: node_modules/**, dist/**, build/**, .venv/**, __pycache__/**, vendor/**, **/*.md, upload/**, sync_script/**, **/*.xlsx, **/*.docx, **/*.csv, .clinerules, .clineignore, .gitignore, .env*, **/*.lock, **/package-lock.json, repomix-output.*, project_code.md, repomix.config.json, **/*.svg
+- Files matching these patterns are excluded: node_modules/**, dist/**, build/**, .venv/**, __pycache__/**, vendor/**, **/*.md, upload/**, sync_script/**, **/*.xlsx, **/*.docx, **/*.csv, .clinerules, .clineignore, .gitignore, .env*, **/*.lock, **/package-lock.json, repomix-output.*, project_code.md, repomix.config.json, **/*.svg, **.*.png, **/*.jpg, **/*.jpeg, **/*.gif, **/*.ico, **/*.webp, **/*.woff, **/*.woff2, **/*.ttf, **/*.eot
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -36,6 +36,8 @@ The content is organized as follows:
 # Directory Structure
 ```
 backend/
+  cmd/
+    hash_password.go
   config/
     auth.go
     db.go
@@ -46,12 +48,18 @@ backend/
     sales.go
   middleware/
     auth.go
+  migrations/
+    001_create_tbl_users.sql
+    002_split_agreement_fields.sql
+    seed_users.sql
   models/
     types.go
   repository/
     promo_repo.go
+    user_repo.go
+  services/
+    promo_service.go
   .env.example
-  backend
   go.mod
   main_test.go
   main.go
@@ -80,6 +88,8 @@ frontend/
       PromoAnalysis.jsx
       PromoApproval.jsx
       PromoForm.jsx
+    types/
+      promo.ts
     App.css
     App.jsx
     index.css
@@ -93,6 +103,43 @@ docker-compose.yml
 ```
 
 # Files
+
+## File: backend/cmd/hash_password.go
+```go
+//go:build ignore
+// +build ignore
+
+// Утилита для генерации bcrypt-хеша из пароля.
+// Использование:
+//   go run cmd/hash_password.go ваш_пароль
+//
+// Выводит bcrypt-хеш (cost=10), который можно вставить в tbl_Users.password_hash.
+
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Использование: go run cmd/hash_password.go <пароль>")
+		os.Exit(1)
+	}
+
+	password := os.Args[1]
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(string(hash))
+}
+```
 
 ## File: backend/config/db.go
 ```go
@@ -159,212 +206,6 @@ func Init() {
 }
 ```
 
-## File: backend/handlers/promo_utils.go
-```go
-package handlers
-
-import (
-	"database/sql"
-	"fmt"
-	"math"
-	"strconv"
-	"time"
-
-	"backend/config"
-)
-
-func safeFloat(input map[string]interface{}, key string) float64 {
-	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
-	return val
-}
-
-func safeInt(input map[string]interface{}, key string) int {
-	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
-	return val
-}
-
-func safeString(input map[string]interface{}, key string) string {
-	return fmt.Sprint(input[key])
-}
-
-func calculatePromoFields(input map[string]interface{}) {
-	ppu := safeFloat(input, "plan_promo_units")
-	cp := safeFloat(input, "contract_price")
-	bu := safeFloat(input, "baseline_units")
-	pir := safeFloat(input, "plan_investments_rub")
-	month := safeInt(input, "month")
-	year := safeInt(input, "year")
-	if year == 0 {
-		year = time.Now().Year()
-	}
-	if month == 0 {
-		month = int(time.Now().Month())
-	}
-
-	gm := safeFloat(input, "gm")
-	if gm == 0 {
-		sku := safeString(input, "sku")
-		var dbGM sql.NullFloat64
-		config.DB.QueryRow(
-			"SELECT TOP 1 gm FROM dbo.tbl_PromoActivities WHERE sku = ? AND gm IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
-			sku,
-		).Scan(&dbGM)
-		if dbGM.Valid {
-			gm = dbGM.Float64
-		} else {
-			gm = 1
-		}
-	}
-
-	sku := safeString(input, "sku")
-	networkName := safeString(input, "network_name")
-
-	if safeString(input, "key_region") == "" || safeString(input, "top20_segment") == "" {
-		var kr, t20 sql.NullString
-		config.DB.QueryRow(
-			"SELECT key_region, top20_segment FROM dbo.tbl_NetworkGeoMapping WHERE network_name = ?",
-			networkName,
-		).Scan(&kr, &t20)
-		if kr.Valid && safeString(input, "key_region") == "" {
-			input["key_region"] = kr.String
-		}
-		if t20.Valid && safeString(input, "top20_segment") == "" {
-			input["top20_segment"] = t20.String
-		}
-	}
-
-	var olapPrice sql.NullFloat64
-	config.DB.QueryRow(
-		"SELECT TOP 1 olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND olap_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
-		sku,
-	).Scan(&olapPrice)
-	olap := 0.0
-	if olapPrice.Valid {
-		olap = olapPrice.Float64
-	}
-
-	quarter := int(math.Ceil(float64(month) / 3))
-	plan_promo_rub := ppu * cp
-	plan_promo_uplift_units := ppu - bu
-	plan_promo_uplift_rub := plan_promo_uplift_units * cp
-
-	plan_promo_uplift_pct_units := 0.0
-	if ppu > 0 {
-		plan_promo_uplift_pct_units = (plan_promo_uplift_units / ppu) * 100
-	}
-	plan_promo_uplift_pct_rub := 0.0
-	if plan_promo_rub > 0 {
-		plan_promo_uplift_pct_rub = (plan_promo_uplift_rub / plan_promo_rub) * 100
-	}
-	plan_investments_pct := 0.0
-	if plan_promo_rub > 0 {
-		plan_investments_pct = (pir / plan_promo_rub) * 100
-	}
-	plan_roi := 0.0
-	if pir > 0 {
-		plan_roi = (plan_promo_uplift_rub/pir)*gm*100 - 100
-	}
-	baseline_rub := bu * cp
-
-	afu := safeFloat(input, "actual_promo_sales_units")
-	afr := safeFloat(input, "actual_promo_rub")
-	afi := safeFloat(input, "actual_investments")
-	afupl := safeFloat(input, "actual_promo_uplift_units")
-	afupr := safeFloat(input, "actual_promo_uplift_rub")
-	afeu := safeFloat(input, "actual_external_ecom_units")
-	acb := safeFloat(input, "actual_corrected_baseline")
-	ph := safeFloat(input, "promo_pharmacies")
-	if ph == 0 {
-		ph = 1
-	}
-
-	net_promo_uplift_rub := afupr * gm
-	net_promo_uplift_pct := 0.0
-	if afr > 0 {
-		net_promo_uplift_pct = (net_promo_uplift_rub / afr) * 100
-	}
-	actual_investments_pct := 0.0
-	if afr > 0 {
-		actual_investments_pct = (afi / afr) * 100
-	}
-	actual_roi := 0.0
-	if afi > 0 {
-		actual_roi = (afupr/afi)*gm*100 - 100
-	}
-
-	actual_promo_rub_wo_ecom := afr - (afeu * cp)
-	actual_promo_uplift_units_wo_ecom := afupl - afeu
-	actual_promo_uplift_rub_wo_ecom := actual_promo_uplift_units_wo_ecom * cp
-	net_promo_uplift_rub_wo_ecom := actual_promo_uplift_rub_wo_ecom * gm
-	net_promo_uplift_pct_wo_ecom := 0.0
-	if actual_promo_rub_wo_ecom > 0 {
-		net_promo_uplift_pct_wo_ecom = (net_promo_uplift_rub_wo_ecom / actual_promo_rub_wo_ecom) * 100
-	}
-	actual_investments_pct_wo_ecom := 0.0
-	if actual_promo_rub_wo_ecom > 0 {
-		actual_investments_pct_wo_ecom = (afi / actual_promo_rub_wo_ecom) * 100
-	}
-	actual_roi_wo_ecom := 0.0
-	if afi > 0 {
-		actual_roi_wo_ecom = (actual_promo_uplift_rub_wo_ecom/afi)*gm*100 - 100
-	}
-
-	plan_vs_fact_rub := 0.0
-	if plan_promo_rub > 0 {
-		plan_vs_fact_rub = (afr / plan_promo_rub) * 100
-	}
-	plan_vs_fact_investments := 0.0
-	if pir > 0 {
-		plan_vs_fact_investments = (afi / pir) * 100
-	}
-
-	turnover_per_point := acb / ph
-	turnover_per_point_promo := afu / ph
-	plan_promo_cip_olap := ppu * olap
-	fact_promo_cip_olap := afu * olap
-	plan_promo_uplift_cip_olap := plan_promo_uplift_units * olap
-	fact_promo_uplift_cip_olap := afupl * olap
-	promoDate := fmt.Sprintf("%d-%02d-01", year, month)
-
-	input["year"] = year
-	input["month"] = month
-	input["quarter"] = quarter
-	input["gm"] = gm
-	input["plan_promo_rub"] = plan_promo_rub
-	input["plan_promo_uplift_units"] = plan_promo_uplift_units
-	input["plan_promo_uplift_rub"] = plan_promo_uplift_rub
-	input["plan_promo_uplift_pct_units"] = plan_promo_uplift_pct_units
-	input["plan_promo_uplift_pct_rub"] = plan_promo_uplift_pct_rub
-	input["plan_investments_pct"] = plan_investments_pct
-	input["plan_roi"] = plan_roi
-	input["baseline_rub"] = baseline_rub
-	input["actual_promo_rub"] = afr
-	input["actual_promo_uplift_units"] = afupl
-	input["actual_promo_uplift_rub"] = afupr
-	input["actual_roi"] = actual_roi
-	input["net_promo_uplift_rub"] = net_promo_uplift_rub
-	input["net_promo_uplift_pct"] = net_promo_uplift_pct
-	input["actual_investments_pct"] = actual_investments_pct
-	input["actual_promo_rub_wo_ecom"] = actual_promo_rub_wo_ecom
-	input["actual_promo_uplift_units_wo_ecom"] = actual_promo_uplift_units_wo_ecom
-	input["actual_promo_uplift_rub_wo_ecom"] = actual_promo_uplift_rub_wo_ecom
-	input["net_promo_uplift_rub_wo_ecom"] = net_promo_uplift_rub_wo_ecom
-	input["net_promo_uplift_pct_wo_ecom"] = net_promo_uplift_pct_wo_ecom
-	input["actual_investments_pct_wo_ecom"] = actual_investments_pct_wo_ecom
-	input["actual_roi_wo_ecom"] = actual_roi_wo_ecom
-	input["plan_vs_fact_rub"] = plan_vs_fact_rub
-	input["plan_vs_fact_investments"] = plan_vs_fact_investments
-	input["turnover_per_point"] = turnover_per_point
-	input["turnover_per_point_promo"] = turnover_per_point_promo
-	input["plan_promo_cip_olap"] = plan_promo_cip_olap
-	input["fact_promo_cip_olap"] = fact_promo_cip_olap
-	input["plan_promo_uplift_cip_olap"] = plan_promo_uplift_cip_olap
-	input["fact_promo_uplift_cip_olap"] = fact_promo_uplift_cip_olap
-	input["date"] = promoDate
-	input["olap_price"] = olap
-}
-```
-
 ## File: backend/middleware/auth.go
 ```go
 package middleware
@@ -420,6 +261,1495 @@ func RoleRequired(roles ...string) gin.HandlerFunc {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ запрещён"})
 		c.Abort()
 	}
+}
+```
+
+## File: backend/migrations/001_create_tbl_users.sql
+```sql
+-- Migration: создание tbl_Users и перенос хардкод-пользователей
+-- Запустить вручную на БД.
+
+IF OBJECT_ID('dbo.tbl_Users', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.tbl_Users (
+        id          INT IDENTITY PRIMARY KEY,
+        username    NVARCHAR(100) NOT NULL UNIQUE,
+        password_hash NVARCHAR(255) NOT NULL,
+        role        NVARCHAR(50) NOT NULL DEFAULT 'agreement1',
+        created_at  DATETIME DEFAULT GETDATE(),
+        updated_at  DATETIME DEFAULT GETDATE(),
+        deleted_at  DATETIME NULL
+    );
+END
+GO
+
+-- Seed: создаём тестовых пользователей (если ещё нет).
+-- Пароли захешированы bcrypt (cost=10):
+--   manager1 / promo2024!   → $2a$10$... (сгенерируйте реальный хеш)
+--   manager2 / promo2024!   → $2a$10$...
+--   admin    / admin2024!   → $2a$10$...
+
+-- Используйте Go-скрипт для генерации хешей:
+--   go run backend/cmd/hash_password.go promo2024!
+-- Ниже — пример c заранее сгенерированными хешами (замените на свои).
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'manager1' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('manager1', '$2a$10$De13I4p4Zrp5LkmtzfgnXOH1RyMUI9rASk.VHJNDcrd/neBQQotk2', 'agreement1');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'manager2' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('manager2', '$2a$10$De13I4p4Zrp5LkmtzfgnXOH1RyMUI9rASk.VHJNDcrd/neBQQotk2', 'agreement2');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'admin' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('admin', '$2a$10$jyr5S3OrcUK5UmgUwsnDCeUjhEHdcQji7tO.L.y0oAncVBA/YTzFO', 'admin');
+```
+
+## File: backend/migrations/002_split_agreement_fields.sql
+```sql
+-- Migration: разделение agreement1/agreement2 на status + comment
+-- Заменить CHARINDEX-парсинг на нормальные колонки.
+
+-- Добавляем новые колонки (если ещё не добавлены)
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement1_status') IS NULL
+    ALTER TABLE dbo.tbl_PromoActivities ADD agreement1_status NVARCHAR(20) NULL;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement1_comment') IS NULL
+    ALTER TABLE dbo.tbl_PromoActivities ADD agreement1_comment NVARCHAR(MAX) NULL;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_status') IS NULL
+    ALTER TABLE dbo.tbl_PromoActivities ADD agreement2_status NVARCHAR(20) NULL;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_comment') IS NULL
+    ALTER TABLE dbo.tbl_PromoActivities ADD agreement2_comment NVARCHAR(MAX) NULL;
+GO
+
+-- Миграция существующих данных: парсим старые текстовые поля
+-- approved: начинается с "согласовано"
+UPDATE dbo.tbl_PromoActivities
+SET agreement1_status = 'approved',
+    agreement1_comment = CASE WHEN agreement1 LIKE N'согласовано: %'
+      THEN SUBSTRING(agreement1, CHARINDEX(N':', agreement1) + 2, LEN(agreement1))
+      ELSE NULL END
+WHERE agreement1 IS NOT NULL
+  AND CHARINDEX(N'согласовано', agreement1) = 1
+  AND agreement1_status IS NULL;
+
+-- rejected: начинается с "отклонено"
+UPDATE dbo.tbl_PromoActivities
+SET agreement1_status = 'rejected',
+    agreement1_comment = CASE WHEN agreement1 LIKE N'отклонено: %'
+      THEN SUBSTRING(agreement1, CHARINDEX(N':', agreement1) + 2, LEN(agreement1))
+      ELSE NULL END
+WHERE agreement1 IS NOT NULL
+  AND CHARINDEX(N'отклонено', agreement1) = 1
+  AND agreement1_status IS NULL;
+
+-- commented: всё остальное не-NULL
+UPDATE dbo.tbl_PromoActivities
+SET agreement1_status = 'commented',
+    agreement1_comment = agreement1
+WHERE agreement1 IS NOT NULL
+  AND agreement1_status IS NULL;
+
+-- То же для agreement2
+UPDATE dbo.tbl_PromoActivities
+SET agreement2_status = 'approved',
+    agreement2_comment = CASE WHEN agreement2 LIKE N'согласовано: %'
+      THEN SUBSTRING(agreement2, CHARINDEX(N':', agreement2) + 2, LEN(agreement2))
+      ELSE NULL END
+WHERE agreement2 IS NOT NULL
+  AND CHARINDEX(N'согласовано', agreement2) = 1
+  AND agreement2_status IS NULL;
+
+UPDATE dbo.tbl_PromoActivities
+SET agreement2_status = 'rejected',
+    agreement2_comment = CASE WHEN agreement2 LIKE N'отклонено: %'
+      THEN SUBSTRING(agreement2, CHARINDEX(N':', agreement2) + 2, LEN(agreement2))
+      ELSE NULL END
+WHERE agreement2 IS NOT NULL
+  AND CHARINDEX(N'отклонено', agreement2) = 1
+  AND agreement2_status IS NULL;
+
+UPDATE dbo.tbl_PromoActivities
+SET agreement2_status = 'commented',
+    agreement2_comment = agreement2
+WHERE agreement2 IS NOT NULL
+  AND agreement2_status IS NULL;
+
+-- После миграции старые колонки можно оставить для обратной совместимости,
+-- но бэкенд должен писать в новые поля.
+```
+
+## File: backend/migrations/seed_users.sql
+```sql
+-- Seed: пользователи с реальными bcrypt-хешами (cost=10)
+-- Пароли: manager1/promo2024!, manager2/promo2024!, admin/admin2024!
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'manager1' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('manager1', '$2a$10$De13I4p4Zrp5LkmtzfgnXOH1RyMUI9rASk.VHJNDcrd/neBQQotk2', 'agreement1');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'manager2' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('manager2', '$2a$10$De13I4p4Zrp5LkmtzfgnXOH1RyMUI9rASk.VHJNDcrd/neBQQotk2', 'agreement2');
+
+IF NOT EXISTS (SELECT 1 FROM dbo.tbl_Users WHERE username = 'admin' AND deleted_at IS NULL)
+    INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES ('admin', '$2a$10$jyr5S3OrcUK5UmgUwsnDCeUjhEHdcQji7tO.L.y0oAncVBA/YTzFO', 'admin');
+```
+
+## File: backend/repository/user_repo.go
+```go
+package repository
+
+import (
+	"backend/config"
+)
+
+// UserRecord — запись из tbl_Users.
+type UserRecord struct {
+	ID           int    `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"-"`
+	Role         string `json:"role"`
+}
+
+// GetUserByUsername возвращает пользователя из БД по логину.
+// Если пользователь не найден, возвращает nil, nil.
+func GetUserByUsername(username string) (*UserRecord, error) {
+	var u UserRecord
+	err := config.DB.QueryRow(
+		"SELECT id, username, password_hash, role FROM dbo.tbl_Users WHERE username = ? AND deleted_at IS NULL",
+		username,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
+	if err != nil {
+		// sql.ErrNoRows — не ошибка, просто пользователь не найден
+		return nil, nil
+	}
+	return &u, nil
+}
+```
+
+## File: backend/services/promo_service.go
+```go
+package services
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"time"
+
+	"backend/repository"
+)
+
+// PromoInputDTO — типизированная структура для входных данных промо-акции.
+// Заменяет map[string]interface{} в SavePromo и calculatePromoFields.
+type PromoInputDTO struct {
+	// Основные поля
+	NetworkName     string  `json:"network_name"`
+	KAM             string  `json:"kam"`
+	Brand           string  `json:"brand"`
+	BrandAS         string  `json:"brand_as"`
+	SKU             string  `json:"sku"`
+	Year            int     `json:"year"`
+	Month           int     `json:"month"`
+	Quarter         int     `json:"quarter"`
+	Mechanics       string  `json:"mechanics"`
+	GTNOpex         string  `json:"gtn_opex"`
+	IDDirectum      string  `json:"id_directum"`
+	DSNumber        string  `json:"ds_number"`
+	DiscountAmount  float64 `json:"discount_amount"`
+	Conditions      string  `json:"conditions"`
+	Comments        string  `json:"comments"`
+	EcomSegment     string  `json:"ecom_segment"`
+	TotalPharmacies int     `json:"total_pharmacies"`
+	PromoPharmacies int     `json:"promo_pharmacies"`
+	Status          string  `json:"status"`
+	Date            string  `json:"date"`
+
+	// Плановые показатели
+	BaselineUnits      float64 `json:"baseline_units"`
+	BaselineRub        float64 `json:"baseline_rub"`
+	PlanPromoUnits     float64 `json:"plan_promo_units"`
+	PlanPromoRub       float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub float64 `json:"plan_investments_rub"`
+	ContractPrice      float64 `json:"contract_price"`
+	GM                 float64 `json:"gm"`
+
+	// Ключевой регион и сегмент (из Geo-маппинга, если не заданы)
+	KeyRegion    string `json:"key_region"`
+	Top20Segment string `json:"top20_segment"`
+
+	// OLAP цена
+	OlapPrice float64 `json:"olap_price"`
+
+	// Фактические показатели
+	ActualPromoSalesUnits   float64 `json:"actual_promo_sales_units"`
+	ActualPromoRub          float64 `json:"actual_promo_rub"`
+	ActualInvestments       float64 `json:"actual_investments"`
+	ActualPromoUpliftUnits  float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub    float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline float64 `json:"actual_corrected_baseline"`
+	Agreement1              string  `json:"agreement1"`
+	Agreement2              string  `json:"agreement2"`
+}
+
+// CalculatedFields — результат вычислений.
+type CalculatedFields struct {
+	Year                         int     `json:"year"`
+	Month                        int     `json:"month"`
+	Quarter                      int     `json:"quarter"`
+	GM                           float64 `json:"gm"`
+	PlanPromoRub                 float64 `json:"plan_promo_rub"`
+	PlanPromoUpliftUnits         float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub           float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits      float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub        float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct           float64 `json:"plan_investments_pct"`
+	PlanROI                      float64 `json:"plan_roi"`
+	BaselineRub                  float64 `json:"baseline_rub"`
+	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
+	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
+	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
+	ActualROI                    float64 `json:"actual_roi"`
+	ActualPromoRubWoEcom         float64 `json:"actual_promo_rub_wo_ecom"`
+	ActualPromoUpliftUnitsWoEcom float64 `json:"actual_promo_uplift_units_wo_ecom"`
+	ActualPromoUpliftRubWoEcom   float64 `json:"actual_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftRubWoEcom      float64 `json:"net_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftPctWoEcom      float64 `json:"net_promo_uplift_pct_wo_ecom"`
+	ActualInvestmentsPctWoEcom   float64 `json:"actual_investments_pct_wo_ecom"`
+	ActualROIWoEcom              float64 `json:"actual_roi_wo_ecom"`
+	PlanVsFactRub                float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments        float64 `json:"plan_vs_fact_investments"`
+	TurnoverPerPoint             float64 `json:"turnover_per_point"`
+	TurnoverPerPointPromo        float64 `json:"turnover_per_point_promo"`
+	PlanPromoCipOlap             float64 `json:"plan_promo_cip_olap"`
+	FactPromoCipOlap             float64 `json:"fact_promo_cip_olap"`
+	PlanPromoUpliftCipOlap       float64 `json:"plan_promo_uplift_cip_olap"`
+	FactPromoUpliftCipOlap       float64 `json:"fact_promo_uplift_cip_olap"`
+	Date                         string  `json:"date"`
+	OlapPrice                    float64 `json:"olap_price"`
+}
+
+// CalculationContext — контекст с данными, полученными от репозитория,
+// которые нужны для расчета, но не пришли от клиента.
+type CalculationContext struct {
+	GM           float64
+	KeyRegion    string
+	Top20Segment string
+	OlapPrice    float64
+}
+
+// EnrichFromRepo — заполняет недостающие данные из БД через репозиторий.
+// Раньше это делалось прямыми SQL-запросами в calculatePromoFields.
+func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
+	ctx := CalculationContext{}
+
+	// GM: если не задан — ищем последнюю запись по SKU
+	if input.GM == 0 {
+		lastData, err := repository.GetLastSKUData(input.SKU)
+		if err == nil && lastData != nil && lastData.GM != 0 {
+			ctx.GM = lastData.GM
+		} else {
+			ctx.GM = 1 // fallback по умолчанию
+		}
+	} else {
+		ctx.GM = input.GM
+	}
+
+	// KeyRegion / Top20Segment: если не заданы — ищем из Geo-маппинга
+	if input.KeyRegion == "" || input.Top20Segment == "" {
+		geo, err := repository.GetNetworkGeoMapping(input.NetworkName)
+		if err == nil && geo != nil {
+			if input.KeyRegion == "" && geo.KeyRegion != "" {
+				input.KeyRegion = geo.KeyRegion
+			}
+			if input.Top20Segment == "" && geo.Top20Segment != "" {
+				input.Top20Segment = geo.Top20Segment
+			}
+		}
+	}
+	ctx.KeyRegion = input.KeyRegion
+	ctx.Top20Segment = input.Top20Segment
+
+	// OLAP price
+	if input.OlapPrice == 0 {
+		lastData, err := repository.GetLastSKUData(input.SKU)
+		if err == nil && lastData != nil && lastData.OlapPrice != 0 {
+			ctx.OlapPrice = lastData.OlapPrice
+		}
+	} else {
+		ctx.OlapPrice = input.OlapPrice
+	}
+
+	return ctx
+}
+
+// CalculateFields — чистая функция расчета всех вычисляемых полей.
+// Не делает запросов в БД, только математика.
+func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFields {
+	ppu := input.PlanPromoUnits
+	cp := input.ContractPrice
+	bu := input.BaselineUnits
+	pir := input.PlanInvestmentsRub
+	month := input.Month
+	year := input.Year
+	if year == 0 {
+		year = time.Now().Year()
+	}
+	if month == 0 {
+		month = int(time.Now().Month())
+	}
+
+	gm := ctx.GM
+	olap := ctx.OlapPrice
+
+	quarter := int(math.Ceil(float64(month) / 3))
+	planPromoRub := ppu * cp
+	planPromoUpliftUnits := ppu - bu
+	planPromoUpliftRub := planPromoUpliftUnits * cp
+
+	planPromoUpliftPctUnits := 0.0
+	if ppu > 0 {
+		planPromoUpliftPctUnits = (planPromoUpliftUnits / ppu) * 100
+	}
+	planPromoUpliftPctRub := 0.0
+	if planPromoRub > 0 {
+		planPromoUpliftPctRub = (planPromoUpliftRub / planPromoRub) * 100
+	}
+	planInvestmentsPct := 0.0
+	if planPromoRub > 0 {
+		planInvestmentsPct = (pir / planPromoRub) * 100
+	}
+	planROI := 0.0
+	if pir > 0 {
+		planROI = (planPromoUpliftRub/pir)*gm*100 - 100
+	}
+	baselineRub := bu * cp
+
+	afu := input.ActualPromoSalesUnits
+	afr := input.ActualPromoRub
+	afi := input.ActualInvestments
+	afupl := input.ActualPromoUpliftUnits
+	afupr := input.ActualPromoUpliftRub
+	afeu := input.ActualExternalEcomUnits
+	acb := input.ActualCorrectedBaseline
+	ph := float64(input.PromoPharmacies)
+	if ph == 0 {
+		ph = 1
+	}
+
+	netPromoUpliftRub := afupr * gm
+	netPromoUpliftPct := 0.0
+	if afr > 0 {
+		netPromoUpliftPct = (netPromoUpliftRub / afr) * 100
+	}
+	actualInvestmentsPct := 0.0
+	if afr > 0 {
+		actualInvestmentsPct = (afi / afr) * 100
+	}
+	actualROI := 0.0
+	if afi > 0 {
+		actualROI = (afupr/afi)*gm*100 - 100
+	}
+
+	actualPromoRubWoEcom := afr - (afeu * cp)
+	actualPromoUpliftUnitsWoEcom := afupl - afeu
+	actualPromoUpliftRubWoEcom := actualPromoUpliftUnitsWoEcom * cp
+	netPromoUpliftRubWoEcom := actualPromoUpliftRubWoEcom * gm
+	netPromoUpliftPctWoEcom := 0.0
+	if actualPromoRubWoEcom > 0 {
+		netPromoUpliftPctWoEcom = (netPromoUpliftRubWoEcom / actualPromoRubWoEcom) * 100
+	}
+	actualInvestmentsPctWoEcom := 0.0
+	if actualPromoRubWoEcom > 0 {
+		actualInvestmentsPctWoEcom = (afi / actualPromoRubWoEcom) * 100
+	}
+	actualROIWoEcom := 0.0
+	if afi > 0 {
+		actualROIWoEcom = (actualPromoUpliftRubWoEcom/afi)*gm*100 - 100
+	}
+
+	planVsFactRub := 0.0
+	if planPromoRub > 0 {
+		planVsFactRub = (afr / planPromoRub) * 100
+	}
+	planVsFactInvestments := 0.0
+	if pir > 0 {
+		planVsFactInvestments = (afi / pir) * 100
+	}
+
+	turnoverPerPoint := acb / ph
+	turnoverPerPointPromo := afu / ph
+	planPromoCipOlap := ppu * olap
+	factPromoCipOlap := afu * olap
+	planPromoUpliftCipOlap := planPromoUpliftUnits * olap
+	factPromoUpliftCipOlap := afupl * olap
+
+	return CalculatedFields{
+		Year:                         year,
+		Month:                        month,
+		Quarter:                      quarter,
+		GM:                           gm,
+		PlanPromoRub:                 planPromoRub,
+		PlanPromoUpliftUnits:         planPromoUpliftUnits,
+		PlanPromoUpliftRub:           planPromoUpliftRub,
+		PlanPromoUpliftPctUnits:      planPromoUpliftPctUnits,
+		PlanPromoUpliftPctRub:        planPromoUpliftPctRub,
+		PlanInvestmentsPct:           planInvestmentsPct,
+		PlanROI:                      planROI,
+		BaselineRub:                  baselineRub,
+		NetPromoUpliftRub:            netPromoUpliftRub,
+		NetPromoUpliftPct:            netPromoUpliftPct,
+		ActualInvestmentsPct:         actualInvestmentsPct,
+		ActualROI:                    actualROI,
+		ActualPromoRubWoEcom:         actualPromoRubWoEcom,
+		ActualPromoUpliftUnitsWoEcom: actualPromoUpliftUnitsWoEcom,
+		ActualPromoUpliftRubWoEcom:   actualPromoUpliftRubWoEcom,
+		NetPromoUpliftRubWoEcom:      netPromoUpliftRubWoEcom,
+		NetPromoUpliftPctWoEcom:      netPromoUpliftPctWoEcom,
+		ActualInvestmentsPctWoEcom:   actualInvestmentsPctWoEcom,
+		ActualROIWoEcom:              actualROIWoEcom,
+		PlanVsFactRub:                planVsFactRub,
+		PlanVsFactInvestments:        planVsFactInvestments,
+		TurnoverPerPoint:             turnoverPerPoint,
+		TurnoverPerPointPromo:        turnoverPerPointPromo,
+		PlanPromoCipOlap:             planPromoCipOlap,
+		FactPromoCipOlap:             factPromoCipOlap,
+		PlanPromoUpliftCipOlap:       planPromoUpliftCipOlap,
+		FactPromoUpliftCipOlap:       factPromoUpliftCipOlap,
+		Date:                         PromoDate(year, month),
+		OlapPrice:                    olap,
+	}
+}
+
+// PromoDate — форматирует год и месяц в строку "YYYY-MM-01".
+func PromoDate(year, month int) string {
+	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+}
+
+// ToMap — преобразует CalculatedFields в map[string]interface{} для обратной
+// совместимости с текущими repository.InsertPromo / UpdatePromo.
+// TODO: удалить после полного перехода на типизированные структуры.
+func (c CalculatedFields) ToMap() map[string]interface{} {
+	return map[string]interface{}{
+		"year":                              c.Year,
+		"month":                             c.Month,
+		"quarter":                           c.Quarter,
+		"gm":                                c.GM,
+		"plan_promo_rub":                    c.PlanPromoRub,
+		"plan_promo_uplift_units":           c.PlanPromoUpliftUnits,
+		"plan_promo_uplift_rub":             c.PlanPromoUpliftRub,
+		"plan_promo_uplift_pct_units":       c.PlanPromoUpliftPctUnits,
+		"plan_promo_uplift_pct_rub":         c.PlanPromoUpliftPctRub,
+		"plan_investments_pct":              c.PlanInvestmentsPct,
+		"plan_roi":                          c.PlanROI,
+		"baseline_rub":                      c.BaselineRub,
+		"net_promo_uplift_rub":              c.NetPromoUpliftRub,
+		"net_promo_uplift_pct":              c.NetPromoUpliftPct,
+		"actual_investments_pct":            c.ActualInvestmentsPct,
+		"actual_roi":                        c.ActualROI,
+		"actual_promo_rub_wo_ecom":          c.ActualPromoRubWoEcom,
+		"actual_promo_uplift_units_wo_ecom": c.ActualPromoUpliftUnitsWoEcom,
+		"actual_promo_uplift_rub_wo_ecom":   c.ActualPromoUpliftRubWoEcom,
+		"net_promo_uplift_rub_wo_ecom":      c.NetPromoUpliftRubWoEcom,
+		"net_promo_uplift_pct_wo_ecom":      c.NetPromoUpliftPctWoEcom,
+		"actual_investments_pct_wo_ecom":    c.ActualInvestmentsPctWoEcom,
+		"actual_roi_wo_ecom":                c.ActualROIWoEcom,
+		"plan_vs_fact_rub":                  c.PlanVsFactRub,
+		"plan_vs_fact_investments":          c.PlanVsFactInvestments,
+		"turnover_per_point":                c.TurnoverPerPoint,
+		"turnover_per_point_promo":          c.TurnoverPerPointPromo,
+		"plan_promo_cip_olap":               c.PlanPromoCipOlap,
+		"fact_promo_cip_olap":               c.FactPromoCipOlap,
+		"plan_promo_uplift_cip_olap":        c.PlanPromoUpliftCipOlap,
+		"fact_promo_uplift_cip_olap":        c.FactPromoUpliftCipOlap,
+		"date":                              c.Date,
+		"olap_price":                        c.OlapPrice,
+	}
+}
+
+// MapToDTO — преобразует map[string]interface{} в PromoInputDTO.
+// Используется для обратной совместимости в SavePromo.
+func MapToDTO(input map[string]interface{}) PromoInputDTO {
+	return PromoInputDTO{
+		NetworkName:             safeString(input, "network_name"),
+		KAM:                     safeString(input, "kam"),
+		Brand:                   safeString(input, "brand"),
+		BrandAS:                 safeString(input, "brand_as"),
+		SKU:                     safeString(input, "sku"),
+		Year:                    safeInt(input, "year"),
+		Month:                   safeInt(input, "month"),
+		Quarter:                 safeInt(input, "quarter"),
+		Mechanics:               safeString(input, "mechanics"),
+		GTNOpex:                 safeString(input, "gtn_opex"),
+		IDDirectum:              safeString(input, "id_directum"),
+		DSNumber:                safeString(input, "ds_number"),
+		DiscountAmount:          safeFloat(input, "discount_amount"),
+		Conditions:              safeString(input, "conditions"),
+		Comments:                safeString(input, "comments"),
+		EcomSegment:             safeString(input, "ecom_segment"),
+		TotalPharmacies:         safeInt(input, "total_pharmacies"),
+		PromoPharmacies:         safeInt(input, "promo_pharmacies"),
+		Status:                  safeString(input, "status"),
+		Date:                    safeString(input, "date"),
+		BaselineUnits:           safeFloat(input, "baseline_units"),
+		BaselineRub:             safeFloat(input, "baseline_rub"),
+		PlanPromoUnits:          safeFloat(input, "plan_promo_units"),
+		PlanPromoRub:            safeFloat(input, "plan_promo_rub"),
+		PlanInvestmentsRub:      safeFloat(input, "plan_investments_rub"),
+		ContractPrice:           safeFloat(input, "contract_price"),
+		GM:                      safeFloat(input, "gm"),
+		KeyRegion:               safeString(input, "key_region"),
+		Top20Segment:            safeString(input, "top20_segment"),
+		OlapPrice:               safeFloat(input, "olap_price"),
+		ActualPromoSalesUnits:   safeFloat(input, "actual_promo_sales_units"),
+		ActualPromoRub:          safeFloat(input, "actual_promo_rub"),
+		ActualInvestments:       safeFloat(input, "actual_investments"),
+		ActualPromoUpliftUnits:  safeFloat(input, "actual_promo_uplift_units"),
+		ActualPromoUpliftRub:    safeFloat(input, "actual_promo_uplift_rub"),
+		ActualExternalEcomUnits: safeFloat(input, "actual_external_ecom_units"),
+		ActualCorrectedBaseline: safeFloat(input, "actual_corrected_baseline"),
+		Agreement1:              safeString(input, "agreement1"),
+		Agreement2:              safeString(input, "agreement2"),
+	}
+}
+
+// MergeCalculatedIntoMap — сливает CalculatedFields в существующий map.
+func MergeCalculatedIntoMap(m map[string]interface{}, c CalculatedFields) {
+	for k, v := range c.ToMap() {
+		m[k] = v
+	}
+}
+
+// ─── helpers (копия из promo_utils.go для независимости) ───
+
+func safeFloat(input map[string]interface{}, key string) float64 {
+	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
+	return val
+}
+
+func safeInt(input map[string]interface{}, key string) int {
+	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
+	return val
+}
+
+func safeString(input map[string]interface{}, key string) string {
+	return fmt.Sprint(input[key])
+}
+
+// Выше нужны импорты "fmt" и "strconv", оставлены намеренно.
+```
+
+## File: frontend/src/hooks/usePromoCalculations.js
+```javascript
+import { useCallback } from 'react';
+
+export function usePromoCalculations(form) {
+  const recalcPlan = useCallback((updates) => {
+    const f = { ...form, ...updates };
+    const ppu = parseFloat(f.plan_promo_units) || 0;
+    const cp = parseFloat(f.contract_price) || 0;
+    const bu = parseFloat(f.baseline_units) || 0;
+    const pir = parseFloat(f.plan_investments_rub) || 0;
+    const gm = parseFloat(f.gm) || 1;
+    const plan_rub = ppu * cp;
+    const uplift_units = ppu - bu;
+    const uplift_rub = uplift_units * cp;
+    const roi = pir > 0 ? ((uplift_rub / pir) * gm * 100 - 100) : 0;
+    const baseline_rub = bu * cp;
+    return {
+      plan_promo_rub: plan_rub.toFixed(2),
+      plan_promo_uplift_units: uplift_units.toFixed(2),
+      plan_promo_uplift_rub: uplift_rub.toFixed(2),
+      plan_roi: roi.toFixed(1),
+      baseline_rub: baseline_rub.toFixed(2),
+    };
+  }, [form]);
+
+  const recalcActual = useCallback((updates) => {
+    const f = { ...form, ...updates };
+    const afu = parseFloat(f.actual_promo_sales_units) || 0;
+    const cp = parseFloat(f.contract_price) || 0;
+    const bu = parseFloat(f.baseline_units) || 0;
+    const afi = parseFloat(f.actual_investments) || 0;
+    const gm = parseFloat(f.gm) || 1;
+    const afr = afu * cp;
+    const afupl = afu - bu;
+    const afupr = afupl * cp;
+    const aroi = afi > 0 ? ((afupr / afi) * gm * 100 - 100) : 0;
+    return {
+      actual_promo_rub: afr.toFixed(2),
+      actual_promo_uplift_units: afupl.toFixed(2),
+      actual_promo_uplift_rub: afupr.toFixed(2),
+      actual_roi: aroi.toFixed(1),
+    };
+  }, [form]);
+
+  return { recalcPlan, recalcActual };
+}
+```
+
+## File: frontend/src/types/promo.ts
+```typescript
+// Типы, соответствующие backend/models/types.go
+
+export interface PromoRow {
+  id: number;
+  network_name: string | null;
+  kam: string | null;
+  id_directum: string | null;
+  ds_number: string | null;
+  year: number;
+  month: number | null;
+  quarter: number | null;
+  sku: string | null;
+  brand: string | null;
+  brand_as: string | null;
+  mechanics: string | null;
+  discount_amount: number | null;
+  gtn_opex: string | null;
+  conditions: string | null;
+  comments: string | null;
+  baseline_units: number | null;
+  baseline_rub: number | null;
+  plan_promo_units: number | null;
+  plan_promo_rub: number | null;
+  plan_investments_rub: number | null;
+  plan_promo_uplift_units: number | null;
+  plan_promo_uplift_rub: number | null;
+  plan_promo_uplift_pct_units: number | null;
+  plan_promo_uplift_pct_rub: number | null;
+  plan_investments_pct: number | null;
+  plan_roi: number | null;
+  contract_price: number | null;
+  gm: number | null;
+  total_pharmacies: number | null;
+  promo_pharmacies: number | null;
+  actual_promo_sales_units: number | null;
+  actual_investments: number | null;
+  status: string | null;
+  actual_promo_rub: number | null;
+  actual_promo_uplift_units: number | null;
+  actual_promo_uplift_rub: number | null;
+  actual_external_ecom_units: number | null;
+  actual_corrected_baseline: number | null;
+  actual_roi: number | null;
+  plan_vs_fact_rub: number | null;
+  plan_vs_fact_investments: number | null;
+  channel: string | null;
+  agreement1: string | null;
+  agreement2: string | null;
+  date: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ApprovalRow {
+  id: number;
+  network_name: string | null;
+  brand_as: string | null;
+  sku: string | null;
+  mechanics: string | null;
+  year: number;
+  month: number | null;
+  baseline_units: number | null;
+  plan_promo_units: number | null;
+  actual_promo_sales_units: number | null;
+  plan_investments_rub: number | null;
+  plan_roi: number | null;
+  actual_roi: number | null;
+  conditions: string | null;
+  agreement1: string | null;
+  agreement1_status: string | null;
+  agreement1_comment: string | null;
+  agreement2: string | null;
+  agreement2_status: string | null;
+  agreement2_comment: string | null;
+  status: string | null;
+  historical_count: number;
+  avg_historical_roi: number | null;
+}
+
+export interface FilterOptions {
+  kam: string[];
+  brand: string[];
+  sku: string[];
+  network_name: string[];
+  mechanics: string[];
+  status: string[];
+  channel: string[];
+}
+
+export interface PromoFormData {
+  network_name?: string;
+  kam?: string;
+  brand?: string;
+  brand_as?: string;
+  sku?: string;
+  year?: number;
+  month?: number;
+  mechanics?: string;
+  gtn_opex?: string;
+  id_directum?: string;
+  ds_number?: string;
+  discount_amount?: number;
+  conditions?: string;
+  comments?: string;
+  ecom_segment?: string;
+  total_pharmacies?: number;
+  promo_pharmacies?: number;
+  status?: string;
+  baseline_units?: number;
+  plan_promo_units?: number;
+  plan_investments_rub?: number;
+  contract_price?: number;
+  gm?: number;
+  key_region?: string;
+  top20_segment?: string;
+  actual_promo_sales_units?: number;
+  actual_promo_rub?: number;
+  actual_investments?: number;
+  actual_promo_uplift_units?: number;
+  actual_promo_uplift_rub?: number;
+  actual_external_ecom_units?: number;
+  actual_corrected_baseline?: number;
+}
+```
+
+## File: frontend/src/App.css
+```css
+.counter {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 2px solid transparent;
+  transition: border-color 0.3s;
+  margin-bottom: 24px;
+
+  &:hover {
+    border-color: var(--accent-border);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.hero {
+  position: relative;
+
+  .base,
+  .framework,
+  .vite {
+    inset-inline: 0;
+    margin: 0 auto;
+  }
+
+  .base {
+    width: 170px;
+    position: relative;
+    z-index: 0;
+  }
+
+  .framework,
+  .vite {
+    position: absolute;
+  }
+
+  .framework {
+    z-index: 1;
+    top: 34px;
+    height: 28px;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+      scale(1.4);
+  }
+
+  .vite {
+    z-index: 0;
+    top: 107px;
+    height: 26px;
+    width: auto;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+      scale(0.8);
+  }
+}
+
+#center {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  place-content: center;
+  place-items: center;
+  flex-grow: 1;
+
+  @media (max-width: 1024px) {
+    padding: 32px 20px 24px;
+    gap: 18px;
+  }
+}
+
+#next-steps {
+  display: flex;
+  border-top: 1px solid var(--border);
+  text-align: left;
+
+  & > div {
+    flex: 1 1 0;
+    padding: 32px;
+    @media (max-width: 1024px) {
+      padding: 24px 20px;
+    }
+  }
+
+  .icon {
+    margin-bottom: 16px;
+    width: 22px;
+    height: 22px;
+  }
+
+  @media (max-width: 1024px) {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+#docs {
+  border-right: 1px solid var(--border);
+
+  @media (max-width: 1024px) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  margin: 32px 0 0;
+
+  .logo {
+    height: 18px;
+  }
+
+  a {
+    color: var(--text-h);
+    font-size: 16px;
+    border-radius: 6px;
+    background: var(--social-bg);
+    display: flex;
+    padding: 6px 12px;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: box-shadow 0.3s;
+
+    &:hover {
+      box-shadow: var(--shadow);
+    }
+    .button-icon {
+      height: 18px;
+      width: 18px;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    li {
+      flex: 1 1 calc(50% - 8px);
+    }
+
+    a {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+  }
+}
+
+#spacer {
+  height: 88px;
+  border-top: 1px solid var(--border);
+  @media (max-width: 1024px) {
+    height: 48px;
+  }
+}
+
+.ticks {
+  position: relative;
+  width: 100%;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: -4.5px;
+    border: 5px solid transparent;
+  }
+
+  &::before {
+    left: 0;
+    border-left-color: var(--border);
+  }
+  &::after {
+    right: 0;
+    border-right-color: var(--border);
+  }
+}
+```
+
+## File: frontend/src/index.css
+```css
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Сброс стилей и базовые настройки */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #f8fafc; /* Мягкий светлый фон */
+  color: #0f172a; /* Глубокий сланцевый цвет текста вместо чистого черного */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+```
+
+## File: frontend/.gitignore
+```
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+```
+
+## File: frontend/eslint.config.js
+```javascript
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{js,jsx}'],
+    extends: [
+      js.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      globals: globals.browser,
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
+])
+```
+
+## File: frontend/index.html
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Подключаем Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <title>frontend</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+```
+
+## File: frontend/vite.config.js
+```javascript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+})
+```
+
+## File: docker-compose.yml
+```yaml
+version: '3.9'
+
+services:
+  mssql_db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: my_local_mssql
+    environment:
+      ACCEPT_EULA: Y
+      SA_PASSWORD: $#Pfchfytw_0378 # Очень важный пароль. Обязательно сложный!
+    ports:
+      - "1433:1433" # MSSQL стандартный порт
+    volumes:
+      - mssql_data_volume:/var/opt/mssql
+    restart: unless-stopped
+
+volumes:
+  mssql_data_volume:
+```
+
+## File: backend/config/auth.go
+```go
+package config
+
+import (
+	"errors"
+	"os"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+var JWTSecret = []byte(getEnvOrDefault("JWT_SECRET", "change-me-in-production-32bytes!!"))
+
+func getEnvOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+type Claims struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	jwt.RegisteredClaims
+}
+
+func GenerateAccessToken(username, role string) (string, error) {
+	claims := Claims{
+		Username: username,
+		Role:     role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "analytics-portal",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(JWTSecret)
+}
+
+func GenerateRefreshToken(username, role string) (string, error) {
+	claims := Claims{
+		Username: username,
+		Role:     role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "analytics-portal",
+			ID:        "refresh",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(JWTSecret)
+}
+
+// Deprecated: используйте GenerateAccessToken
+func GenerateToken(username, role string) (string, error) {
+	return GenerateAccessToken(username, role)
+}
+
+func ValidateToken(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return JWTSecret, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+	return claims, nil
+}
+
+func ValidateRefreshToken(tokenStr string) (*Claims, error) {
+	claims, err := ValidateToken(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+	if claims.ID != "refresh" {
+		return nil, errors.New("not a refresh token")
+	}
+	return claims, nil
+}
+```
+
+## File: backend/handlers/promo_utils.go
+```go
+package handlers
+
+import (
+	"fmt"
+	"strconv"
+)
+
+// safeFloat, safeInt, safeString — хелперы для безопасного извлечения
+// типизированных значений из map[string]interface{}. Используются
+// в promo.go для логирования и парсинга входных данных.
+
+func safeFloat(input map[string]interface{}, key string) float64 {
+	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
+	return val
+}
+
+func safeInt(input map[string]interface{}, key string) int {
+	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
+	return val
+}
+
+func safeString(input map[string]interface{}, key string) string {
+	return fmt.Sprint(input[key])
+}
+```
+
+## File: backend/handlers/sales.go
+```go
+package handlers
+
+import (
+	"database/sql"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"backend/config"
+	"backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+func GetFilterOptions(c *gin.Context) {
+	getDistinct := func(query string) []string {
+		rows, e := config.DB.Query(query)
+		if e != nil {
+			return []string{}
+		}
+		defer rows.Close()
+		var vals []string
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
+				vals = append(vals, v.String)
+			}
+		}
+		return vals
+	}
+
+	result := gin.H{
+		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
+		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
+		"un_rub":      getDistinct("SELECT DISTINCT un_rub FROM dbo.tbl_EcomSalesNormalized WHERE un_rub IS NOT NULL ORDER BY un_rub"),
+		"segment":     getDistinct("SELECT DISTINCT segment FROM dbo.tbl_EcomSalesNormalized WHERE segment IS NOT NULL ORDER BY segment"),
+		"channel":     getDistinct("SELECT DISTINCT channel FROM dbo.tbl_EcomSalesNormalized WHERE channel IS NOT NULL ORDER BY channel"),
+	}
+
+	mappingQuery := `SELECT segment, channel FROM dbo.tbl_ChannelSegmentMapping WHERE segment IS NOT NULL AND channel IS NOT NULL GROUP BY segment, channel ORDER BY segment, channel`
+	rows, e := config.DB.Query(mappingQuery)
+	if e != nil {
+		result["segmentChannelMap"] = make(map[string][]string)
+		result["channelSegmentMap"] = make(map[string][]string)
+	} else {
+		defer rows.Close()
+		segChanMap := make(map[string][]string)
+		chanSegMap := make(map[string][]string)
+		for rows.Next() {
+			var seg, chanVal sql.NullString
+			if err := rows.Scan(&seg, &chanVal); err == nil {
+				if seg.Valid && chanVal.Valid && seg.String != "" && chanVal.String != "" {
+					segChanMap[seg.String] = append(segChanMap[seg.String], chanVal.String)
+					chanSegMap[chanVal.String] = append(chanSegMap[chanVal.String], seg.String)
+				}
+			}
+		}
+		result["segmentChannelMap"] = segChanMap
+		result["channelSegmentMap"] = chanSegMap
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func GetData(c *gin.Context) {
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	brandNames := c.QueryArray("brandName")
+	networkNames := c.QueryArray("networkName")
+	unRubs := c.QueryArray("un_rub")
+	segments := c.QueryArray("segment")
+	channels := c.QueryArray("channel")
+
+	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
+	args := []interface{}{}
+
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			baseWhere += " AND n.[year] >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			baseWhere += " AND n.[year] <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+	if len(brandNames) > 0 {
+		conds := make([]string, 0, len(brandNames))
+		for _, v := range brandNames {
+			if v != "" {
+				conds = append(conds, "n.brandName LIKE ?")
+				args = append(args, "%"+v+"%")
+			}
+		}
+		if len(conds) > 0 {
+			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
+		}
+	}
+	if len(networkNames) > 0 {
+		conds := make([]string, 0, len(networkNames))
+		for _, v := range networkNames {
+			if v != "" {
+				conds = append(conds, "n.networkName LIKE ?")
+				args = append(args, "%"+v+"%")
+			}
+		}
+		if len(conds) > 0 {
+			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
+		}
+	}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				baseWhere += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+	appendFilter("n.un_rub", unRubs)
+	appendFilter("n.segment", segments)
+	appendFilter("n.channel", channels)
+
+	all := c.Query("all")
+
+	if all == "true" {
+		// Экспорт — возвращаем всё
+		query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+		rows, err := config.DB.Query(query, args...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+			return
+		}
+		defer rows.Close()
+
+		var results []models.Row
+		for rows.Next() {
+			var r models.Row
+			if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		if results == nil {
+			results = []models.Row{}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": results})
+		return
+	}
+
+	// Пагинация
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_EcomSalesNormalized n" + baseWhere
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+
+	var totalRows int
+	if err := config.DB.QueryRow(countQuery, countArgs...).Scan(&totalRows); err != nil {
+		totalRows = 0
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	offset := page * pageSize
+
+	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+	args = append(args, offset, pageSize)
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.Row
+	for rows.Next() {
+		var r models.Row
+		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.Row{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results, "totalRows": totalRows})
+}
+
+func GetDrilldown(c *gin.Context) {
+	brandName := c.Query("brandName")
+	networkName := c.Query("networkName")
+	if brandName == "" || networkName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "brandName и networkName обязательны"})
+		return
+	}
+
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	segments := c.QueryArray("segment")
+	channels := c.QueryArray("channel")
+
+	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
+	args := []interface{}{brandName, networkName}
+
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			query += " AND n.[year] >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			query += " AND n.[year] <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+	appendFilter("n.segment", segments)
+	appendFilter("n.channel", channels)
+
+	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.DrilldownRow
+	for rows.Next() {
+		var r models.DrilldownRow
+		if err := rows.Scan(&r.Year, &r.Month, &r.MetricType, &r.TotalValue, &r.UnRub, &r.Segment, &r.Channel); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
 }
 ```
 
@@ -985,11 +2315,6 @@ type ApprovalParams struct {
 }
 
 func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
-	agreementField := "p.agreement1"
-	if params.Role == "agreement2" {
-		agreementField = "p.agreement2"
-	}
-
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
@@ -999,6 +2324,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
 			p.conditions, p.agreement1, p.agreement2, p.status,
+			p.agreement1_status, p.agreement1_comment,
+			p.agreement2_status, p.agreement2_comment,
 			0 as historical_count,
 			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
@@ -1030,16 +2357,21 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		args = append(args, params.KAM)
 	}
 
+	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
+	statusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		statusField = "p.agreement2_status"
+	}
+
 	switch params.ApprovalStatus {
 	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", agreementField)
+		query += fmt.Sprintf(" AND %s IS NULL", statusField)
 	case "commented":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) <> 1 AND CHARINDEX(N'отклонено', %s) <> 1",
-			agreementField, agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'commented'", statusField)
 	case "approved":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'согласовано', %s) = 1", agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'approved'", statusField)
 	case "rejected":
-		query += fmt.Sprintf(" AND %s IS NOT NULL AND CHARINDEX(N'отклонено', %s) = 1", agreementField, agreementField)
+		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
 	}
 
 	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
@@ -1058,6 +2390,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
 			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
 			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Agreement1Status, &r.Agreement1Comment,
+			&r.Agreement2Status, &r.Agreement2Comment,
 			&r.HistoricalCount, &r.AvgHistoricalROI,
 		); err != nil {
 			continue
@@ -1070,6 +2404,21 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	return results, nil
 }
 
+// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
+func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
+	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
+	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
+	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+
+	query := fmt.Sprintf(
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		agreementField, statusField, commentField,
+	)
+	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
+	return err
+}
+
+// Deprecated: используйте ApprovePromoWithStatus
 func ApprovePromo(field string, id int, value string) error {
 	_, err := config.DB.Exec(
 		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
@@ -1081,7 +2430,7 @@ func ApprovePromo(field string, id int, value string) error {
 // ─── Approval Filters ───────────────────────────────────────────────────────
 
 type ApprovalFilterParams struct {
-	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr string
+	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
 }
 
 func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
@@ -1130,15 +2479,21 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 		args = append(args, params.MechFilter)
 	}
 
+	// Фильтруем по статусу конкретной роли (а не по OR двух полей)
+	filterStatusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		filterStatusField = "p.agreement2_status"
+	}
+
 	switch params.ApprovalStatus {
 	case "pending":
-		query += " AND (p.agreement1 IS NULL OR p.agreement2 IS NULL)"
+		query += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
 	case "commented":
-		query += " AND ((p.agreement1 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement1) <> 1 AND CHARINDEX(N'отклонено', p.agreement1) <> 1) OR (p.agreement2 IS NOT NULL AND CHARINDEX(N'согласовано', p.agreement2) <> 1 AND CHARINDEX(N'отклонено', p.agreement2) <> 1))"
+		query += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
 	case "approved":
-		query += " AND (CHARINDEX(N'согласовано', p.agreement1) = 1 OR CHARINDEX(N'согласовано', p.agreement2) = 1)"
+		query += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
 	case "rejected":
-		query += " AND (CHARINDEX(N'отклонено', p.agreement1) = 1 OR CHARINDEX(N'отклонено', p.agreement2) = 1)"
+		query += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
 	}
 
 	rows, err := config.DB.Query(query, args...)
@@ -1283,936 +2638,6 @@ func GetApprovalBrands(field, kam, network string) ([]string, error) {
 		brands = []string{}
 	}
 	return brands, nil
-}
-```
-
-## File: frontend/src/hooks/usePromoCalculations.js
-```javascript
-import { useCallback } from 'react';
-
-export function usePromoCalculations(form) {
-  const recalcPlan = useCallback((updates) => {
-    const f = { ...form, ...updates };
-    const ppu = parseFloat(f.plan_promo_units) || 0;
-    const cp = parseFloat(f.contract_price) || 0;
-    const bu = parseFloat(f.baseline_units) || 0;
-    const pir = parseFloat(f.plan_investments_rub) || 0;
-    const gm = parseFloat(f.gm) || 1;
-    const plan_rub = ppu * cp;
-    const uplift_units = ppu - bu;
-    const uplift_rub = uplift_units * cp;
-    const roi = pir > 0 ? ((uplift_rub / pir) * gm * 100 - 100) : 0;
-    const baseline_rub = bu * cp;
-    return {
-      plan_promo_rub: plan_rub.toFixed(2),
-      plan_promo_uplift_units: uplift_units.toFixed(2),
-      plan_promo_uplift_rub: uplift_rub.toFixed(2),
-      plan_roi: roi.toFixed(1),
-      baseline_rub: baseline_rub.toFixed(2),
-    };
-  }, [form]);
-
-  const recalcActual = useCallback((updates) => {
-    const f = { ...form, ...updates };
-    const afu = parseFloat(f.actual_promo_sales_units) || 0;
-    const cp = parseFloat(f.contract_price) || 0;
-    const bu = parseFloat(f.baseline_units) || 0;
-    const afi = parseFloat(f.actual_investments) || 0;
-    const gm = parseFloat(f.gm) || 1;
-    const afr = afu * cp;
-    const afupl = afu - bu;
-    const afupr = afupl * cp;
-    const aroi = afi > 0 ? ((afupr / afi) * gm * 100 - 100) : 0;
-    return {
-      actual_promo_rub: afr.toFixed(2),
-      actual_promo_uplift_units: afupl.toFixed(2),
-      actual_promo_uplift_rub: afupr.toFixed(2),
-      actual_roi: aroi.toFixed(1),
-    };
-  }, [form]);
-
-  return { recalcPlan, recalcActual };
-}
-```
-
-## File: frontend/src/App.css
-```css
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
-}
-
-#center {
-  display: flex;
-  flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
-}
-
-#next-steps {
-  display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
-}
-
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-}
-
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
-}
-
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
-}
-
-.ticks {
-  position: relative;
-  width: 100%;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
-
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
-}
-```
-
-## File: frontend/src/index.css
-```css
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-/* Сброс стилей и базовые настройки */
-* {
-  box-sizing: border-box;
-}
-
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #f8fafc; /* Мягкий светлый фон */
-  color: #0f172a; /* Глубокий сланцевый цвет текста вместо чистого черного */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-#root {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-}
-```
-
-## File: frontend/src/main.jsx
-```javascript
-import React from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import App from './App.jsx';
-import './index.css';
-
-createRoot(document.getElementById('root')).render(
-  //<React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  //</React.StrictMode>,
-);
-```
-
-## File: frontend/.gitignore
-```
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-```
-
-## File: frontend/eslint.config.js
-```javascript
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import { defineConfig, globalIgnores } from 'eslint/config'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{js,jsx}'],
-    extends: [
-      js.configs.recommended,
-      reactHooks.configs.flat.recommended,
-      reactRefresh.configs.vite,
-    ],
-    languageOptions: {
-      globals: globals.browser,
-      parserOptions: { ecmaFeatures: { jsx: true } },
-    },
-  },
-])
-```
-
-## File: frontend/index.html
-```html
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Подключаем Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-    <title>frontend</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
-```
-
-## File: frontend/package.json
-```json
-{
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/icons-material": "^9.2.0",
-    "@mui/material": "^9.2.0",
-    "@mui/x-data-grid": "^9.10.1",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-router-dom": "^7.11.0",
-    "recharts": "^3.10.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "eslint": "^10.6.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.7.0",
-    "vite": "^8.1.1"
-  }
-}
-```
-
-## File: frontend/vite.config.js
-```javascript
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-})
-```
-
-## File: docker-compose.yml
-```yaml
-version: '3.9'
-
-services:
-  mssql_db:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: my_local_mssql
-    environment:
-      ACCEPT_EULA: Y
-      SA_PASSWORD: $#Pfchfytw_0378 # Очень важный пароль. Обязательно сложный!
-    ports:
-      - "1433:1433" # MSSQL стандартный порт
-    volumes:
-      - mssql_data_volume:/var/opt/mssql
-    restart: unless-stopped
-
-volumes:
-  mssql_data_volume:
-```
-
-## File: backend/config/auth.go
-```go
-package config
-
-import (
-	"errors"
-	"os"
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
-)
-
-var JWTSecret = []byte(getEnvOrDefault("JWT_SECRET", "change-me-in-production-32bytes!!"))
-
-func getEnvOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-type Claims struct {
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	jwt.RegisteredClaims
-}
-
-func GenerateAccessToken(username, role string) (string, error) {
-	claims := Claims{
-		Username: username,
-		Role:     role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "analytics-portal",
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(JWTSecret)
-}
-
-func GenerateRefreshToken(username, role string) (string, error) {
-	claims := Claims{
-		Username: username,
-		Role:     role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "analytics-portal",
-			ID:        "refresh",
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(JWTSecret)
-}
-
-// Deprecated: используйте GenerateAccessToken
-func GenerateToken(username, role string) (string, error) {
-	return GenerateAccessToken(username, role)
-}
-
-func ValidateToken(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("unexpected signing method")
-		}
-		return JWTSecret, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	claims, ok := token.Claims.(*Claims)
-	if !ok || !token.Valid {
-		return nil, errors.New("invalid token")
-	}
-	return claims, nil
-}
-
-func ValidateRefreshToken(tokenStr string) (*Claims, error) {
-	claims, err := ValidateToken(tokenStr)
-	if err != nil {
-		return nil, err
-	}
-	if claims.ID != "refresh" {
-		return nil, errors.New("not a refresh token")
-	}
-	return claims, nil
-}
-```
-
-## File: backend/handlers/auth.go
-```go
-package handlers
-
-import (
-	"net/http"
-	"time"
-
-	"backend/config"
-
-	"github.com/gin-gonic/gin"
-)
-
-// Простая таблица пользователей. В будущем — из БД tbl_Users.
-var users = map[string]struct {
-	Password string
-	Role     string
-}{
-	"manager1": {Password: "promo2024!", Role: "agreement1"},
-	"manager2": {Password: "promo2024!", Role: "agreement2"},
-	"admin":    {Password: "admin2024!", Role: "admin"},
-}
-
-func Login(c *gin.Context) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
-		return
-	}
-
-	user, ok := users[req.Username]
-	if !ok || user.Password != req.Password {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
-		return
-	}
-
-	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	refreshToken, err := config.GenerateRefreshToken(req.Username, user.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	// Refresh token в httpOnly secure cookie
-	c.SetCookie(
-		"refresh_token",
-		refreshToken,
-		int(7*24*time.Hour.Seconds()), // 7 дней
-		"/api/auth",                   // доступен только для /api/auth/*
-		"",                            // domain (текущий)
-		false,                         // secure (false для localhost)
-		true,                          // httpOnly
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"token":    accessToken,
-		"username": req.Username,
-		"role":     user.Role,
-	})
-}
-
-func RefreshToken(c *gin.Context) {
-	refreshToken, err := c.Cookie("refresh_token")
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token не найден"})
-		return
-	}
-
-	claims, err := config.ValidateRefreshToken(refreshToken)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
-		return
-	}
-
-	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	// Обновляем refresh cookie
-	c.SetCookie(
-		"refresh_token",
-		newRefreshToken,
-		int(7*24*time.Hour.Seconds()),
-		"/api/auth",
-		"",
-		false,
-		true,
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"token":    newAccessToken,
-		"username": claims.Username,
-		"role":     claims.Role,
-	})
-}
-```
-
-## File: backend/handlers/sales.go
-```go
-package handlers
-
-import (
-	"database/sql"
-	"net/http"
-	"strconv"
-	"strings"
-
-	"backend/config"
-	"backend/models"
-
-	"github.com/gin-gonic/gin"
-)
-
-func GetFilterOptions(c *gin.Context) {
-	getDistinct := func(query string) []string {
-		rows, e := config.DB.Query(query)
-		if e != nil {
-			return []string{}
-		}
-		defer rows.Close()
-		var vals []string
-		for rows.Next() {
-			var v sql.NullString
-			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
-				vals = append(vals, v.String)
-			}
-		}
-		return vals
-	}
-
-	result := gin.H{
-		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
-		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
-		"un_rub":      getDistinct("SELECT DISTINCT un_rub FROM dbo.tbl_EcomSalesNormalized WHERE un_rub IS NOT NULL ORDER BY un_rub"),
-		"segment":     getDistinct("SELECT DISTINCT segment FROM dbo.tbl_EcomSalesNormalized WHERE segment IS NOT NULL ORDER BY segment"),
-		"channel":     getDistinct("SELECT DISTINCT channel FROM dbo.tbl_EcomSalesNormalized WHERE channel IS NOT NULL ORDER BY channel"),
-	}
-
-	mappingQuery := `SELECT segment, channel FROM dbo.tbl_ChannelSegmentMapping WHERE segment IS NOT NULL AND channel IS NOT NULL GROUP BY segment, channel ORDER BY segment, channel`
-	rows, e := config.DB.Query(mappingQuery)
-	if e != nil {
-		result["segmentChannelMap"] = make(map[string][]string)
-		result["channelSegmentMap"] = make(map[string][]string)
-	} else {
-		defer rows.Close()
-		segChanMap := make(map[string][]string)
-		chanSegMap := make(map[string][]string)
-		for rows.Next() {
-			var seg, chanVal sql.NullString
-			if err := rows.Scan(&seg, &chanVal); err == nil {
-				if seg.Valid && chanVal.Valid && seg.String != "" && chanVal.String != "" {
-					segChanMap[seg.String] = append(segChanMap[seg.String], chanVal.String)
-					chanSegMap[chanVal.String] = append(chanSegMap[chanVal.String], seg.String)
-				}
-			}
-		}
-		result["segmentChannelMap"] = segChanMap
-		result["channelSegmentMap"] = chanSegMap
-	}
-	c.JSON(http.StatusOK, result)
-}
-
-func GetData(c *gin.Context) {
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	brandNames := c.QueryArray("brandName")
-	networkNames := c.QueryArray("networkName")
-	unRubs := c.QueryArray("un_rub")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-
-	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
-	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
-	args := []interface{}{}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			baseWhere += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			baseWhere += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-	if len(brandNames) > 0 {
-		conds := make([]string, 0, len(brandNames))
-		for _, v := range brandNames {
-			if v != "" {
-				conds = append(conds, "n.brandName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
-	}
-	if len(networkNames) > 0 {
-		conds := make([]string, 0, len(networkNames))
-		for _, v := range networkNames {
-			if v != "" {
-				conds = append(conds, "n.networkName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				baseWhere += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.un_rub", unRubs)
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	all := c.Query("all")
-
-	if all == "true" {
-		// Экспорт — возвращаем всё
-		query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
-		rows, err := config.DB.Query(query, args...)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
-			return
-		}
-		defer rows.Close()
-
-		var results []models.Row
-		for rows.Next() {
-			var r models.Row
-			if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
-				continue
-			}
-			results = append(results, r)
-		}
-		if results == nil {
-			results = []models.Row{}
-		}
-		c.JSON(http.StatusOK, gin.H{"data": results})
-		return
-	}
-
-	// Пагинация
-	countQuery := "SELECT COUNT(*) FROM dbo.tbl_EcomSalesNormalized n" + baseWhere
-	countArgs := make([]interface{}, len(args))
-	copy(countArgs, args)
-
-	var totalRows int
-	if err := config.DB.QueryRow(countQuery, countArgs...).Scan(&totalRows); err != nil {
-		totalRows = 0
-	}
-
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-	if pageSize > 1000 {
-		pageSize = 1000
-	}
-	offset := page * pageSize
-
-	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-	args = append(args, offset, pageSize)
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
-		return
-	}
-	defer rows.Close()
-
-	var results []models.Row
-	for rows.Next() {
-		var r models.Row
-		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	if results == nil {
-		results = []models.Row{}
-	}
-	c.JSON(http.StatusOK, gin.H{"data": results, "totalRows": totalRows})
-}
-
-func GetDrilldown(c *gin.Context) {
-	brandName := c.Query("brandName")
-	networkName := c.Query("networkName")
-	if brandName == "" || networkName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "brandName и networkName обязательны"})
-		return
-	}
-
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-
-	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
-	args := []interface{}{brandName, networkName}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			query += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			query += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
-		return
-	}
-	defer rows.Close()
-
-	var results []models.DrilldownRow
-	for rows.Next() {
-		var r models.DrilldownRow
-		if err := rows.Scan(&r.Year, &r.Month, &r.MetricType, &r.TotalValue, &r.UnRub, &r.Segment, &r.Channel); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
 }
 ```
 
@@ -3030,6 +3455,187 @@ export default function Login({ onLogin }) {
       </Card>
     </Box>
   );
+}
+```
+
+## File: frontend/src/main.jsx
+```javascript
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import App from './App.jsx';
+import './index.css';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 минут — данные не перезапрашиваются
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
+
+createRoot(document.getElementById('root')).render(
+  //<React.StrictMode>
+    <BrowserRouter>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </BrowserRouter>
+  //</React.StrictMode>,
+);
+```
+
+## File: frontend/package.json
+```json
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.2.0",
+    "@mui/material": "^9.2.0",
+    "@mui/x-data-grid": "^9.10.1",
+    "@tanstack/react-query": "^5.101.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.11.0",
+    "recharts": "^3.10.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "vite": "^8.1.1"
+  }
+}
+```
+
+## File: backend/handlers/auth.go
+```go
+package handlers
+
+import (
+	"net/http"
+	"time"
+
+	"backend/config"
+	"backend/repository"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func Login(c *gin.Context) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+
+	// Ищем пользователя в БД
+	user, err := repository.GetUserByUsername(req.Username)
+	if err != nil {
+		config.Logger.Error("login_db_error", "error", err.Error(), "username", req.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+
+	if user == nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
+		return
+	}
+
+	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	refreshToken, err := config.GenerateRefreshToken(req.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	// Refresh token в httpOnly secure cookie
+	c.SetCookie(
+		"refresh_token",
+		refreshToken,
+		int(7*24*time.Hour.Seconds()), // 7 дней
+		"/api/auth",                   // доступен только для /api/auth/*
+		"",                            // domain (текущий)
+		false,                         // secure (false для localhost)
+		true,                          // httpOnly
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":    accessToken,
+		"username": req.Username,
+		"role":     user.Role,
+	})
+}
+
+func RefreshToken(c *gin.Context) {
+	refreshToken, err := c.Cookie("refresh_token")
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token не найден"})
+		return
+	}
+
+	claims, err := config.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
+		return
+	}
+
+	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	// Обновляем refresh cookie
+	c.SetCookie(
+		"refresh_token",
+		newRefreshToken,
+		int(7*24*time.Hour.Seconds()),
+		"/api/auth",
+		"",
+		false,
+		true,
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":    newAccessToken,
+		"username": claims.Username,
+		"role":     claims.Role,
+	})
 }
 ```
 
@@ -4583,8 +5189,12 @@ type ApprovalRow struct {
 	PlanROI               *float64 `json:"plan_roi"`
 	ActualROI             *float64 `json:"actual_roi"`
 	Conditions            *string  `json:"conditions"`
-	Agreement1            *string  `json:"agreement1"`
-	Agreement2            *string  `json:"agreement2"`
+	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
+	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
+	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
+	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
+	Agreement2Status      *string  `json:"agreement2_status"`
+	Agreement2Comment     *string  `json:"agreement2_comment"`
 	Status                *string  `json:"status"`
 	HistoricalCount       int      `json:"historical_count"`
 	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
@@ -4633,90 +5243,13 @@ require (
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/arch v0.23.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
-```
-
-## File: frontend/src/hooks/usePromoData.js
-```javascript
-import { useState, useEffect, useCallback, useRef } from 'react';
-
-export function usePromoData(filters, refreshTrigger) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const abortRef = useRef(null);
-
-  // Сравниваем фильтры через JSON — только реальные изменения триггерят запрос
-  const filtersRef = useRef(filters);
-  const [fetchTrigger, setFetchTrigger] = useState(0);
-
-  useEffect(() => {
-    const prev = JSON.stringify(filtersRef.current);
-    const next = JSON.stringify(filters);
-    if (prev !== next) {
-      filtersRef.current = filters;
-      setFetchTrigger(t => t + 1);
-    }
-  }, [filters]);
-
-  const fetchData = useCallback(async () => {
-    if (abortRef.current) abortRef.current.abort();
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      const params = new URLSearchParams();
-      const currentFilters = filtersRef.current;
-      Object.entries(currentFilters).forEach(([key, value]) => {
-        if (Array.isArray(value)) {
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-        } else if (value !== '' && value != null) {
-          params.set(key, String(value));
-        }
-      });
-
-      const qs = params.toString();
-      const response = await fetch(
-        `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
-        { 
-          signal: controller.signal,
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          },
-        }
-      );
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      setRows(json.data || []);
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        setError(err.message);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, []); // ← стабильная ссылка, не пересоздаётся
-
-  useEffect(() => {
-    fetchData();
-    return () => {
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, [fetchTrigger, refreshTrigger, fetchData]);
-
-  return { rows, setRows, loading, error, refetch: fetchData };
-}
 ```
 
 ## File: frontend/src/components/DataTable.jsx
@@ -4966,289 +5499,75 @@ export default function DataTable({
 }
 ```
 
-## File: frontend/src/components/PromoEditDialog.jsx
+## File: frontend/src/hooks/usePromoData.js
 ```javascript
-import { useState, useEffect } from 'react';
-import {
-  Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
-  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
-} from '@mui/material';
-import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
-import { promoAPI } from '../api/promo';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useCallback } from 'react';
 
-// ─── Месяцы ────────────────────────────────────────────────────────────────
-const MONTH_OPTIONS = [
-  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 }, { label: 'Апрель', value: 4 },
-  { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 }, { label: 'Июль', value: 7 }, { label: 'Август', value: 8 },
-  { label: 'Сентябрь', value: 9 }, { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
-];
+/**
+ * Хук для получения данных промо с использованием React Query.
+ * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
+ * и state-машину loading/error.
+ *
+ * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
+ * чтобы не ломать PromoAnalysis.jsx.
+ */
+export function usePromoData(filters, refreshTrigger) {
+  const queryClient = useQueryClient();
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
-// ─── Форматирование ────────────────────────────────────────────────────────
-const fmtDisplay = (v) => {
-  if (v == null || v === '') return '';
-  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
+  // Стабильный queryKey на основе фильтров и refreshTrigger
+  const queryKey = ['promoData', filters, refreshTrigger];
 
-// ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
-const AgreementChip = ({ label, value }) => {
-  const text = value || '';
-  if (!text || text === '0') return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
-      <Chip label="Ожидает" size="small" variant="outlined" sx={{ borderColor: '#94a3b8', color: '#64748b', fontWeight: 500, height: 28 }} />
-    </Box>
-  );
+  const fetchPromoData = useCallback(async () => {
+    const currentFilters = filtersRef.current;
+    const params = new URLSearchParams();
+    Object.entries(currentFilters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
+    });
 
-  const lower = text.toLowerCase();
-  const isApproved = lower.startsWith('согласовано');
-  const isRejected = lower.startsWith('отклонено');
-  const color = isApproved ? '#16a34a' : isRejected ? '#dc2626' : '#6366f1';
-  const bg = isApproved ? '#f0fdf4' : isRejected ? '#fef2f2' : '#eef2ff';
-  const shortLabel = isApproved ? '✓ Согласовано' : isRejected ? '✗ Отклонено' : '💬 Комментарий';
+    const qs = params.toString();
+    const response = await fetch(
+      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      }
+    );
 
-  const chip = (
-    <Chip
-      label={shortLabel}
-      size="small"
-      variant="filled"
-      sx={{
-        bgcolor: bg, color, fontWeight: 600, height: 28, maxWidth: '100%',
-        '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      }}
-    />
-  );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  }, []);
 
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
-      <Tooltip title={text} arrow placement="top" slotProps={{ tooltip: { sx: { maxWidth: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } } }}>
-        {chip}
-      </Tooltip>
-    </Box>
-  );
-};
+  const { data: rows = [], isLoading, error, refetch } = useQuery({
+    queryKey,
+    queryFn: fetchPromoData,
+  });
 
-// ─── Подсветка согласований ────────────────────────────────────────────────
-const renderAgreementSx = (value) => {
-  if (value == null || value === '' || value === '0') return {};
-  const v = String(value).toLowerCase();
-  if (v.startsWith('согласовано')) return { 
-    '& .MuiOutlinedInput-input': { color: '#16a34a', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#16a34a' },
-    '& .MuiInputBase-root': { bgcolor: '#f0fdf4' },
+  // setRows — для обратной совместимости: обновляет кеш React Query
+  const setRows = useCallback((newRowsOrUpdater) => {
+    queryClient.setQueryData(queryKey, (old) => {
+      if (typeof newRowsOrUpdater === 'function') {
+        return newRowsOrUpdater(old || []);
+      }
+      return newRowsOrUpdater;
+    });
+  }, [queryClient, queryKey]);
+
+  return {
+    rows,
+    setRows,
+    loading: isLoading,
+    error: error?.message || null,
+    refetch,
   };
-  if (v.startsWith('отклонено')) return { 
-    '& .MuiOutlinedInput-input': { color: '#dc2626', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#dc2626' },
-    '& .MuiInputBase-root': { bgcolor: '#fef2f2' },
-  };
-  return { 
-    '& .MuiOutlinedInput-input': { color: '#6366f1', fontStyle: 'italic' },
-    '& .MuiInputBase-root': { bgcolor: '#eef2ff' },
-  };
-};
-
-// ─── Компонент ─────────────────────────────────────────────────────────────
-export default function PromoEditDialog({
-  open, onClose, form, setForm, recalcPlan, recalcActual,
-  onSave, onDelete, saving, deleting,
-  meta, allSkuOptions, allNetworkOptions, investmentTypes,
-  role,
-}) {
-  const [editingFields, setEditingFields] = useState({});
-
-  const fetchSKUInfoForEdit = async (sku) => {
-    try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
-  };
-
-  useEffect(() => { setEditingFields({}); }, [open]);
-
-  if (!form) return null;
-
-  const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
-  const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
-  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
-
-  const handleFieldChange = (field) => (e) => {
-    const rawValue = e.target.value;
-    const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
-    if (planTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcPlan({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
-    } else if (actualTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcActual({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
-    } else {
-      setForm(prev => ({ ...prev, [field]: textFields.includes(field) ? rawValue : cleanValue }));
-    }
-  };
-
-  const handleFocus = (field) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
-  const handleBlur = (field) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
-
-  const getDisplayValue = (field, editable) => {
-    if (!editable) return form[field] != null ? fmtDisplay(form[field]) : '';
-    if (editingFields[field]) return form[field] != null ? String(form[field]) : '';
-    return form[field] != null ? fmtDisplay(form[field]) : '';
-  };
-
-  const isKAM = role === 'agreement1' || role === 'agreement2';
-
-  return (
-    <Dialog 
-      open={open} 
-      onClose={onClose} 
-      maxWidth="lg" 
-      fullWidth 
-      // Растягиваем окно почти на всю высоту экрана
-      PaperProps={{ sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } }}
-    >
-      
-      {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
-      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#ffffff', py: 1.5, px: 3 }}>
-        <Typography component="span" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
-          Редактирование: {form.network_name || 'Промо'}
-        </Typography>
-        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
-      </DialogTitle>
-  
-      {/* Уменьшили внутренний отступ формы (p: 2 вместо 3) */}
-      <DialogContent dividers sx={{ p: 2, overflow: 'auto' }}>
-        
-        {/* Уменьшили расстояние между тремя блоками (gap: 1.5 вместо 3) */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-  
-          {(() => {
-            const gridStyles = { 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', 
-              gap: 1.5, // Уменьшили расстояние между полями (было 2.5)
-            };
-  
-            const paperStyles = {
-              p: 2, // Уменьшили отступы внутри белых блоков (было 3)
-              borderRadius: 2, 
-              boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-            };
-  
-            // Стиль для заголовков блоков (mb: 1.5 вместо 2.5)
-            const titleStyles = { fontWeight: 600, mb: 1.5 };
-  
-            return (
-              <>
-                {/* ─── Блок 1: Основные данные ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#ffffff' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles }}>📋 Основные данные</Typography>
-                  
-                  <Box sx={gridStyles}>
-                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} />
-                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} />
-                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')}>
-                      {MONTH_OPTIONS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
-                    </TextField>
-                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
-  
-                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''}
-                      onChange={(e) => { const v = e.target.value; setForm(prev => ({ ...prev, sku: v })); if (v) fetchSKUInfoForEdit(v); }}>
-                      {allSkuOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')}>
-                      {meta.mechanics?.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')}>
-                      {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')}>
-                      {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
-                    </TextField>
-  
-                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    <AgreementChip label="Согласование 1" value={form.agreement1} />
-                    <AgreementChip label="Согласование 2" value={form.agreement2} />
-                  </Box>
-  
-                  {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
-                    <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.conditions || ''} onChange={updateField('conditions')} />
-                    <TextField label="Комментарии" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.comments || ''} onChange={updateField('comments')} />
-                  </Box>
-                </Paper>
-  
-                {/* ─── Блок 2: Плановые показатели ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1a237e' }}>📊 Плановые показатели</Typography>
-                  <Box sx={gridStyles}>
-                    {[
-                      { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
-                      { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
-                      { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
-                      { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
-                      { label: 'Сумма скидки', field: 'discount_amount', editable: true },
-                      { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
-                      { label: 'Цена контракта', field: 'contract_price', editable: true },
-                      { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
-                      { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
-                      { label: 'ROI план %', field: 'plan_roi', editable: false },
-                    ].map(({ label, field, editable }) => (
-                      <TextField key={field} label={label} type="text" size="small" fullWidth
-                        value={getDisplayValue(field, editable)}
-                        onChange={editable ? handleFieldChange(field) : undefined}
-                        onFocus={editable ? handleFocus(field) : undefined}
-                        onBlur={editable ? handleBlur(field) : undefined}
-                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
-                        sx={{ bgcolor: editable ? '#ffffff' : '#f0f0f0' }} 
-                      />
-                    ))}
-                  </Box>
-                </Paper>
-  
-                {/* ─── Блок 3: Фактические показатели ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
-                  <Box sx={gridStyles}>
-                    {[
-                      { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
-                      { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
-                      { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
-                      { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
-                      { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
-                      { label: 'Факт ROI %', field: 'actual_roi', editable: false },
-                      { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
-                      { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
-                    ].map(({ label, field, editable }) => (
-                      <TextField key={field} label={label} type="text" size="small" fullWidth
-                        value={getDisplayValue(field, editable)}
-                        onChange={editable ? handleFieldChange(field) : undefined}
-                        onFocus={editable ? handleFocus(field) : undefined}
-                        onBlur={editable ? handleBlur(field) : undefined}
-                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
-                        sx={{ bgcolor: editable ? '#ffffff' : '#e9ecea' }} 
-                      />
-                    ))}
-                  </Box>
-                </Paper>
-              </>
-            );
-          })()}
-  
-        </Box>
-      </DialogContent>
-  
-      {/* Уменьшили отступы в подвале (py: 1.5) */}
-      <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
-        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
-        <Box>
-          <Button onClick={onClose} sx={{ mr: 2 }}>Отмена</Button>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={onSave} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-        </Box>
-      </DialogActions>
-    </Dialog>
-  );
 }
 ```
 
@@ -5596,6 +5915,292 @@ export default function App() {
 }
 ```
 
+## File: frontend/src/components/PromoEditDialog.jsx
+```javascript
+import { useState, useEffect } from 'react';
+import {
+  Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
+  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
+} from '@mui/material';
+import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { promoAPI } from '../api/promo';
+
+// ─── Месяцы ────────────────────────────────────────────────────────────────
+const MONTH_OPTIONS = [
+  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 }, { label: 'Апрель', value: 4 },
+  { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 }, { label: 'Июль', value: 7 }, { label: 'Август', value: 8 },
+  { label: 'Сентябрь', value: 9 }, { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
+];
+
+// ─── Форматирование ────────────────────────────────────────────────────────
+const fmtDisplay = (v) => {
+  if (v == null || v === '') return '';
+  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
+const AgreementChip = ({ label, value }) => {
+  const text = value || '';
+  if (!text || text === '0') return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Chip label="Ожидает" size="small" variant="outlined" sx={{ borderColor: '#94a3b8', color: '#64748b', fontWeight: 500, height: 28 }} />
+    </Box>
+  );
+
+  const lower = text.toLowerCase();
+  const isApproved = lower.startsWith('согласовано');
+  const isRejected = lower.startsWith('отклонено');
+  const color = isApproved ? '#16a34a' : isRejected ? '#dc2626' : '#6366f1';
+  const bg = isApproved ? '#f0fdf4' : isRejected ? '#fef2f2' : '#eef2ff';
+  const shortLabel = isApproved ? '✓ Согласовано' : isRejected ? '✗ Отклонено' : '💬 Комментарий';
+
+  const chip = (
+    <Chip
+      label={shortLabel}
+      size="small"
+      variant="filled"
+      sx={{
+        bgcolor: bg, color, fontWeight: 600, height: 28, maxWidth: '100%',
+        '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }}
+    />
+  );
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Tooltip title={text} arrow placement="top" slotProps={{ tooltip: { sx: { maxWidth: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } } }}>
+        {chip}
+      </Tooltip>
+    </Box>
+  );
+};
+
+// ─── Подсветка согласований ────────────────────────────────────────────────
+const renderAgreementSx = (value) => {
+  if (value == null || value === '' || value === '0') return {};
+  const v = String(value).toLowerCase();
+  if (v.startsWith('согласовано')) return { 
+    '& .MuiOutlinedInput-input': { color: '#16a34a', fontWeight: 600 },
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#16a34a' },
+    '& .MuiInputBase-root': { bgcolor: '#f0fdf4' },
+  };
+  if (v.startsWith('отклонено')) return { 
+    '& .MuiOutlinedInput-input': { color: '#dc2626', fontWeight: 600 },
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#dc2626' },
+    '& .MuiInputBase-root': { bgcolor: '#fef2f2' },
+  };
+  return { 
+    '& .MuiOutlinedInput-input': { color: '#6366f1', fontStyle: 'italic' },
+    '& .MuiInputBase-root': { bgcolor: '#eef2ff' },
+  };
+};
+
+// ─── Компонент ─────────────────────────────────────────────────────────────
+export default function PromoEditDialog({
+  open, onClose, form, setForm, recalcPlan, recalcActual,
+  onSave, onDelete, saving, deleting,
+  meta, allSkuOptions, allNetworkOptions, investmentTypes,
+  role,
+}) {
+  const [editingFields, setEditingFields] = useState({});
+
+  const fetchSKUInfoForEdit = async (sku) => {
+    try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
+  };
+
+  useEffect(() => { setEditingFields({}); }, [open]);
+
+  if (!form) return null;
+
+  const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
+
+  const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
+  const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
+  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
+
+  const handleFieldChange = (field) => (e) => {
+    const rawValue = e.target.value;
+    const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
+    if (planTriggers.includes(field)) {
+      setForm(prev => { const calc = recalcPlan({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
+    } else if (actualTriggers.includes(field)) {
+      setForm(prev => { const calc = recalcActual({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
+    } else {
+      setForm(prev => ({ ...prev, [field]: textFields.includes(field) ? rawValue : cleanValue }));
+    }
+  };
+
+  const handleFocus = (field) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
+  const handleBlur = (field) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
+
+  const getDisplayValue = (field, editable) => {
+    if (!editable) return form[field] != null ? fmtDisplay(form[field]) : '';
+    if (editingFields[field]) return form[field] != null ? String(form[field]) : '';
+    return form[field] != null ? fmtDisplay(form[field]) : '';
+  };
+
+  const isKAM = role === 'agreement1' || role === 'agreement2';
+
+  return (
+    <Dialog 
+      open={open} 
+      onClose={onClose} 
+      maxWidth="lg" 
+      fullWidth 
+      // Растягиваем окно почти на всю высоту экрана
+      PaperProps={{ sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } }}
+    >
+      
+      {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
+      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#ffffff', py: 1.5, px: 3 }}>
+        <Typography component="span" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
+          Редактирование: {form.network_name || 'Промо'}
+        </Typography>
+        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+      </DialogTitle>
+  
+      {/* Уменьшили внутренний отступ формы (p: 2 вместо 3) */}
+      <DialogContent dividers sx={{ p: 2, overflow: 'auto' }}>
+        
+        {/* Уменьшили расстояние между тремя блоками (gap: 1.5 вместо 3) */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+  
+          {(() => {
+            const gridStyles = { 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', 
+              gap: 1.5, // Уменьшили расстояние между полями (было 2.5)
+            };
+  
+            const paperStyles = {
+              p: 2, // Уменьшили отступы внутри белых блоков (было 3)
+              borderRadius: 2, 
+              boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+            };
+  
+            // Стиль для заголовков блоков (mb: 1.5 вместо 2.5)
+            const titleStyles = { fontWeight: 600, mb: 1.5 };
+  
+            return (
+              <>
+                {/* ─── Блок 1: Основные данные ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#ffffff' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles }}>📋 Основные данные</Typography>
+                  
+                  <Box sx={gridStyles}>
+                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} />
+                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} />
+                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')}>
+                      {MONTH_OPTIONS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
+                    </TextField>
+                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
+  
+                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''}
+                      onChange={(e) => { const v = e.target.value; setForm(prev => ({ ...prev, sku: v })); if (v) fetchSKUInfoForEdit(v); }}>
+                      {allSkuOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')}>
+                      {meta.mechanics?.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')}>
+                      {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')}>
+                      {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
+                    </TextField>
+  
+                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
+                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
+                    <AgreementChip label="Согласование 1" value={form.agreement1} />
+                    <AgreementChip label="Согласование 2" value={form.agreement2} />
+                  </Box>
+  
+                  {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
+                    <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
+                      value={form.conditions || ''} onChange={updateField('conditions')} />
+                    <TextField label="Комментарии" size="small" fullWidth multiline minRows={1} maxRows={3}
+                      value={form.comments || ''} onChange={updateField('comments')} />
+                  </Box>
+                </Paper>
+  
+                {/* ─── Блок 2: Плановые показатели ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1a237e' }}>📊 Плановые показатели</Typography>
+                  <Box sx={gridStyles}>
+                    {[
+                      { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
+                      { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
+                      { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
+                      { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
+                      { label: 'Сумма скидки', field: 'discount_amount', editable: true },
+                      { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
+                      { label: 'Цена контракта', field: 'contract_price', editable: true },
+                      { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
+                      { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
+                      { label: 'ROI план %', field: 'plan_roi', editable: false },
+                    ].map(({ label, field, editable }) => (
+                      <TextField key={field} label={label} type="text" size="small" fullWidth
+                        value={getDisplayValue(field, editable)}
+                        onChange={editable ? handleFieldChange(field) : undefined}
+                        onFocus={editable ? handleFocus(field) : undefined}
+                        onBlur={editable ? handleBlur(field) : undefined}
+                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
+                        sx={{ bgcolor: editable ? '#ffffff' : '#f0f0f0' }} 
+                      />
+                    ))}
+                  </Box>
+                </Paper>
+  
+                {/* ─── Блок 3: Фактические показатели ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
+                  <Box sx={gridStyles}>
+                    {[
+                      { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
+                      { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
+                      { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
+                      { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
+                      { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
+                      { label: 'Факт ROI %', field: 'actual_roi', editable: false },
+                      { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
+                      { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
+                    ].map(({ label, field, editable }) => (
+                      <TextField key={field} label={label} type="text" size="small" fullWidth
+                        value={getDisplayValue(field, editable)}
+                        onChange={editable ? handleFieldChange(field) : undefined}
+                        onFocus={editable ? handleFocus(field) : undefined}
+                        onBlur={editable ? handleBlur(field) : undefined}
+                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
+                        sx={{ bgcolor: editable ? '#ffffff' : '#e9ecea' }} 
+                      />
+                    ))}
+                  </Box>
+                </Paper>
+              </>
+            );
+          })()}
+  
+        </Box>
+      </DialogContent>
+  
+      {/* Уменьшили отступы в подвале (py: 1.5) */}
+      <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
+        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" onClick={onClose}>Закрыть</Button>
+          <Button variant="contained" startIcon={<SaveIcon />} onClick={onSave} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Сохранить'}
+          </Button>
+        </Box>
+      </DialogActions>
+    </Dialog>
+  );
+}
+```
+
 ## File: frontend/src/pages/PromoAnalysis.jsx
 ```javascript
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -5781,7 +6386,6 @@ export default function PromoAnalysis({ role }) {
 
   const handleSave = async () => { 
     const result = await formHandleSave(); 
-    if (result.success) setEditDialogOpen(false);
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
 
@@ -6348,6 +6952,7 @@ import (
 	"backend/middleware"
 	"backend/models"
 	"backend/repository"
+	"backend/services"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
@@ -6605,7 +7210,10 @@ func SavePromo(c *gin.Context) {
 				}
 			}
 
-			calculatePromoFields(existing)
+			dto := services.MapToDTO(existing)
+			calcCtx := services.EnrichFromRepo(&dto)
+			calc := services.CalculateFields(&dto, calcCtx)
+			services.MergeCalculatedIntoMap(existing, calc)
 
 			rowsAffected, err := repository.UpdatePromo(idInt, existing, updatedAt)
 			if err != nil {
@@ -6633,7 +7241,10 @@ func SavePromo(c *gin.Context) {
 	}
 
 	// INSERT
-	calculatePromoFields(input)
+	dto := services.MapToDTO(input)
+	calcCtx := services.EnrichFromRepo(&dto)
+	calc := services.CalculateFields(&dto, calcCtx)
+	services.MergeCalculatedIntoMap(input, calc)
 	delete(input, "id")
 
 	newID, err := repository.InsertPromo(input)
@@ -6726,30 +7337,43 @@ func ApprovePromo(c *gin.Context) {
 		return
 	}
 
-	var value string
+	var status string
+	var comment string
+	var legacyValue string
 	switch req.Status {
 	case "comment":
 		if req.Comment == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "комментарий не может быть пустым"})
 			return
 		}
-		value = req.Comment
+		status = "commented"
+		comment = req.Comment
+		legacyValue = req.Comment
 	case "согласовано":
-		value = "согласовано"
+		status = "approved"
+		comment = req.Comment
+		legacyValue = "согласовано"
 		if req.Comment != "" {
-			value = "согласовано: " + req.Comment
+			legacyValue = "согласовано: " + req.Comment
 		}
 	case "отклонено":
-		value = "отклонено"
+		status = "rejected"
+		comment = req.Comment
+		legacyValue = "отклонено"
 		if req.Comment != "" {
-			value = "отклонено: " + req.Comment
+			legacyValue = "отклонено: " + req.Comment
 		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые status: comment, согласовано, отклонено"})
 		return
 	}
 
-	if err := repository.ApprovePromo(field, req.ID, value); err != nil {
+	agreementNum := 1
+	if roleStr == "agreement2" {
+		agreementNum = 2
+	}
+
+	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
@@ -6758,7 +7382,8 @@ func ApprovePromo(c *gin.Context) {
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,
-		"value", value,
+		"status", status,
+		"comment", comment,
 		"user", "system",
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
@@ -6768,6 +7393,9 @@ func ApprovePromo(c *gin.Context) {
 // ─── Approval Filters ─────────────────────────────────────────────────────
 
 func GetApprovalFilters(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
 	params := repository.ApprovalFilterParams{
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		KAM:            c.Query("kam"),
@@ -6776,6 +7404,7 @@ func GetApprovalFilters(c *gin.Context) {
 		MechFilter:     c.Query("mechanics"),
 		YearStr:        c.Query("year"),
 		MonthStr:       c.Query("month"),
+		Role:           roleStr,
 	}
 
 	networks, brands, mechanics, kams, err := repository.GetApprovalFilters(params)
@@ -6920,16 +7549,15 @@ export default function PromoApproval({ role, onDataChanged }) {
   const commentRefs = useRef({});
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
 
   // Загрузка справочников при смене фильтров (включая KAM из того же запроса)
   useEffect(() => {
+    // Не передаём brand/network/mechanics — иначе фильтруем сами себя
     promoAPI.getApprovalFilters({
       approval_status: appliedStatus,
       kam: appliedKam,
-      network_name: appliedNetwork,
-      brand: appliedBrand,
-      mechanics: appliedMechanics,
       year: appliedYear,
       month: appliedMonth,
     })
@@ -6940,7 +7568,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
+  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
   // Загрузка данных при изменении применённых фильтров (только после «Применить»)
   const fetchApprovals = useCallback(async () => {
@@ -7018,6 +7646,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       setApprovals(prev => prev.filter(a => a.id !== id));
       delete commentRefs.current[id];
       setSnackbar({ open: true, message: status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён', severity: 'success' });
+      setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
