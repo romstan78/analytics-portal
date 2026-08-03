@@ -534,6 +534,8 @@ func SavePromo(c *gin.Context) {
 
 			calculatePromoFields(existing)
 
+			// Используем updated_at от фронтенда для optimistic locking
+			// SQL Server сам конвертирует ISO 8601 строку в datetime
 			oldUpdatedAt := input["updated_at"]
 
 			setClauses := []string{}
