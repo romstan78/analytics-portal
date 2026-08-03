@@ -534,10 +534,6 @@ func SavePromo(c *gin.Context) {
 
 			calculatePromoFields(existing)
 
-			// Используем updated_at от фронтенда для optimistic locking
-			// SQL Server сам конвертирует ISO 8601 строку в datetime
-			oldUpdatedAt := input["updated_at"]
-
 			setClauses := []string{}
 			values := []interface{}{}
 			for _, field := range allPromoFields {
@@ -551,22 +547,15 @@ func SavePromo(c *gin.Context) {
 				}
 			}
 			setClauses = append(setClauses, "updated_at = GETDATE()")
-			values = append(values, idInt, oldUpdatedAt)
+			values = append(values, idInt)
 
-			result, err := config.DB.Exec(
-				"UPDATE dbo.tbl_PromoActivities SET "+strings.Join(setClauses, ", ")+" WHERE id = ? AND updated_at = ?",
+			_, err = config.DB.Exec(
+				"UPDATE dbo.tbl_PromoActivities SET "+strings.Join(setClauses, ", ")+" WHERE id = ?",
 				values...,
 			)
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-
-			rowsAffected, _ := result.RowsAffected()
-			if rowsAffected == 0 {
-				config.Logger.Info("promo_update_conflict", "id", idInt)
-				c.JSON(http.StatusConflict, gin.H{"error": "Запись изменена другим пользователем. Обновите страницу."})
 				return
 			}
 
