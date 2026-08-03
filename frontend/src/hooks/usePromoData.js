@@ -6,6 +6,19 @@ export function usePromoData(filters, refreshTrigger) {
   const [error, setError] = useState(null);
   const abortRef = useRef(null);
 
+  // Сравниваем фильтры через JSON — только реальные изменения триггерят запрос
+  const filtersRef = useRef(filters);
+  const [fetchTrigger, setFetchTrigger] = useState(0);
+
+  useEffect(() => {
+    const prev = JSON.stringify(filtersRef.current);
+    const next = JSON.stringify(filters);
+    if (prev !== next) {
+      filtersRef.current = filters;
+      setFetchTrigger(t => t + 1);
+    }
+  }, [filters]);
+
   const fetchData = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
 
@@ -17,7 +30,8 @@ export function usePromoData(filters, refreshTrigger) {
 
     try {
       const params = new URLSearchParams();
-      Object.entries(filters).forEach(([key, value]) => {
+      const currentFilters = filtersRef.current;
+      Object.entries(currentFilters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
           value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
         } else if (value !== '' && value != null) {
@@ -46,14 +60,14 @@ export function usePromoData(filters, refreshTrigger) {
     } finally {
       setLoading(false);
     }
-  }, [JSON.stringify(filters)]);
+  }, []); // ← стабильная ссылка, не пересоздаётся
 
   useEffect(() => {
     fetchData();
     return () => {
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [fetchData, refreshTrigger]);
+  }, [fetchTrigger, refreshTrigger, fetchData]);
 
   return { rows, setRows, loading, error, refetch: fetchData };
 }

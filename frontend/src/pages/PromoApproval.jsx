@@ -243,6 +243,8 @@ export default function PromoApproval({ role, onDataChanged }) {
       if (appliedYear) filtered = filtered.filter(a => a.year === parseInt(appliedYear));
       if (appliedMonth) filtered = filtered.filter(a => a.month === parseInt(appliedMonth));
 
+      // Очищаем старые DOM-рефы перед установкой новых данных
+      commentRefs.current = {};
       setApprovals(filtered);
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;

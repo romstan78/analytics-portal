@@ -18,7 +18,7 @@ import (
 // ─── Rate Limiter ───────────────────────────────────────────────────────────
 
 type RateLimiter struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	visitors map[string][]time.Time
 	limit    int
 	window   time.Duration
