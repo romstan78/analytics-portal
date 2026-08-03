@@ -459,63 +459,195 @@ func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 	r.Brand = nsBrand.String
 	r.BrandAS = nsBrandAS.String
 	r.SKU = nsSKU.String
-	r.Quarter = int(nQuarter.Int64)
+	if nQuarter.Valid {
+		v := int(nQuarter.Int64)
+		r.Quarter = &v
+	}
 	r.Mechanics = nsMechanics.String
 	r.GTNOpex = nsGTNOpex.String
-	r.BaselineUnits = nBaselineUnits.Float64
-	r.BaselineRub = nBaselineRub.Float64
-	r.PlanPromoUnits = nPlanPromoUnits.Float64
-	r.PlanPromoRub = nPlanPromoRub.Float64
-	r.PlanInvestmentsRub = nPlanInvestmentsRub.Float64
-	r.PlanPromoUpliftUnits = nPlanPromoUpliftUnits.Float64
-	r.PlanPromoUpliftRub = nPlanPromoUpliftRub.Float64
-	r.PlanPromoUpliftPctUnits = nPlanPromoUpliftPctUnits.Float64
-	r.PlanPromoUpliftPctRub = nPlanPromoUpliftPctRub.Float64
-	r.PlanInvestmentsPct = nPlanInvestmentsPct.Float64
-	r.PlanROI = nPlanROI.Float64
-	r.ContractPrice = nContractPrice.Float64
-	r.GM = nGM.Float64
+	if nBaselineUnits.Valid {
+		v := nBaselineUnits.Float64
+		r.BaselineUnits = &v
+	}
+	if nBaselineRub.Valid {
+		v := nBaselineRub.Float64
+		r.BaselineRub = &v
+	}
+	if nPlanPromoUnits.Valid {
+		v := nPlanPromoUnits.Float64
+		r.PlanPromoUnits = &v
+	}
+	if nPlanPromoRub.Valid {
+		v := nPlanPromoRub.Float64
+		r.PlanPromoRub = &v
+	}
+	if nPlanInvestmentsRub.Valid {
+		v := nPlanInvestmentsRub.Float64
+		r.PlanInvestmentsRub = &v
+	}
+	if nPlanPromoUpliftUnits.Valid {
+		v := nPlanPromoUpliftUnits.Float64
+		r.PlanPromoUpliftUnits = &v
+	}
+	if nPlanPromoUpliftRub.Valid {
+		v := nPlanPromoUpliftRub.Float64
+		r.PlanPromoUpliftRub = &v
+	}
+	if nPlanPromoUpliftPctUnits.Valid {
+		v := nPlanPromoUpliftPctUnits.Float64
+		r.PlanPromoUpliftPctUnits = &v
+	}
+	if nPlanPromoUpliftPctRub.Valid {
+		v := nPlanPromoUpliftPctRub.Float64
+		r.PlanPromoUpliftPctRub = &v
+	}
+	if nPlanInvestmentsPct.Valid {
+		v := nPlanInvestmentsPct.Float64
+		r.PlanInvestmentsPct = &v
+	}
+	if nPlanROI.Valid {
+		v := nPlanROI.Float64
+		r.PlanROI = &v
+	}
+	if nContractPrice.Valid {
+		v := nContractPrice.Float64
+		r.ContractPrice = &v
+	}
+	if nGM.Valid {
+		v := nGM.Float64
+		r.GM = &v
+	}
 	r.IDDirectum = nsIDDirectum.String
 	r.DSNumber = nsDSNumber.String
-	r.DiscountAmount = nDiscountAmount.Float64
+	if nDiscountAmount.Valid {
+		v := nDiscountAmount.Float64
+		r.DiscountAmount = &v
+	}
 	r.Conditions = nsConditions.String
 	r.Comments = nsComments.String
 	r.EcomSegment = nsEcomSegment.String
-	r.TotalPharmacies = int(nTotalPharmacies.Int64)
-	r.PromoPharmacies = int(nPromoPharmacies.Int64)
+	if nTotalPharmacies.Valid {
+		v := int(nTotalPharmacies.Int64)
+		r.TotalPharmacies = &v
+	}
+	if nPromoPharmacies.Valid {
+		v := int(nPromoPharmacies.Int64)
+		r.PromoPharmacies = &v
+	}
 	r.Status = nsStatus.String
 	r.Date = nsDate.String
 	r.KeyRegion = nsKeyRegion.String
 	r.Top20Segment = nsTop20Segment.String
-	r.OlapPrice = nOlapPrice.Float64
-	r.PlanPromoCipOlap = nPlanPromoCipOlap.Float64
-	r.FactPromoCipOlap = nFactPromoCipOlap.Float64
-	r.PlanPromoUpliftCipOlap = nPlanPromoUpliftCipOlap.Float64
-	r.FactPromoUpliftCipOlap = nFactPromoUpliftCipOlap.Float64
-	r.ActualPromoSalesUnits = nActualPromoSalesUnits.Float64
-	r.ActualInvestments = nActualInvestments.Float64
-	r.ActualPromoRub = nActualPromoRub.Float64
-	r.ActualPromoUpliftUnits = nActualPromoUpliftUnits.Float64
-	r.ActualPromoUpliftRub = nActualPromoUpliftRub.Float64
-	r.ActualExternalEcomUnits = nActualExternalEcomUnits.Float64
-	r.ActualCorrectedBaseline = nActualCorrectedBaseline.Float64
+	if nOlapPrice.Valid {
+		v := nOlapPrice.Float64
+		r.OlapPrice = &v
+	}
+	if nPlanPromoCipOlap.Valid {
+		v := nPlanPromoCipOlap.Float64
+		r.PlanPromoCipOlap = &v
+	}
+	if nFactPromoCipOlap.Valid {
+		v := nFactPromoCipOlap.Float64
+		r.FactPromoCipOlap = &v
+	}
+	if nPlanPromoUpliftCipOlap.Valid {
+		v := nPlanPromoUpliftCipOlap.Float64
+		r.PlanPromoUpliftCipOlap = &v
+	}
+	if nFactPromoUpliftCipOlap.Valid {
+		v := nFactPromoUpliftCipOlap.Float64
+		r.FactPromoUpliftCipOlap = &v
+	}
+	if nActualPromoSalesUnits.Valid {
+		v := nActualPromoSalesUnits.Float64
+		r.ActualPromoSalesUnits = &v
+	}
+	if nActualInvestments.Valid {
+		v := nActualInvestments.Float64
+		r.ActualInvestments = &v
+	}
+	if nActualPromoRub.Valid {
+		v := nActualPromoRub.Float64
+		r.ActualPromoRub = &v
+	}
+	if nActualPromoUpliftUnits.Valid {
+		v := nActualPromoUpliftUnits.Float64
+		r.ActualPromoUpliftUnits = &v
+	}
+	if nActualPromoUpliftRub.Valid {
+		v := nActualPromoUpliftRub.Float64
+		r.ActualPromoUpliftRub = &v
+	}
+	if nActualExternalEcomUnits.Valid {
+		v := nActualExternalEcomUnits.Float64
+		r.ActualExternalEcomUnits = &v
+	}
+	if nActualCorrectedBaseline.Valid {
+		v := nActualCorrectedBaseline.Float64
+		r.ActualCorrectedBaseline = &v
+	}
 	r.Agreement1 = nsAgreement1.String
 	r.Agreement2 = nsAgreement2.String
-	r.NetPromoUpliftRub = nNetPromoUpliftRub.Float64
-	r.NetPromoUpliftPct = nNetPromoUpliftPct.Float64
-	r.ActualInvestmentsPct = nActualInvestmentsPct.Float64
-	r.ActualROI = nActualROI.Float64
-	r.ActualPromoRubWoEcom = nActualPromoRubWoEcom.Float64
-	r.ActualPromoUpliftUnitsWoEcom = nActualPromoUpliftUnitsWoEcom.Float64
-	r.ActualPromoUpliftRubWoEcom = nActualPromoUpliftRubWoEcom.Float64
-	r.NetPromoUpliftRubWoEcom = nNetPromoUpliftRubWoEcom.Float64
-	r.NetPromoUpliftPctWoEcom = nNetPromoUpliftPctWoEcom.Float64
-	r.ActualInvestmentsPctWoEcom = nActualInvestmentsPctWoEcom.Float64
-	r.ActualROIWoEcom = nActualROIWoEcom.Float64
-	r.PlanVsFactRub = nPlanVsFactRub.Float64
-	r.PlanVsFactInvestments = nPlanVsFactInvestments.Float64
-	r.TurnoverPerPoint = nTurnoverPerPoint.Float64
-	r.TurnoverPerPointPromo = nTurnoverPerPointPromo.Float64
+	if nNetPromoUpliftRub.Valid {
+		v := nNetPromoUpliftRub.Float64
+		r.NetPromoUpliftRub = &v
+	}
+	if nNetPromoUpliftPct.Valid {
+		v := nNetPromoUpliftPct.Float64
+		r.NetPromoUpliftPct = &v
+	}
+	if nActualInvestmentsPct.Valid {
+		v := nActualInvestmentsPct.Float64
+		r.ActualInvestmentsPct = &v
+	}
+	if nActualROI.Valid {
+		v := nActualROI.Float64
+		r.ActualROI = &v
+	}
+	if nActualPromoRubWoEcom.Valid {
+		v := nActualPromoRubWoEcom.Float64
+		r.ActualPromoRubWoEcom = &v
+	}
+	if nActualPromoUpliftUnitsWoEcom.Valid {
+		v := nActualPromoUpliftUnitsWoEcom.Float64
+		r.ActualPromoUpliftUnitsWoEcom = &v
+	}
+	if nActualPromoUpliftRubWoEcom.Valid {
+		v := nActualPromoUpliftRubWoEcom.Float64
+		r.ActualPromoUpliftRubWoEcom = &v
+	}
+	if nNetPromoUpliftRubWoEcom.Valid {
+		v := nNetPromoUpliftRubWoEcom.Float64
+		r.NetPromoUpliftRubWoEcom = &v
+	}
+	if nNetPromoUpliftPctWoEcom.Valid {
+		v := nNetPromoUpliftPctWoEcom.Float64
+		r.NetPromoUpliftPctWoEcom = &v
+	}
+	if nActualInvestmentsPctWoEcom.Valid {
+		v := nActualInvestmentsPctWoEcom.Float64
+		r.ActualInvestmentsPctWoEcom = &v
+	}
+	if nActualROIWoEcom.Valid {
+		v := nActualROIWoEcom.Float64
+		r.ActualROIWoEcom = &v
+	}
+	if nPlanVsFactRub.Valid {
+		v := nPlanVsFactRub.Float64
+		r.PlanVsFactRub = &v
+	}
+	if nPlanVsFactInvestments.Valid {
+		v := nPlanVsFactInvestments.Float64
+		r.PlanVsFactInvestments = &v
+	}
+	if nTurnoverPerPoint.Valid {
+		v := nTurnoverPerPoint.Float64
+		r.TurnoverPerPoint = &v
+	}
+	if nTurnoverPerPointPromo.Valid {
+		v := nTurnoverPerPointPromo.Float64
+		r.TurnoverPerPointPromo = &v
+	}
 	r.UpdatedAt = nsUpdatedAt.String
 
 	return &r, nil
@@ -700,6 +832,9 @@ type ApprovalParams struct {
 	KAM               string
 	ApprovalStatus    string
 	YearStr, MonthStr string
+	Network           string
+	Brand             string
+	Mechanics         string
 }
 
 func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
@@ -743,6 +878,21 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	if params.KAM != "" {
 		query += " AND p.kam = ?"
 		args = append(args, params.KAM)
+	}
+
+	if params.Network != "" {
+		query += " AND p.network_name = ?"
+		args = append(args, params.Network)
+	}
+
+	if params.Brand != "" {
+		query += " AND p.brand_as = ?"
+		args = append(args, params.Brand)
+	}
+
+	if params.Mechanics != "" {
+		query += " AND p.mechanics = ?"
+		args = append(args, params.Mechanics)
 	}
 
 	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга

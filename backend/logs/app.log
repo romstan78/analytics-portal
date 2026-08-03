@@ -401,3 +401,6 @@
 {"time":"2026-08-03T17:18:35.289184+07:00","level":"INFO","msg":"promo_updated","id":76862,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"Эркафарм АС","user":"system","timestamp":"2026-08-03T17:18:35+07:00"}
 {"time":"2026-08-03T17:19:40.709282+07:00","level":"INFO","msg":"promo_created","id":79348,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"OZON","year":2027,"month":1,"plan_units":5500,"plan_rub":6688000,"user":"system","timestamp":"2026-08-03T17:19:40+07:00"}
 {"time":"2026-08-03T17:20:18.412189+07:00","level":"INFO","msg":"promo_approved","id":79348,"field":"agreement1","value":"это мы еще посмотрим","user":"system","timestamp":"2026-08-03T17:20:18+07:00"}
+{"time":"2026-08-03T17:48:18.571631+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T17:48:18+07:00"}
+{"time":"2026-08-03T17:48:45.952624+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T17:48:45+07:00"}
+{"time":"2026-08-03T18:02:45.899098+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T18:02:45+07:00"}

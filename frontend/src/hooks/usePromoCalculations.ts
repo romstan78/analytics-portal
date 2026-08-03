@@ -1,7 +1,23 @@
 import { useCallback } from 'react';
+import type { PromoFormValues } from './usePromoForm';
 
-export function usePromoCalculations(form) {
-  const recalcPlan = useCallback((updates) => {
+interface PlanFields {
+  plan_promo_rub: string;
+  plan_promo_uplift_units: string;
+  plan_promo_uplift_rub: string;
+  plan_roi: string;
+  baseline_rub: string;
+}
+
+interface ActualFields {
+  actual_promo_rub: string;
+  actual_promo_uplift_units: string;
+  actual_promo_uplift_rub: string;
+  actual_roi: string;
+}
+
+export function usePromoCalculations(form: PromoFormValues) {
+  const recalcPlan = useCallback((updates: Partial<PromoFormValues>): PlanFields => {
     const f = { ...form, ...updates };
     const ppu = parseFloat(f.plan_promo_units) || 0;
     const cp = parseFloat(f.contract_price) || 0;
@@ -22,7 +38,7 @@ export function usePromoCalculations(form) {
     };
   }, [form]);
 
-  const recalcActual = useCallback((updates) => {
+  const recalcActual = useCallback((updates: Partial<PromoFormValues>): ActualFields => {
     const f = { ...form, ...updates };
     const afu = parseFloat(f.actual_promo_sales_units) || 0;
     const cp = parseFloat(f.contract_price) || 0;

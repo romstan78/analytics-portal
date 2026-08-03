@@ -86,6 +86,7 @@ export default function PromoEditDialog({
   role,
 }) {
   const [editingFields, setEditingFields] = useState({});
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const fetchSKUInfoForEdit = async (sku) => {
     try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
@@ -122,7 +123,15 @@ export default function PromoEditDialog({
     return form[field] != null ? fmtDisplay(form[field]) : '';
   };
 
-  const isKAM = role === 'agreement1' || role === 'agreement2';
+  const isApprover = role === 'agreement1' || role === 'agreement2';
+
+  const handleSaveClick = () => {
+    if (isApprover) {
+      setConfirmOpen(true);
+    } else {
+      onSave();
+    }
+  };
 
   return (
     <Dialog 
@@ -272,11 +281,35 @@ export default function PromoEditDialog({
         <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button variant="outlined" onClick={onClose}>Закрыть</Button>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={onSave} disabled={saving}>
+          <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving}>
             {saving ? 'Сохранение...' : 'Сохранить'}
           </Button>
         </Box>
       </DialogActions>
+
+      {/* ─── Подтверждение для согласующих ──────────────────────── */}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Подтверждение изменений</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mt: 1 }}>
+            Вы вносите изменения в параметры промо-акции в роли согласующего.
+            Вы уверены, что хотите сохранить изменения?
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button variant="outlined" onClick={() => setConfirmOpen(false)}>Отмена</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => {
+              setConfirmOpen(false);
+              onSave();
+            }}
+          >
+            Подтвердить и сохранить
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

@@ -21,7 +21,7 @@ import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
-import { usePromoCalculations } from '../hooks/usePromoCalculations';
+import { usePromoCalculations } from '../hooks/usePromoCalculations.ts';
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';

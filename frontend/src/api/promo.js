@@ -135,6 +135,9 @@ export const promoAPI = {
     else qs.set('approval_status', 'pending');
     if (params.year) qs.set('year', params.year);
     if (params.month) qs.set('month', params.month);
+    if (params.network_name) qs.set('network_name', params.network_name);
+    if (params.brand) qs.set('brand', params.brand);
+    if (params.mechanics) qs.set('mechanics', params.mechanics);
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
   },
 

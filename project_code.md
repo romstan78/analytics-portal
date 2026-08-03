@@ -40,10 +40,10 @@ backend/
     hash_password.go
   config/
     auth.go
+    cache.go
     db.go
   handlers/
     auth.go
-    promo_utils.go
     promo.go
     sales.go
   middleware/
@@ -79,8 +79,10 @@ frontend/
     hooks/
       usePromoCalculations.js
       usePromoData.js
+      usePromoData.ts
       usePromoFilters.js
       usePromoForm.js
+      usePromoForm.ts
     pages/
       Home.jsx
       InternetSales.jsx
@@ -98,6 +100,7 @@ frontend/
   eslint.config.js
   index.html
   package.json
+  tsconfig.json
   vite.config.js
 docker-compose.yml
 ```
@@ -139,6 +142,67 @@ func main() {
 
 	fmt.Println(string(hash))
 }
+```
+
+## File: backend/config/cache.go
+```go
+package config
+
+import (
+	"sync"
+	"time"
+)
+
+// CacheEntry — одна запись в кэше.
+type CacheEntry struct {
+	Data      interface{}
+	ExpiresAt time.Time
+}
+
+// InMemoryCache — простой потокобезопасный кэш с TTL.
+type InMemoryCache struct {
+	mu    sync.RWMutex
+	items map[string]CacheEntry
+}
+
+// NewInMemoryCache создаёт новый кэш.
+func NewInMemoryCache() *InMemoryCache {
+	return &InMemoryCache{
+		items: make(map[string]CacheEntry),
+	}
+}
+
+// Get возвращает значение из кэша, если оно не истекло.
+func (c *InMemoryCache) Get(key string) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.items[key]
+	if !ok || time.Now().After(entry.ExpiresAt) {
+		return nil, false
+	}
+	return entry.Data, true
+}
+
+// Set сохраняет значение в кэш с указанным TTL.
+func (c *InMemoryCache) Set(key string, data interface{}, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items[key] = CacheEntry{
+		Data:      data,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+}
+
+// FiltersCache — глобальный кэш для значений фильтров.
+// Инициализируется автоматически при старте.
+var FiltersCache *InMemoryCache
+
+func init() {
+	FiltersCache = NewInMemoryCache()
+}
+
+// FilterCacheTTL — 5 минут.
+const FilterCacheTTL = 5 * time.Minute
 ```
 
 ## File: backend/config/db.go
@@ -423,419 +487,6 @@ func GetUserByUsername(username string) (*UserRecord, error) {
 }
 ```
 
-## File: backend/services/promo_service.go
-```go
-package services
-
-import (
-	"fmt"
-	"math"
-	"strconv"
-	"time"
-
-	"backend/repository"
-)
-
-// PromoInputDTO — типизированная структура для входных данных промо-акции.
-// Заменяет map[string]interface{} в SavePromo и calculatePromoFields.
-type PromoInputDTO struct {
-	// Основные поля
-	NetworkName     string  `json:"network_name"`
-	KAM             string  `json:"kam"`
-	Brand           string  `json:"brand"`
-	BrandAS         string  `json:"brand_as"`
-	SKU             string  `json:"sku"`
-	Year            int     `json:"year"`
-	Month           int     `json:"month"`
-	Quarter         int     `json:"quarter"`
-	Mechanics       string  `json:"mechanics"`
-	GTNOpex         string  `json:"gtn_opex"`
-	IDDirectum      string  `json:"id_directum"`
-	DSNumber        string  `json:"ds_number"`
-	DiscountAmount  float64 `json:"discount_amount"`
-	Conditions      string  `json:"conditions"`
-	Comments        string  `json:"comments"`
-	EcomSegment     string  `json:"ecom_segment"`
-	TotalPharmacies int     `json:"total_pharmacies"`
-	PromoPharmacies int     `json:"promo_pharmacies"`
-	Status          string  `json:"status"`
-	Date            string  `json:"date"`
-
-	// Плановые показатели
-	BaselineUnits      float64 `json:"baseline_units"`
-	BaselineRub        float64 `json:"baseline_rub"`
-	PlanPromoUnits     float64 `json:"plan_promo_units"`
-	PlanPromoRub       float64 `json:"plan_promo_rub"`
-	PlanInvestmentsRub float64 `json:"plan_investments_rub"`
-	ContractPrice      float64 `json:"contract_price"`
-	GM                 float64 `json:"gm"`
-
-	// Ключевой регион и сегмент (из Geo-маппинга, если не заданы)
-	KeyRegion    string `json:"key_region"`
-	Top20Segment string `json:"top20_segment"`
-
-	// OLAP цена
-	OlapPrice float64 `json:"olap_price"`
-
-	// Фактические показатели
-	ActualPromoSalesUnits   float64 `json:"actual_promo_sales_units"`
-	ActualPromoRub          float64 `json:"actual_promo_rub"`
-	ActualInvestments       float64 `json:"actual_investments"`
-	ActualPromoUpliftUnits  float64 `json:"actual_promo_uplift_units"`
-	ActualPromoUpliftRub    float64 `json:"actual_promo_uplift_rub"`
-	ActualExternalEcomUnits float64 `json:"actual_external_ecom_units"`
-	ActualCorrectedBaseline float64 `json:"actual_corrected_baseline"`
-	Agreement1              string  `json:"agreement1"`
-	Agreement2              string  `json:"agreement2"`
-}
-
-// CalculatedFields — результат вычислений.
-type CalculatedFields struct {
-	Year                         int     `json:"year"`
-	Month                        int     `json:"month"`
-	Quarter                      int     `json:"quarter"`
-	GM                           float64 `json:"gm"`
-	PlanPromoRub                 float64 `json:"plan_promo_rub"`
-	PlanPromoUpliftUnits         float64 `json:"plan_promo_uplift_units"`
-	PlanPromoUpliftRub           float64 `json:"plan_promo_uplift_rub"`
-	PlanPromoUpliftPctUnits      float64 `json:"plan_promo_uplift_pct_units"`
-	PlanPromoUpliftPctRub        float64 `json:"plan_promo_uplift_pct_rub"`
-	PlanInvestmentsPct           float64 `json:"plan_investments_pct"`
-	PlanROI                      float64 `json:"plan_roi"`
-	BaselineRub                  float64 `json:"baseline_rub"`
-	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
-	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
-	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
-	ActualROI                    float64 `json:"actual_roi"`
-	ActualPromoRubWoEcom         float64 `json:"actual_promo_rub_wo_ecom"`
-	ActualPromoUpliftUnitsWoEcom float64 `json:"actual_promo_uplift_units_wo_ecom"`
-	ActualPromoUpliftRubWoEcom   float64 `json:"actual_promo_uplift_rub_wo_ecom"`
-	NetPromoUpliftRubWoEcom      float64 `json:"net_promo_uplift_rub_wo_ecom"`
-	NetPromoUpliftPctWoEcom      float64 `json:"net_promo_uplift_pct_wo_ecom"`
-	ActualInvestmentsPctWoEcom   float64 `json:"actual_investments_pct_wo_ecom"`
-	ActualROIWoEcom              float64 `json:"actual_roi_wo_ecom"`
-	PlanVsFactRub                float64 `json:"plan_vs_fact_rub"`
-	PlanVsFactInvestments        float64 `json:"plan_vs_fact_investments"`
-	TurnoverPerPoint             float64 `json:"turnover_per_point"`
-	TurnoverPerPointPromo        float64 `json:"turnover_per_point_promo"`
-	PlanPromoCipOlap             float64 `json:"plan_promo_cip_olap"`
-	FactPromoCipOlap             float64 `json:"fact_promo_cip_olap"`
-	PlanPromoUpliftCipOlap       float64 `json:"plan_promo_uplift_cip_olap"`
-	FactPromoUpliftCipOlap       float64 `json:"fact_promo_uplift_cip_olap"`
-	Date                         string  `json:"date"`
-	OlapPrice                    float64 `json:"olap_price"`
-}
-
-// CalculationContext — контекст с данными, полученными от репозитория,
-// которые нужны для расчета, но не пришли от клиента.
-type CalculationContext struct {
-	GM           float64
-	KeyRegion    string
-	Top20Segment string
-	OlapPrice    float64
-}
-
-// EnrichFromRepo — заполняет недостающие данные из БД через репозиторий.
-// Раньше это делалось прямыми SQL-запросами в calculatePromoFields.
-func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
-	ctx := CalculationContext{}
-
-	// GM: если не задан — ищем последнюю запись по SKU
-	if input.GM == 0 {
-		lastData, err := repository.GetLastSKUData(input.SKU)
-		if err == nil && lastData != nil && lastData.GM != 0 {
-			ctx.GM = lastData.GM
-		} else {
-			ctx.GM = 1 // fallback по умолчанию
-		}
-	} else {
-		ctx.GM = input.GM
-	}
-
-	// KeyRegion / Top20Segment: если не заданы — ищем из Geo-маппинга
-	if input.KeyRegion == "" || input.Top20Segment == "" {
-		geo, err := repository.GetNetworkGeoMapping(input.NetworkName)
-		if err == nil && geo != nil {
-			if input.KeyRegion == "" && geo.KeyRegion != "" {
-				input.KeyRegion = geo.KeyRegion
-			}
-			if input.Top20Segment == "" && geo.Top20Segment != "" {
-				input.Top20Segment = geo.Top20Segment
-			}
-		}
-	}
-	ctx.KeyRegion = input.KeyRegion
-	ctx.Top20Segment = input.Top20Segment
-
-	// OLAP price
-	if input.OlapPrice == 0 {
-		lastData, err := repository.GetLastSKUData(input.SKU)
-		if err == nil && lastData != nil && lastData.OlapPrice != 0 {
-			ctx.OlapPrice = lastData.OlapPrice
-		}
-	} else {
-		ctx.OlapPrice = input.OlapPrice
-	}
-
-	return ctx
-}
-
-// CalculateFields — чистая функция расчета всех вычисляемых полей.
-// Не делает запросов в БД, только математика.
-func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFields {
-	ppu := input.PlanPromoUnits
-	cp := input.ContractPrice
-	bu := input.BaselineUnits
-	pir := input.PlanInvestmentsRub
-	month := input.Month
-	year := input.Year
-	if year == 0 {
-		year = time.Now().Year()
-	}
-	if month == 0 {
-		month = int(time.Now().Month())
-	}
-
-	gm := ctx.GM
-	olap := ctx.OlapPrice
-
-	quarter := int(math.Ceil(float64(month) / 3))
-	planPromoRub := ppu * cp
-	planPromoUpliftUnits := ppu - bu
-	planPromoUpliftRub := planPromoUpliftUnits * cp
-
-	planPromoUpliftPctUnits := 0.0
-	if ppu > 0 {
-		planPromoUpliftPctUnits = (planPromoUpliftUnits / ppu) * 100
-	}
-	planPromoUpliftPctRub := 0.0
-	if planPromoRub > 0 {
-		planPromoUpliftPctRub = (planPromoUpliftRub / planPromoRub) * 100
-	}
-	planInvestmentsPct := 0.0
-	if planPromoRub > 0 {
-		planInvestmentsPct = (pir / planPromoRub) * 100
-	}
-	planROI := 0.0
-	if pir > 0 {
-		planROI = (planPromoUpliftRub/pir)*gm*100 - 100
-	}
-	baselineRub := bu * cp
-
-	afu := input.ActualPromoSalesUnits
-	afr := input.ActualPromoRub
-	afi := input.ActualInvestments
-	afupl := input.ActualPromoUpliftUnits
-	afupr := input.ActualPromoUpliftRub
-	afeu := input.ActualExternalEcomUnits
-	acb := input.ActualCorrectedBaseline
-	ph := float64(input.PromoPharmacies)
-	if ph == 0 {
-		ph = 1
-	}
-
-	netPromoUpliftRub := afupr * gm
-	netPromoUpliftPct := 0.0
-	if afr > 0 {
-		netPromoUpliftPct = (netPromoUpliftRub / afr) * 100
-	}
-	actualInvestmentsPct := 0.0
-	if afr > 0 {
-		actualInvestmentsPct = (afi / afr) * 100
-	}
-	actualROI := 0.0
-	if afi > 0 {
-		actualROI = (afupr/afi)*gm*100 - 100
-	}
-
-	actualPromoRubWoEcom := afr - (afeu * cp)
-	actualPromoUpliftUnitsWoEcom := afupl - afeu
-	actualPromoUpliftRubWoEcom := actualPromoUpliftUnitsWoEcom * cp
-	netPromoUpliftRubWoEcom := actualPromoUpliftRubWoEcom * gm
-	netPromoUpliftPctWoEcom := 0.0
-	if actualPromoRubWoEcom > 0 {
-		netPromoUpliftPctWoEcom = (netPromoUpliftRubWoEcom / actualPromoRubWoEcom) * 100
-	}
-	actualInvestmentsPctWoEcom := 0.0
-	if actualPromoRubWoEcom > 0 {
-		actualInvestmentsPctWoEcom = (afi / actualPromoRubWoEcom) * 100
-	}
-	actualROIWoEcom := 0.0
-	if afi > 0 {
-		actualROIWoEcom = (actualPromoUpliftRubWoEcom/afi)*gm*100 - 100
-	}
-
-	planVsFactRub := 0.0
-	if planPromoRub > 0 {
-		planVsFactRub = (afr / planPromoRub) * 100
-	}
-	planVsFactInvestments := 0.0
-	if pir > 0 {
-		planVsFactInvestments = (afi / pir) * 100
-	}
-
-	turnoverPerPoint := acb / ph
-	turnoverPerPointPromo := afu / ph
-	planPromoCipOlap := ppu * olap
-	factPromoCipOlap := afu * olap
-	planPromoUpliftCipOlap := planPromoUpliftUnits * olap
-	factPromoUpliftCipOlap := afupl * olap
-
-	return CalculatedFields{
-		Year:                         year,
-		Month:                        month,
-		Quarter:                      quarter,
-		GM:                           gm,
-		PlanPromoRub:                 planPromoRub,
-		PlanPromoUpliftUnits:         planPromoUpliftUnits,
-		PlanPromoUpliftRub:           planPromoUpliftRub,
-		PlanPromoUpliftPctUnits:      planPromoUpliftPctUnits,
-		PlanPromoUpliftPctRub:        planPromoUpliftPctRub,
-		PlanInvestmentsPct:           planInvestmentsPct,
-		PlanROI:                      planROI,
-		BaselineRub:                  baselineRub,
-		NetPromoUpliftRub:            netPromoUpliftRub,
-		NetPromoUpliftPct:            netPromoUpliftPct,
-		ActualInvestmentsPct:         actualInvestmentsPct,
-		ActualROI:                    actualROI,
-		ActualPromoRubWoEcom:         actualPromoRubWoEcom,
-		ActualPromoUpliftUnitsWoEcom: actualPromoUpliftUnitsWoEcom,
-		ActualPromoUpliftRubWoEcom:   actualPromoUpliftRubWoEcom,
-		NetPromoUpliftRubWoEcom:      netPromoUpliftRubWoEcom,
-		NetPromoUpliftPctWoEcom:      netPromoUpliftPctWoEcom,
-		ActualInvestmentsPctWoEcom:   actualInvestmentsPctWoEcom,
-		ActualROIWoEcom:              actualROIWoEcom,
-		PlanVsFactRub:                planVsFactRub,
-		PlanVsFactInvestments:        planVsFactInvestments,
-		TurnoverPerPoint:             turnoverPerPoint,
-		TurnoverPerPointPromo:        turnoverPerPointPromo,
-		PlanPromoCipOlap:             planPromoCipOlap,
-		FactPromoCipOlap:             factPromoCipOlap,
-		PlanPromoUpliftCipOlap:       planPromoUpliftCipOlap,
-		FactPromoUpliftCipOlap:       factPromoUpliftCipOlap,
-		Date:                         PromoDate(year, month),
-		OlapPrice:                    olap,
-	}
-}
-
-// PromoDate — форматирует год и месяц в строку "YYYY-MM-01".
-func PromoDate(year, month int) string {
-	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
-}
-
-// ToMap — преобразует CalculatedFields в map[string]interface{} для обратной
-// совместимости с текущими repository.InsertPromo / UpdatePromo.
-// TODO: удалить после полного перехода на типизированные структуры.
-func (c CalculatedFields) ToMap() map[string]interface{} {
-	return map[string]interface{}{
-		"year":                              c.Year,
-		"month":                             c.Month,
-		"quarter":                           c.Quarter,
-		"gm":                                c.GM,
-		"plan_promo_rub":                    c.PlanPromoRub,
-		"plan_promo_uplift_units":           c.PlanPromoUpliftUnits,
-		"plan_promo_uplift_rub":             c.PlanPromoUpliftRub,
-		"plan_promo_uplift_pct_units":       c.PlanPromoUpliftPctUnits,
-		"plan_promo_uplift_pct_rub":         c.PlanPromoUpliftPctRub,
-		"plan_investments_pct":              c.PlanInvestmentsPct,
-		"plan_roi":                          c.PlanROI,
-		"baseline_rub":                      c.BaselineRub,
-		"net_promo_uplift_rub":              c.NetPromoUpliftRub,
-		"net_promo_uplift_pct":              c.NetPromoUpliftPct,
-		"actual_investments_pct":            c.ActualInvestmentsPct,
-		"actual_roi":                        c.ActualROI,
-		"actual_promo_rub_wo_ecom":          c.ActualPromoRubWoEcom,
-		"actual_promo_uplift_units_wo_ecom": c.ActualPromoUpliftUnitsWoEcom,
-		"actual_promo_uplift_rub_wo_ecom":   c.ActualPromoUpliftRubWoEcom,
-		"net_promo_uplift_rub_wo_ecom":      c.NetPromoUpliftRubWoEcom,
-		"net_promo_uplift_pct_wo_ecom":      c.NetPromoUpliftPctWoEcom,
-		"actual_investments_pct_wo_ecom":    c.ActualInvestmentsPctWoEcom,
-		"actual_roi_wo_ecom":                c.ActualROIWoEcom,
-		"plan_vs_fact_rub":                  c.PlanVsFactRub,
-		"plan_vs_fact_investments":          c.PlanVsFactInvestments,
-		"turnover_per_point":                c.TurnoverPerPoint,
-		"turnover_per_point_promo":          c.TurnoverPerPointPromo,
-		"plan_promo_cip_olap":               c.PlanPromoCipOlap,
-		"fact_promo_cip_olap":               c.FactPromoCipOlap,
-		"plan_promo_uplift_cip_olap":        c.PlanPromoUpliftCipOlap,
-		"fact_promo_uplift_cip_olap":        c.FactPromoUpliftCipOlap,
-		"date":                              c.Date,
-		"olap_price":                        c.OlapPrice,
-	}
-}
-
-// MapToDTO — преобразует map[string]interface{} в PromoInputDTO.
-// Используется для обратной совместимости в SavePromo.
-func MapToDTO(input map[string]interface{}) PromoInputDTO {
-	return PromoInputDTO{
-		NetworkName:             safeString(input, "network_name"),
-		KAM:                     safeString(input, "kam"),
-		Brand:                   safeString(input, "brand"),
-		BrandAS:                 safeString(input, "brand_as"),
-		SKU:                     safeString(input, "sku"),
-		Year:                    safeInt(input, "year"),
-		Month:                   safeInt(input, "month"),
-		Quarter:                 safeInt(input, "quarter"),
-		Mechanics:               safeString(input, "mechanics"),
-		GTNOpex:                 safeString(input, "gtn_opex"),
-		IDDirectum:              safeString(input, "id_directum"),
-		DSNumber:                safeString(input, "ds_number"),
-		DiscountAmount:          safeFloat(input, "discount_amount"),
-		Conditions:              safeString(input, "conditions"),
-		Comments:                safeString(input, "comments"),
-		EcomSegment:             safeString(input, "ecom_segment"),
-		TotalPharmacies:         safeInt(input, "total_pharmacies"),
-		PromoPharmacies:         safeInt(input, "promo_pharmacies"),
-		Status:                  safeString(input, "status"),
-		Date:                    safeString(input, "date"),
-		BaselineUnits:           safeFloat(input, "baseline_units"),
-		BaselineRub:             safeFloat(input, "baseline_rub"),
-		PlanPromoUnits:          safeFloat(input, "plan_promo_units"),
-		PlanPromoRub:            safeFloat(input, "plan_promo_rub"),
-		PlanInvestmentsRub:      safeFloat(input, "plan_investments_rub"),
-		ContractPrice:           safeFloat(input, "contract_price"),
-		GM:                      safeFloat(input, "gm"),
-		KeyRegion:               safeString(input, "key_region"),
-		Top20Segment:            safeString(input, "top20_segment"),
-		OlapPrice:               safeFloat(input, "olap_price"),
-		ActualPromoSalesUnits:   safeFloat(input, "actual_promo_sales_units"),
-		ActualPromoRub:          safeFloat(input, "actual_promo_rub"),
-		ActualInvestments:       safeFloat(input, "actual_investments"),
-		ActualPromoUpliftUnits:  safeFloat(input, "actual_promo_uplift_units"),
-		ActualPromoUpliftRub:    safeFloat(input, "actual_promo_uplift_rub"),
-		ActualExternalEcomUnits: safeFloat(input, "actual_external_ecom_units"),
-		ActualCorrectedBaseline: safeFloat(input, "actual_corrected_baseline"),
-		Agreement1:              safeString(input, "agreement1"),
-		Agreement2:              safeString(input, "agreement2"),
-	}
-}
-
-// MergeCalculatedIntoMap — сливает CalculatedFields в существующий map.
-func MergeCalculatedIntoMap(m map[string]interface{}, c CalculatedFields) {
-	for k, v := range c.ToMap() {
-		m[k] = v
-	}
-}
-
-// ─── helpers (копия из promo_utils.go для независимости) ───
-
-func safeFloat(input map[string]interface{}, key string) float64 {
-	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
-	return val
-}
-
-func safeInt(input map[string]interface{}, key string) int {
-	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
-	return val
-}
-
-func safeString(input map[string]interface{}, key string) string {
-	return fmt.Sprint(input[key])
-}
-
-// Выше нужны импорты "fmt" и "strconv", оставлены намеренно.
-```
-
 ## File: frontend/src/hooks/usePromoCalculations.js
 ```javascript
 import { useCallback } from 'react';
@@ -883,6 +534,341 @@ export function usePromoCalculations(form) {
 
   return { recalcPlan, recalcActual };
 }
+```
+
+## File: frontend/src/hooks/usePromoData.ts
+```typescript
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useCallback } from 'react';
+import type { PromoRow } from '../types/promo';
+
+// ─── Типы ────────────────────────────────────────────────────────────────────
+
+export interface PromoFilters {
+  yearFrom?: string;
+  yearTo?: string;
+  months?: string[];
+  kam?: string[];
+  brand?: string[];
+  sku?: string[];
+  network_name?: string[];
+  mechanics?: string[];
+  status?: string[];
+  channel?: string[];
+  [key: string]: string | string[] | undefined;
+}
+
+export interface UsePromoDataReturn {
+  rows: PromoRow[];
+  setRows: (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => void;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+// ─── Хук ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Хук для получения данных промо с использованием React Query.
+ */
+export function usePromoData(
+  filters: PromoFilters,
+  refreshTrigger: number
+): UsePromoDataReturn {
+  const queryClient = useQueryClient();
+  const filtersRef = useRef<PromoFilters>(filters);
+  filtersRef.current = filters;
+
+  const queryKey = ['promoData', filters, refreshTrigger] as const;
+
+  const fetchPromoData = useCallback(async (): Promise<PromoRow[]> => {
+    const currentFilters = filtersRef.current;
+    const params = new URLSearchParams();
+    Object.entries(currentFilters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
+    });
+
+    const qs = params.toString();
+    const response = await fetch(
+      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      }
+    );
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  }, []);
+
+  const { data: rows = [], isLoading, error, refetch } = useQuery<PromoRow[]>({
+    queryKey: queryKey as unknown as readonly unknown[],
+    queryFn: fetchPromoData,
+  });
+
+  // Обновление кэша React Query (для обратной совместимости)
+  const setRows = useCallback(
+    (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => {
+      queryClient.setQueryData(queryKey as unknown as readonly unknown[], (old: unknown) => {
+        const currentRows = (old as PromoRow[]) || [];
+        if (typeof newRowsOrUpdater === 'function') {
+          return newRowsOrUpdater(currentRows);
+        }
+        return newRowsOrUpdater;
+      });
+    },
+    [queryClient, queryKey]
+  );
+
+  return {
+    rows,
+    setRows,
+    loading: isLoading,
+    error: error?.message || null,
+    refetch,
+  };
+}
+```
+
+## File: frontend/src/hooks/usePromoForm.ts
+```typescript
+import { useState, useCallback } from 'react';
+import { promoAPI } from '../api/promo';
+import type { PromoRow } from '../types/promo';
+
+// ─── Типы ────────────────────────────────────────────────────────────────────
+
+/** Данные формы промо (могут быть строками из инпутов). */
+export interface PromoFormValues {
+  id: number | null;
+  network_name: string;
+  kam: string;
+  brand: string;
+  sku: string;
+  year: number;
+  month: number;
+  mechanics: string;
+  gtn_opex: string;
+  baseline_units: string;
+  baseline_rub: string;
+  plan_promo_units: string;
+  plan_promo_rub: string;
+  plan_promo_uplift_units: string;
+  plan_promo_uplift_rub: string;
+  plan_investments_rub: string;
+  contract_price: string;
+  plan_roi: string;
+  gm: string;
+  discount_amount: string;
+  actual_promo_sales_units: string;
+  actual_investments: string;
+  actual_promo_rub: string;
+  actual_promo_uplift_units: string;
+  actual_promo_uplift_rub: string;
+  actual_roi: string;
+  actual_external_ecom_units: string;
+  actual_corrected_baseline: string;
+  agreement1: string;
+  agreement2: string;
+  conditions: string;
+  comments: string;
+  id_directum: string;
+  ds_number: string;
+  total_pharmacies: string;
+  promo_pharmacies: string;
+  status: string;
+  updated_at: string | null;
+}
+
+interface UsePromoFormCallbacks {
+  onEditSuccess?: (id: number, data: Record<string, unknown>) => void;
+  onDeleteSuccess?: (id: number) => void;
+  onCreateSuccess?: () => void;
+}
+
+interface SaveResult {
+  success: boolean;
+  message: string;
+}
+
+// ─── Пустая форма ────────────────────────────────────────────────────────────
+const EMPTY_FORM: PromoFormValues = {
+  id: null, network_name: '', kam: '', brand: '', sku: '',
+  year: new Date().getFullYear(), month: new Date().getMonth() + 1,
+  mechanics: '', gtn_opex: '', baseline_units: '', baseline_rub: '',
+  plan_promo_units: '', plan_promo_rub: '', plan_promo_uplift_units: '',
+  plan_promo_uplift_rub: '', plan_investments_rub: '', contract_price: '',
+  plan_roi: '', gm: '', discount_amount: '',
+  actual_promo_sales_units: '', actual_investments: '', actual_promo_rub: '',
+  actual_promo_uplift_units: '', actual_promo_uplift_rub: '', actual_roi: '',
+  actual_external_ecom_units: '', actual_corrected_baseline: '',
+  agreement1: '', agreement2: '',
+  conditions: '', comments: '',
+  id_directum: '', ds_number: '',
+  total_pharmacies: '', promo_pharmacies: '',
+  status: '',
+  updated_at: null,
+};
+
+// ─── Хук ─────────────────────────────────────────────────────────────────────
+/**
+ * Хук управления формой промо-акции.
+ *
+ * Колбэки:
+ *   onEditSuccess(id, data) — после успешного редактирования
+ *   onDeleteSuccess(id)     — после успешного удаления
+ *   onCreateSuccess()       — после создания нового промо
+ */
+export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
+  const { onEditSuccess, onDeleteSuccess, onCreateSuccess } = callbacks;
+
+  const [form, setForm] = useState<PromoFormValues>({ ...EMPTY_FORM });
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
+  const handleRowClick = useCallback((row: PromoRow) => {
+    setForm({
+      id: row.id,
+      network_name: row.network_name ?? '',
+      kam: row.kam ?? '',
+      brand: row.brand_as ?? row.brand ?? '',
+      sku: row.sku ?? '',
+      year: row.year,
+      month: row.month ?? 0,
+      mechanics: row.mechanics ?? '',
+      gtn_opex: row.gtn_opex ?? '',
+      baseline_units: String(row.baseline_units ?? ''),
+      baseline_rub: String(row.baseline_rub ?? ''),
+      plan_promo_units: String(row.plan_promo_units ?? ''),
+      plan_promo_rub: String(row.plan_promo_rub ?? ''),
+      plan_promo_uplift_units: String(row.plan_promo_uplift_units ?? ''),
+      plan_promo_uplift_rub: String(row.plan_promo_uplift_rub ?? ''),
+      plan_investments_rub: String(row.plan_investments_rub ?? ''),
+      contract_price: String(row.contract_price ?? ''),
+      discount_amount: String(row.discount_amount ?? ''),
+      plan_roi: String(row.plan_roi ?? ''),
+      gm: String(row.gm ?? ''),
+      total_pharmacies: String(row.total_pharmacies ?? ''),
+      promo_pharmacies: String(row.promo_pharmacies ?? ''),
+      actual_promo_sales_units: String(row.actual_promo_sales_units ?? ''),
+      actual_investments: String(row.actual_investments ?? ''),
+      actual_promo_rub: String(row.actual_promo_rub ?? ''),
+      actual_promo_uplift_units: String(row.actual_promo_uplift_units ?? ''),
+      actual_promo_uplift_rub: String(row.actual_promo_uplift_rub ?? ''),
+      actual_roi: String(row.actual_roi ?? ''),
+      actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
+      actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
+      agreement1: row.agreement1 ?? '',
+      agreement2: row.agreement2 ?? '',
+      conditions: row.conditions ?? '',
+      comments: row.comments ?? '',
+      id_directum: row.id_directum ?? '',
+      ds_number: row.ds_number ?? '',
+      status: row.status ?? '',
+      updated_at: row.updated_at ?? null,
+    });
+    setEditMode(true);
+  }, []);
+
+  // ─── Сохранение (INSERT или UPDATE) ─────────────────────────────────────
+  const handleSave = useCallback(async (): Promise<SaveResult> => {
+    if (!form.sku || !form.network_name) {
+      return { success: false, message: '⚠️ Заполните Сеть и SKU' };
+    }
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        id: form.id || undefined,
+        network_name: form.network_name, kam: form.kam, brand: form.brand, brand_as: form.brand,
+        sku: form.sku, year: parseInt(String(form.year)), month: parseInt(String(form.month)),
+        mechanics: form.mechanics, gtn_opex: form.gtn_opex,
+        baseline_units: parseFloat(form.baseline_units) || null,
+        plan_promo_units: parseFloat(form.plan_promo_units) || null,
+        plan_investments_rub: parseFloat(form.plan_investments_rub) || null,
+        contract_price: parseFloat(form.contract_price) || null,
+        gm: parseFloat(form.gm) || null,
+        id_directum: form.id_directum || null,
+        ds_number: form.ds_number || null,
+        discount_amount: parseFloat(form.discount_amount) || null,
+        conditions: form.conditions || null,
+        comments: form.comments || null,
+        ecom_segment: (form as unknown as Record<string, unknown>).ecom_segment,
+        total_pharmacies: form.total_pharmacies !== '' ? parseInt(form.total_pharmacies) : null,
+        promo_pharmacies: form.promo_pharmacies !== '' ? parseInt(form.promo_pharmacies) : null,
+        actual_promo_sales_units: parseFloat(form.actual_promo_sales_units) || null,
+        actual_investments: parseFloat(form.actual_investments) || null,
+        actual_promo_rub: parseFloat(form.actual_promo_rub) || null,
+        actual_promo_uplift_units: parseFloat(form.actual_promo_uplift_units) || null,
+        actual_promo_uplift_rub: parseFloat(form.actual_promo_uplift_rub) || null,
+        actual_external_ecom_units: form.actual_external_ecom_units !== '' ? parseFloat(form.actual_external_ecom_units) : null,
+        actual_corrected_baseline: form.actual_corrected_baseline !== '' ? parseFloat(form.actual_corrected_baseline) : null,
+        agreement1: form.agreement1 || null,
+        agreement2: form.agreement2 || null,
+        status: form.status,
+        updated_at: form.updated_at,
+      };
+
+      const result = await promoAPI.save(payload);
+
+      if (result.data) {
+        setForm(prev => ({ ...prev, ...result.data, id: result.id }));
+      }
+
+      if (form.id && onEditSuccess && result.data) {
+        onEditSuccess(form.id, result.data);
+      } else if (!form.id && onCreateSuccess) {
+        onCreateSuccess();
+      }
+
+      return { success: true, message: '✅ Сохранено' };
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 409) {
+        return { success: false, message: '⚠️ Запись изменена другим пользователем. Обновите страницу.' };
+      }
+      const message = err instanceof Error ? err.message : 'Ошибка сохранения';
+      return { success: false, message: '❌ ' + message };
+    } finally {
+      setSaving(false);
+    }
+  }, [form, onEditSuccess, onCreateSuccess]);
+
+  // ─── Удаление (soft-delete) ─────────────────────────────────────────────
+  const handleDelete = useCallback(async (): Promise<SaveResult> => {
+    if (!form.id) return { success: false, message: 'Нет ID' };
+    setDeleting(true);
+    try {
+      await promoAPI.delete(form.id);
+      if (onDeleteSuccess) onDeleteSuccess(form.id);
+      return { success: true, message: '🗑️ Удалено' };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Ошибка удаления';
+      return { success: false, message: '❌ ' + message };
+    } finally {
+      setDeleting(false);
+    }
+  }, [form.id, onDeleteSuccess]);
+
+  // ─── Сброс формы ────────────────────────────────────────────────────────
+  const resetForm = useCallback(() => {
+    setForm({ ...EMPTY_FORM });
+    setEditMode(false);
+  }, []);
+
+  return {
+    form, setForm, editMode, saving, deleting,
+    handleRowClick, handleSave, handleDelete, resetForm,
+  };
+}
+
+export { EMPTY_FORM };
 ```
 
 ## File: frontend/src/types/promo.ts
@@ -1306,6 +1292,34 @@ export default defineConfig([
 </html>
 ```
 
+## File: frontend/tsconfig.json
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["src"]
+}
+```
+
 ## File: frontend/vite.config.js
 ```javascript
 import { defineConfig } from 'vite'
@@ -1425,34 +1439,6 @@ func ValidateRefreshToken(tokenStr string) (*Claims, error) {
 		return nil, errors.New("not a refresh token")
 	}
 	return claims, nil
-}
-```
-
-## File: backend/handlers/promo_utils.go
-```go
-package handlers
-
-import (
-	"fmt"
-	"strconv"
-)
-
-// safeFloat, safeInt, safeString — хелперы для безопасного извлечения
-// типизированных значений из map[string]interface{}. Используются
-// в promo.go для логирования и парсинга входных данных.
-
-func safeFloat(input map[string]interface{}, key string) float64 {
-	val, _ := strconv.ParseFloat(fmt.Sprint(input[key]), 64)
-	return val
-}
-
-func safeInt(input map[string]interface{}, key string) int {
-	val, _ := strconv.Atoi(fmt.Sprint(input[key]))
-	return val
-}
-
-func safeString(input map[string]interface{}, key string) string {
-	return fmt.Sprint(input[key])
 }
 ```
 
@@ -1753,891 +1739,552 @@ func GetDrilldown(c *gin.Context) {
 }
 ```
 
-## File: backend/repository/promo_repo.go
+## File: backend/services/promo_service.go
 ```go
-package repository
+package services
 
 import (
-	"database/sql"
 	"fmt"
-	"sort"
+	"math"
 	"strconv"
-	"strings"
 	"time"
 
-	"backend/config"
 	"backend/models"
+	"backend/repository"
 )
 
-// ─── Filters ────────────────────────────────────────────────────────────────
+// PromoInputDTO — типизированная структура для входных данных промо-акции.
+// Заменяет map[string]interface{} в SavePromo и calculatePromoFields.
+type PromoInputDTO struct {
+	// Основные поля
+	NetworkName     string  `json:"network_name"`
+	KAM             string  `json:"kam"`
+	Brand           string  `json:"brand"`
+	BrandAS         string  `json:"brand_as"`
+	SKU             string  `json:"sku"`
+	Year            int     `json:"year"`
+	Month           int     `json:"month"`
+	Quarter         int     `json:"quarter"`
+	Mechanics       string  `json:"mechanics"`
+	GTNOpex         string  `json:"gtn_opex"`
+	IDDirectum      string  `json:"id_directum"`
+	DSNumber        string  `json:"ds_number"`
+	DiscountAmount  float64 `json:"discount_amount"`
+	Conditions      string  `json:"conditions"`
+	Comments        string  `json:"comments"`
+	EcomSegment     string  `json:"ecom_segment"`
+	TotalPharmacies int     `json:"total_pharmacies"`
+	PromoPharmacies int     `json:"promo_pharmacies"`
+	Status          string  `json:"status"`
+	Date            string  `json:"date"`
 
-type PromoFilterParams struct {
-	YearFromStr, YearToStr                            string
-	Months                                            []string
-	Kams, Brands, SKUs, Networks, Mechanics, Statuses []string
+	// Плановые показатели
+	BaselineUnits      float64 `json:"baseline_units"`
+	BaselineRub        float64 `json:"baseline_rub"`
+	PlanPromoUnits     float64 `json:"plan_promo_units"`
+	PlanPromoRub       float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub float64 `json:"plan_investments_rub"`
+	ContractPrice      float64 `json:"contract_price"`
+	GM                 float64 `json:"gm"`
+
+	// Ключевой регион и сегмент (из Geo-маппинга, если не заданы)
+	KeyRegion    string `json:"key_region"`
+	Top20Segment string `json:"top20_segment"`
+
+	// OLAP цена
+	OlapPrice float64 `json:"olap_price"`
+
+	// Фактические показатели
+	ActualPromoSalesUnits   float64 `json:"actual_promo_sales_units"`
+	ActualPromoRub          float64 `json:"actual_promo_rub"`
+	ActualInvestments       float64 `json:"actual_investments"`
+	ActualPromoUpliftUnits  float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub    float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline float64 `json:"actual_corrected_baseline"`
+	Agreement1              string  `json:"agreement1"`
+	Agreement2              string  `json:"agreement2"`
 }
 
-func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
-	where := "WHERE deleted_at IS NULL"
-	args := []interface{}{}
-	if params.YearFromStr != "" {
-		if y, _ := strconv.Atoi(params.YearFromStr); true {
-			where += " AND year >= ?"
-			args = append(args, y)
-		}
-	}
-	if params.YearToStr != "" {
-		if y, _ := strconv.Atoi(params.YearToStr); true {
-			where += " AND year <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(params.Months) > 0 {
-		placeholders := make([]string, 0, len(params.Months))
-		for _, m := range params.Months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			where += " AND month IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-	return where, args
+// CalculatedFields — результат вычислений.
+type CalculatedFields struct {
+	Year                         int     `json:"year"`
+	Month                        int     `json:"month"`
+	Quarter                      int     `json:"quarter"`
+	GM                           float64 `json:"gm"`
+	PlanPromoRub                 float64 `json:"plan_promo_rub"`
+	PlanPromoUpliftUnits         float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub           float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits      float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub        float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct           float64 `json:"plan_investments_pct"`
+	PlanROI                      float64 `json:"plan_roi"`
+	BaselineRub                  float64 `json:"baseline_rub"`
+	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
+	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
+	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
+	ActualROI                    float64 `json:"actual_roi"`
+	ActualPromoRubWoEcom         float64 `json:"actual_promo_rub_wo_ecom"`
+	ActualPromoUpliftUnitsWoEcom float64 `json:"actual_promo_uplift_units_wo_ecom"`
+	ActualPromoUpliftRubWoEcom   float64 `json:"actual_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftRubWoEcom      float64 `json:"net_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftPctWoEcom      float64 `json:"net_promo_uplift_pct_wo_ecom"`
+	ActualInvestmentsPctWoEcom   float64 `json:"actual_investments_pct_wo_ecom"`
+	ActualROIWoEcom              float64 `json:"actual_roi_wo_ecom"`
+	PlanVsFactRub                float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments        float64 `json:"plan_vs_fact_investments"`
+	TurnoverPerPoint             float64 `json:"turnover_per_point"`
+	TurnoverPerPointPromo        float64 `json:"turnover_per_point_promo"`
+	PlanPromoCipOlap             float64 `json:"plan_promo_cip_olap"`
+	FactPromoCipOlap             float64 `json:"fact_promo_cip_olap"`
+	PlanPromoUpliftCipOlap       float64 `json:"plan_promo_uplift_cip_olap"`
+	FactPromoUpliftCipOlap       float64 `json:"fact_promo_uplift_cip_olap"`
+	Date                         string  `json:"date"`
+	OlapPrice                    float64 `json:"olap_price"`
 }
 
-func AddFilter(col string, values []string) (string, []interface{}) {
-	if len(values) == 0 {
-		return "", nil
-	}
-	placeholders := make([]string, 0, len(values))
-	newArgs := []interface{}{}
-	for _, v := range values {
-		if v != "" {
-			placeholders = append(placeholders, "?")
-			newArgs = append(newArgs, v)
-		}
-	}
-	if len(placeholders) > 0 {
-		return " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")", newArgs
-	}
-	return "", nil
+// CalculationContext — контекст с данными, полученными от репозитория,
+// которые нужны для расчета, но не пришли от клиента.
+type CalculationContext struct {
+	GM           float64
+	KeyRegion    string
+	Top20Segment string
+	OlapPrice    float64
 }
 
-func ExecDistinct(query string, args []interface{}) []string {
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return []string{}
-	}
-	defer rows.Close()
-	var vals []string
-	for rows.Next() {
-		var v sql.NullString
-		if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
-			vals = append(vals, v.String)
-		}
-	}
-	return vals
-}
+// EnrichFromRepo — заполняет недостающие данные из БД через репозиторий.
+func EnrichFromRepo(input *PromoInputDTO) CalculationContext {
+	ctx := CalculationContext{}
 
-// GetFilterValues возвращает список уникальных значений для конкретной колонки
-func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, excludeCol string, filters map[string][]string) []string {
-	where := baseWhere
-	args := make([]interface{}, len(baseArgs))
-	copy(args, baseArgs)
-	for filterCol, values := range filters {
-		if filterCol != excludeCol {
-			cond, newArgs := AddFilter(filterCol, values)
-			if cond != "" {
-				where += cond
-				args = append(args, newArgs...)
-			}
-		}
-	}
-	query := "SELECT DISTINCT " + col + " FROM dbo.tbl_PromoActivities " + where + " AND " + col + " IS NOT NULL ORDER BY " + col
-	return ExecDistinct(query, args)
-}
-
-// GetChannelFilterValues — специальный запрос для канала через JOIN
-func GetChannelFilterValues(baseWhere string, baseArgs []interface{}, filters map[string][]string) []string {
-	where := baseWhere
-	args := make([]interface{}, len(baseArgs))
-	copy(args, baseArgs)
-	for filterCol, values := range filters {
-		cond, newArgs := AddFilter("p."+filterCol, values)
-		if cond != "" {
-			where += cond
-			args = append(args, newArgs...)
-		}
-	}
-	query := "SELECT DISTINCT m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics " + where + " AND m.channel IS NOT NULL ORDER BY m.channel"
-	return ExecDistinct(query, args)
-}
-
-// ─── Promo Data ─────────────────────────────────────────────────────────────
-
-func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize int, getAll bool) ([]models.PromoRow, error) {
-	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
-	args := []interface{}{}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-
-	if params.YearFromStr != "" {
-		if y, _ := strconv.Atoi(params.YearFromStr); true {
-			query += " AND p.year >= ?"
-			args = append(args, y)
-		}
-	}
-	if params.YearToStr != "" {
-		if y, _ := strconv.Atoi(params.YearToStr); true {
-			query += " AND p.year <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(params.Months) > 0 {
-		placeholders := make([]string, 0, len(params.Months))
-		for _, m := range params.Months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter("p.kam", params.Kams)
-	appendFilter("p.brand_as", params.Brands)
-	appendFilter("p.sku", params.SKUs)
-	appendFilter("p.network_name", params.Networks)
-	appendFilter("p.mechanics", params.Mechanics)
-	appendFilter("p.status", params.Statuses)
-	appendFilter("m.channel", channels)
-
-	if getAll {
-		query += " ORDER BY p.year DESC, p.month DESC"
-	} else {
-		if pageSize <= 0 {
-			pageSize = 100
-		}
-		if pageSize > 1000 {
-			pageSize = 1000
-		}
-		offset := page * pageSize
-		query += " ORDER BY p.year DESC, p.month DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-		args = append(args, offset, pageSize)
-	}
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []models.PromoRow
-	for rows.Next() {
-		var r models.PromoRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	if results == nil {
-		results = []models.PromoRow{}
-	}
-	return results, nil
-}
-
-// ─── SKU / Lookups ──────────────────────────────────────────────────────────
-
-func GetSKUsByBrand(brand string) ([]string, error) {
-	rows, err := config.DB.Query("SELECT DISTINCT sku FROM dbo.tbl_PromoActivities WHERE brand_as = ? AND sku IS NOT NULL AND deleted_at IS NULL ORDER BY sku", brand)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var skus []string
-	for rows.Next() {
-		var s string
-		if rows.Scan(&s) == nil {
-			skus = append(skus, s)
-		}
-	}
-	return skus, nil
-}
-
-func GetLastContractPrice(sku string) (*float64, error) {
-	var price sql.NullFloat64
-	err := config.DB.QueryRow("SELECT TOP 1 contract_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", sku).Scan(&price)
-	if err != nil {
-		return nil, err
-	}
-	if price.Valid {
-		return &price.Float64, nil
-	}
-	return nil, nil
-}
-
-func GetKAMsByNetwork(network string) ([]string, error) {
-	rows, err := config.DB.Query("SELECT DISTINCT kam FROM dbo.tbl_KAMNetworkMapping WHERE network_name = ? AND kam IS NOT NULL ORDER BY kam", network)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var kams []string
-	for rows.Next() {
-		var k string
-		if rows.Scan(&k) == nil {
-			kams = append(kams, k)
-		}
-	}
-	return kams, nil
-}
-
-func GetLastNetworkData(network string) (*int64, error) {
-	var totalPharmacies sql.NullInt64
-	err := config.DB.QueryRow("SELECT TOP 1 total_pharmacies FROM dbo.tbl_PromoActivities WHERE network_name = ? AND total_pharmacies IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", network).Scan(&totalPharmacies)
-	if err != nil {
-		return nil, err
-	}
-	if totalPharmacies.Valid {
-		return &totalPharmacies.Int64, nil
-	}
-	return nil, nil
-}
-
-func GetNetworkGeoMapping(network string) (*models.NetworkGeo, error) {
-	var kam, networkType, top20Segment, keyRegion sql.NullString
-	err := config.DB.QueryRow(
-		"SELECT kam, network_type, top20_segment, key_region FROM dbo.tbl_NetworkGeoMapping WHERE network_name = ?",
-		network,
-	).Scan(&kam, &networkType, &top20Segment, &keyRegion)
-	if err != nil {
-		return nil, err
-	}
-	return &models.NetworkGeo{
-		KAM:          kam.String,
-		NetworkType:  networkType.String,
-		Top20Segment: top20Segment.String,
-		KeyRegion:    keyRegion.String,
-	}, nil
-}
-
-func GetSKUInfo(sku string) (brand, brandAs string, found bool) {
-	var b, ba sql.NullString
-	err := config.DB.QueryRow("SELECT brand, brand_as FROM dbo.tbl_SKUMapping WHERE sku = ?", sku).Scan(&b, &ba)
-	if err != nil {
-		return "", "", false
-	}
-	return b.String, ba.String, true
-}
-
-func GetLastSKUData(sku string) (*models.LastSKUData, error) {
-	var contractPrice, gm, olapPrice sql.NullFloat64
-	var totalPharmacies sql.NullInt64
-	var keyRegion, top20Segment sql.NullString
-
-	err := config.DB.QueryRow(
-		"SELECT TOP 1 contract_price, gm, total_pharmacies, key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
-		sku,
-	).Scan(&contractPrice, &gm, &totalPharmacies, &keyRegion, &top20Segment, &olapPrice)
-
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-
-	return &models.LastSKUData{
-		ContractPrice:   contractPrice.Float64,
-		GM:              gm.Float64,
-		TotalPharmacies: totalPharmacies.Int64,
-		KeyRegion:       keyRegion.String,
-		Top20Segment:    top20Segment.String,
-		OlapPrice:       olapPrice.Float64,
-	}, nil
-}
-
-// ─── History ────────────────────────────────────────────────────────────────
-
-func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models.HistoryRow, error) {
-	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE deleted_at IS NULL"
-	args := []interface{}{}
-	if sku != "" {
-		query += " AND sku = ?"
-		args = append(args, sku)
-	}
-	if network != "" {
-		query += " AND network_name = ?"
-		args = append(args, network)
-	}
-	if mechanics != "" {
-		query += " AND mechanics = ?"
-		args = append(args, mechanics)
-	}
-	if yearFrom != "" {
-		if y, _ := strconv.Atoi(yearFrom); true {
-			query += " AND year >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearTo != "" {
-		if y, _ := strconv.Atoi(yearTo); true {
-			query += " AND year <= ?"
-			args = append(args, y)
-		}
-	}
-	query += " ORDER BY year DESC, month DESC"
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []models.HistoryRow
-	for rows.Next() {
-		var r models.HistoryRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.Year, &r.Month, &r.Mechanics, &r.SKU, &r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits, &r.PlanPromoUpliftUnits, &r.ActualPromoUpliftUnits, &r.PlanROI, &r.ActualROI); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	return results, nil
-}
-
-// ─── Save / Delete ──────────────────────────────────────────────────────────
-
-func FetchExistingRow(id int) (map[string]interface{}, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
-
-	row := config.DB.QueryRow(
-		"SELECT "+strings.Join(allPromoFields, ", ")+" FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL",
-		id,
-	)
-
-	existing := make(map[string]interface{})
-	dest := make([]interface{}, len(allPromoFields))
-	for i := range allPromoFields {
-		var v sql.NullString
-		dest[i] = &v
-	}
-
-	if err := row.Scan(dest...); err != nil {
-		return nil, err
-	}
-
-	for i, field := range allPromoFields {
-		ns := dest[i].(*sql.NullString)
-		if ns.Valid {
-			if f, err := strconv.ParseFloat(ns.String, 64); err == nil {
-				existing[field] = f
-			} else if i, err := strconv.Atoi(ns.String); err == nil {
-				existing[field] = i
-			} else {
-				existing[field] = ns.String
-			}
-		}
-	}
-	return existing, nil
-}
-
-// UpdatePromo возвращает rowsAffected (0 = конфликт версий)
-func UpdatePromo(id int, existing map[string]interface{}, updatedAt string) (int64, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
-
-	setClauses := []string{}
-	values := []interface{}{}
-	for _, field := range allPromoFields {
-		if field == "updated_at" {
-			continue
-		}
-		if val, ok := existing[field]; ok {
-			setClauses = append(setClauses, field+" = ?")
-			values = append(values, val)
-		}
-	}
-	setClauses = append(setClauses, "updated_at = GETDATE()")
-	values = append(values, id)
-
-	query := "UPDATE dbo.tbl_PromoActivities SET " + strings.Join(setClauses, ", ") + " WHERE id = ?"
-	if updatedAt != "" {
-		query += " AND updated_at = ?"
-		values = append(values, updatedAt)
-	}
-
-	result, err := config.DB.Exec(query, values...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func InsertPromo(input map[string]interface{}) (int64, error) {
-	allPromoFields := []string{
-		"network_name", "kam", "brand", "brand_as", "sku",
-		"year", "month", "quarter", "mechanics", "gtn_opex",
-		"baseline_units", "baseline_rub",
-		"plan_promo_units", "plan_promo_rub", "plan_investments_rub",
-		"plan_promo_uplift_units", "plan_promo_uplift_rub",
-		"plan_promo_uplift_pct_units", "plan_promo_uplift_pct_rub",
-		"plan_investments_pct", "plan_roi",
-		"contract_price", "gm",
-		"id_directum", "ds_number", "discount_amount",
-		"conditions", "comments", "ecom_segment",
-		"total_pharmacies", "promo_pharmacies",
-		"status", "date",
-		"key_region", "top20_segment", "olap_price",
-		"plan_promo_cip_olap", "fact_promo_cip_olap",
-		"plan_promo_uplift_cip_olap", "fact_promo_uplift_cip_olap",
-		"actual_promo_sales_units", "actual_investments",
-		"actual_promo_rub", "actual_promo_uplift_units", "actual_promo_uplift_rub",
-		"actual_external_ecom_units", "actual_corrected_baseline",
-		"agreement1", "agreement2",
-		"net_promo_uplift_rub", "net_promo_uplift_pct",
-		"actual_investments_pct", "actual_roi",
-		"actual_promo_rub_wo_ecom", "actual_promo_uplift_units_wo_ecom",
-		"actual_promo_uplift_rub_wo_ecom",
-		"net_promo_uplift_rub_wo_ecom", "net_promo_uplift_pct_wo_ecom",
-		"actual_investments_pct_wo_ecom", "actual_roi_wo_ecom",
-		"plan_vs_fact_rub", "plan_vs_fact_investments",
-		"turnover_per_point", "turnover_per_point_promo",
-		"updated_at",
-	}
-
-	placeholders := make([]string, len(allPromoFields))
-	values := make([]interface{}, len(allPromoFields))
-	for i, f := range allPromoFields {
-		placeholders[i] = "?"
-		if val, ok := input[f]; ok {
-			values[i] = val
+	if input.GM == 0 {
+		lastData, err := repository.GetLastSKUData(input.SKU)
+		if err == nil && lastData != nil && lastData.GM != 0 {
+			ctx.GM = lastData.GM
 		} else {
-			values[i] = nil
+			ctx.GM = 1
 		}
-	}
-
-	var newID int64
-	err := config.DB.QueryRow(
-		fmt.Sprintf("INSERT INTO dbo.tbl_PromoActivities (%s) OUTPUT INSERTED.id VALUES (%s)",
-			strings.Join(allPromoFields, ", "),
-			strings.Join(placeholders, ", ")),
-		values...,
-	).Scan(&newID)
-	return newID, err
-}
-
-func SoftDeletePromo(id int) (int64, error) {
-	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE(), updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-// ─── Approvals ──────────────────────────────────────────────────────────────
-
-type ApprovalParams struct {
-	Role              string
-	KAM               string
-	ApprovalStatus    string
-	YearStr, MonthStr string
-}
-
-func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
-	currentYear := time.Now().Year()
-	currentMonth := int(time.Now().Month())
-
-	query := `
-		SELECT TOP 500
-			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
-			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
-			p.plan_investments_rub, p.plan_roi, p.actual_roi,
-			p.conditions, p.agreement1, p.agreement2, p.status,
-			p.agreement1_status, p.agreement1_comment,
-			p.agreement2_status, p.agreement2_comment,
-			0 as historical_count,
-			CAST(NULL AS FLOAT) as avg_historical_roi
-		FROM dbo.tbl_PromoActivities p
-		WHERE p.deleted_at IS NULL
-	`
-
-	args := []interface{}{}
-
-	if params.YearStr != "" {
-		y, _ := strconv.Atoi(params.YearStr)
-		query += " AND p.year = ?"
-		args = append(args, y)
-	} else if params.MonthStr != "" {
-		query += " AND p.year >= ?"
-		args = append(args, currentYear)
 	} else {
-		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
-		args = append(args, currentYear, currentYear, currentMonth)
+		ctx.GM = input.GM
 	}
 
-	if params.MonthStr != "" {
-		m, _ := strconv.Atoi(params.MonthStr)
-		query += " AND p.month = ?"
-		args = append(args, m)
-	}
-
-	if params.KAM != "" {
-		query += " AND p.kam = ?"
-		args = append(args, params.KAM)
-	}
-
-	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
-	statusField := "p.agreement1_status"
-	if params.Role == "agreement2" {
-		statusField = "p.agreement2_status"
-	}
-
-	switch params.ApprovalStatus {
-	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", statusField)
-	case "commented":
-		query += fmt.Sprintf(" AND %s = 'commented'", statusField)
-	case "approved":
-		query += fmt.Sprintf(" AND %s = 'approved'", statusField)
-	case "rejected":
-		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
-	}
-
-	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []models.ApprovalRow
-	for rows.Next() {
-		var r models.ApprovalRow
-		if err := rows.Scan(
-			&r.ID, &r.NetworkName, &r.BrandAS, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
-			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
-			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
-			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
-			&r.Agreement1Status, &r.Agreement1Comment,
-			&r.Agreement2Status, &r.Agreement2Comment,
-			&r.HistoricalCount, &r.AvgHistoricalROI,
-		); err != nil {
-			continue
+	if input.KeyRegion == "" || input.Top20Segment == "" {
+		geo, err := repository.GetNetworkGeoMapping(input.NetworkName)
+		if err == nil && geo != nil {
+			if input.KeyRegion == "" && geo.KeyRegion != "" {
+				input.KeyRegion = geo.KeyRegion
+			}
+			if input.Top20Segment == "" && geo.Top20Segment != "" {
+				input.Top20Segment = geo.Top20Segment
+			}
 		}
-		results = append(results, r)
 	}
-	if results == nil {
-		results = []models.ApprovalRow{}
-	}
-	return results, nil
-}
+	ctx.KeyRegion = input.KeyRegion
+	ctx.Top20Segment = input.Top20Segment
 
-// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
-func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
-	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
-	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
-	agreementField := fmt.Sprintf("agreement%d", agreementNum)
-
-	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
-		agreementField, statusField, commentField,
-	)
-	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
-	return err
-}
-
-// Deprecated: используйте ApprovePromoWithStatus
-func ApprovePromo(field string, id int, value string) error {
-	_, err := config.DB.Exec(
-		fmt.Sprintf("UPDATE dbo.tbl_PromoActivities SET %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", field),
-		value, id,
-	)
-	return err
-}
-
-// ─── Approval Filters ───────────────────────────────────────────────────────
-
-type ApprovalFilterParams struct {
-	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
-}
-
-func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
-	currentYear := time.Now().Year()
-	currentMonth := int(time.Now().Month())
-
-	query := `
-		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics, p.kam
-		FROM dbo.tbl_PromoActivities p
-		WHERE p.deleted_at IS NULL
-	`
-	args := []interface{}{}
-
-	if params.YearStr != "" {
-		y, _ := strconv.Atoi(params.YearStr)
-		query += " AND p.year = ?"
-		args = append(args, y)
+	if input.OlapPrice == 0 {
+		lastData, err := repository.GetLastSKUData(input.SKU)
+		if err == nil && lastData != nil && lastData.OlapPrice != 0 {
+			ctx.OlapPrice = lastData.OlapPrice
+		}
 	} else {
-		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
-		args = append(args, currentYear, currentYear, currentMonth)
+		ctx.OlapPrice = input.OlapPrice
 	}
 
-	if params.MonthStr != "" {
-		m, _ := strconv.Atoi(params.MonthStr)
-		query += " AND p.month = ?"
-		args = append(args, m)
-	}
-
-	if params.KAM != "" {
-		query += " AND p.kam = ?"
-		args = append(args, params.KAM)
-	}
-
-	if params.Network != "" {
-		query += " AND p.network_name = ?"
-		args = append(args, params.Network)
-	}
-
-	if params.Brand != "" {
-		query += " AND p.brand_as = ?"
-		args = append(args, params.Brand)
-	}
-
-	if params.MechFilter != "" {
-		query += " AND p.mechanics = ?"
-		args = append(args, params.MechFilter)
-	}
-
-	// Фильтруем по статусу конкретной роли (а не по OR двух полей)
-	filterStatusField := "p.agreement1_status"
-	if params.Role == "agreement2" {
-		filterStatusField = "p.agreement2_status"
-	}
-
-	switch params.ApprovalStatus {
-	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
-	case "commented":
-		query += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
-	case "approved":
-		query += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
-	case "rejected":
-		query += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
-	}
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	defer rows.Close()
-
-	networkSet := make(map[string]bool)
-	brandSet := make(map[string]bool)
-	mechSet := make(map[string]bool)
-	kamSet := make(map[string]bool)
-
-	for rows.Next() {
-		var nw, br, mech, k sql.NullString
-		if rows.Scan(&nw, &br, &mech, &k) == nil {
-			if nw.Valid {
-				networkSet[nw.String] = true
-			}
-			if br.Valid {
-				brandSet[br.String] = true
-			}
-			if mech.Valid {
-				mechSet[mech.String] = true
-			}
-			if k.Valid {
-				kamSet[k.String] = true
-			}
-		}
-	}
-
-	for v := range networkSet {
-		networks = append(networks, v)
-	}
-	for v := range brandSet {
-		brands = append(brands, v)
-	}
-	for v := range mechSet {
-		mechanics = append(mechanics, v)
-	}
-	for v := range kamSet {
-		kams = append(kams, v)
-	}
-
-	sort.Strings(networks)
-	sort.Strings(brands)
-	sort.Strings(mechanics)
-	sort.Strings(kams)
-
-	return networks, brands, mechanics, kams, nil
+	return ctx
 }
 
-func GetApprovalKAMs(field string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.kam 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL AND %s IS NULL AND p.kam IS NOT NULL
-		ORDER BY p.kam
-	`, field)
+// CalculateFields — чистая функция расчета всех вычисляемых полей.
+func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFields {
+	ppu := input.PlanPromoUnits
+	cp := input.ContractPrice
+	bu := input.BaselineUnits
+	pir := input.PlanInvestmentsRub
+	month := input.Month
+	year := input.Year
+	if year == 0 {
+		year = time.Now().Year()
+	}
+	if month == 0 {
+		month = int(time.Now().Month())
+	}
 
-	rows, err := config.DB.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	gm := ctx.GM
+	olap := ctx.OlapPrice
 
-	var kams []string
-	for rows.Next() {
-		var k string
-		if rows.Scan(&k) == nil {
-			kams = append(kams, k)
-		}
+	quarter := int(math.Ceil(float64(month) / 3))
+	planPromoRub := ppu * cp
+	planPromoUpliftUnits := ppu - bu
+	planPromoUpliftRub := planPromoUpliftUnits * cp
+
+	planPromoUpliftPctUnits := 0.0
+	if ppu > 0 {
+		planPromoUpliftPctUnits = (planPromoUpliftUnits / ppu) * 100
 	}
-	if kams == nil {
-		kams = []string{}
+	planPromoUpliftPctRub := 0.0
+	if planPromoRub > 0 {
+		planPromoUpliftPctRub = (planPromoUpliftRub / planPromoRub) * 100
 	}
-	return kams, nil
+	planInvestmentsPct := 0.0
+	if planPromoRub > 0 {
+		planInvestmentsPct = (pir / planPromoRub) * 100
+	}
+	planROI := 0.0
+	if pir > 0 {
+		planROI = (planPromoUpliftRub/pir)*gm*100 - 100
+	}
+	baselineRub := bu * cp
+
+	afu := input.ActualPromoSalesUnits
+	afr := input.ActualPromoRub
+	afi := input.ActualInvestments
+	afupl := input.ActualPromoUpliftUnits
+	afupr := input.ActualPromoUpliftRub
+	afeu := input.ActualExternalEcomUnits
+	acb := input.ActualCorrectedBaseline
+	ph := float64(input.PromoPharmacies)
+	if ph == 0 {
+		ph = 1
+	}
+
+	netPromoUpliftRub := afupr * gm
+	netPromoUpliftPct := 0.0
+	if afr > 0 {
+		netPromoUpliftPct = (netPromoUpliftRub / afr) * 100
+	}
+	actualInvestmentsPct := 0.0
+	if afr > 0 {
+		actualInvestmentsPct = (afi / afr) * 100
+	}
+	actualROI := 0.0
+	if afi > 0 {
+		actualROI = (afupr/afi)*gm*100 - 100
+	}
+
+	actualPromoRubWoEcom := afr - (afeu * cp)
+	actualPromoUpliftUnitsWoEcom := afupl - afeu
+	actualPromoUpliftRubWoEcom := actualPromoUpliftUnitsWoEcom * cp
+	netPromoUpliftRubWoEcom := actualPromoUpliftRubWoEcom * gm
+	netPromoUpliftPctWoEcom := 0.0
+	if actualPromoRubWoEcom > 0 {
+		netPromoUpliftPctWoEcom = (netPromoUpliftRubWoEcom / actualPromoRubWoEcom) * 100
+	}
+	actualInvestmentsPctWoEcom := 0.0
+	if actualPromoRubWoEcom > 0 {
+		actualInvestmentsPctWoEcom = (afi / actualPromoRubWoEcom) * 100
+	}
+	actualROIWoEcom := 0.0
+	if afi > 0 {
+		actualROIWoEcom = (actualPromoUpliftRubWoEcom/afi)*gm*100 - 100
+	}
+
+	planVsFactRub := 0.0
+	if planPromoRub > 0 {
+		planVsFactRub = (afr / planPromoRub) * 100
+	}
+	planVsFactInvestments := 0.0
+	if pir > 0 {
+		planVsFactInvestments = (afi / pir) * 100
+	}
+
+	turnoverPerPoint := acb / ph
+	turnoverPerPointPromo := afu / ph
+	planPromoCipOlap := ppu * olap
+	factPromoCipOlap := afu * olap
+	planPromoUpliftCipOlap := planPromoUpliftUnits * olap
+	factPromoUpliftCipOlap := afupl * olap
+
+	return CalculatedFields{
+		Year:                         year,
+		Month:                        month,
+		Quarter:                      quarter,
+		GM:                           gm,
+		PlanPromoRub:                 planPromoRub,
+		PlanPromoUpliftUnits:         planPromoUpliftUnits,
+		PlanPromoUpliftRub:           planPromoUpliftRub,
+		PlanPromoUpliftPctUnits:      planPromoUpliftPctUnits,
+		PlanPromoUpliftPctRub:        planPromoUpliftPctRub,
+		PlanInvestmentsPct:           planInvestmentsPct,
+		PlanROI:                      planROI,
+		BaselineRub:                  baselineRub,
+		NetPromoUpliftRub:            netPromoUpliftRub,
+		NetPromoUpliftPct:            netPromoUpliftPct,
+		ActualInvestmentsPct:         actualInvestmentsPct,
+		ActualROI:                    actualROI,
+		ActualPromoRubWoEcom:         actualPromoRubWoEcom,
+		ActualPromoUpliftUnitsWoEcom: actualPromoUpliftUnitsWoEcom,
+		ActualPromoUpliftRubWoEcom:   actualPromoUpliftRubWoEcom,
+		NetPromoUpliftRubWoEcom:      netPromoUpliftRubWoEcom,
+		NetPromoUpliftPctWoEcom:      netPromoUpliftPctWoEcom,
+		ActualInvestmentsPctWoEcom:   actualInvestmentsPctWoEcom,
+		ActualROIWoEcom:              actualROIWoEcom,
+		PlanVsFactRub:                planVsFactRub,
+		PlanVsFactInvestments:        planVsFactInvestments,
+		TurnoverPerPoint:             turnoverPerPoint,
+		TurnoverPerPointPromo:        turnoverPerPointPromo,
+		PlanPromoCipOlap:             planPromoCipOlap,
+		FactPromoCipOlap:             factPromoCipOlap,
+		PlanPromoUpliftCipOlap:       planPromoUpliftCipOlap,
+		FactPromoUpliftCipOlap:       factPromoUpliftCipOlap,
+		Date:                         PromoDate(year, month),
+		OlapPrice:                    olap,
+	}
 }
 
-func GetApprovalNetworks(field, kam string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.network_name 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL 
-		  AND %s IS NULL 
-		  AND p.kam = ? 
-		  AND p.network_name IS NOT NULL
-		ORDER BY p.network_name
-	`, field)
-
-	rows, err := config.DB.Query(query, kam)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var networks []string
-	for rows.Next() {
-		var n string
-		if rows.Scan(&n) == nil {
-			networks = append(networks, n)
-		}
-	}
-	if networks == nil {
-		networks = []string{}
-	}
-	return networks, nil
+// PromoDate — форматирует год и месяц в строку "YYYY-MM-01".
+func PromoDate(year, month int) string {
+	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 }
 
-func GetApprovalBrands(field, kam, network string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.brand_as 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL 
-		  AND %s IS NULL 
-		  AND p.kam = ? 
-		  AND p.brand_as IS NOT NULL
-	`, field)
-	args := []interface{}{kam}
+// MergeCalculatedIntoDBRow — записывает вычисленные поля напрямую в структуру БД.
+func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
+	r.Year = c.Year
+	r.Month = c.Month
+	r.Quarter = c.Quarter
+	r.GM = c.GM
+	r.PlanPromoRub = c.PlanPromoRub
+	r.PlanPromoUpliftUnits = c.PlanPromoUpliftUnits
+	r.PlanPromoUpliftRub = c.PlanPromoUpliftRub
+	r.PlanPromoUpliftPctUnits = c.PlanPromoUpliftPctUnits
+	r.PlanPromoUpliftPctRub = c.PlanPromoUpliftPctRub
+	r.PlanInvestmentsPct = c.PlanInvestmentsPct
+	r.PlanROI = c.PlanROI
+	r.BaselineRub = c.BaselineRub
+	r.NetPromoUpliftRub = c.NetPromoUpliftRub
+	r.NetPromoUpliftPct = c.NetPromoUpliftPct
+	r.ActualInvestmentsPct = c.ActualInvestmentsPct
+	r.ActualROI = c.ActualROI
+	r.ActualPromoRubWoEcom = c.ActualPromoRubWoEcom
+	r.ActualPromoUpliftUnitsWoEcom = c.ActualPromoUpliftUnitsWoEcom
+	r.ActualPromoUpliftRubWoEcom = c.ActualPromoUpliftRubWoEcom
+	r.NetPromoUpliftRubWoEcom = c.NetPromoUpliftRubWoEcom
+	r.NetPromoUpliftPctWoEcom = c.NetPromoUpliftPctWoEcom
+	r.ActualInvestmentsPctWoEcom = c.ActualInvestmentsPctWoEcom
+	r.ActualROIWoEcom = c.ActualROIWoEcom
+	r.PlanVsFactRub = c.PlanVsFactRub
+	r.PlanVsFactInvestments = c.PlanVsFactInvestments
+	r.TurnoverPerPoint = c.TurnoverPerPoint
+	r.TurnoverPerPointPromo = c.TurnoverPerPointPromo
+	r.PlanPromoCipOlap = c.PlanPromoCipOlap
+	r.FactPromoCipOlap = c.FactPromoCipOlap
+	r.PlanPromoUpliftCipOlap = c.PlanPromoUpliftCipOlap
+	r.FactPromoUpliftCipOlap = c.FactPromoUpliftCipOlap
+	r.Date = c.Date
+	r.OlapPrice = c.OlapPrice
+}
 
-	if network != "" {
-		query += " AND p.network_name = ?"
-		args = append(args, network)
+// DTOToDBRow — создаёт PromoRowDB из DTO и вычисленных полей (для INSERT).
+func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
+	r := &models.PromoRowDB{
+		NetworkName:             dto.NetworkName,
+		KAM:                     dto.KAM,
+		Brand:                   dto.Brand,
+		BrandAS:                 dto.BrandAS,
+		SKU:                     dto.SKU,
+		Mechanics:               dto.Mechanics,
+		GTNOpex:                 dto.GTNOpex,
+		IDDirectum:              dto.IDDirectum,
+		DSNumber:                dto.DSNumber,
+		DiscountAmount:          dto.DiscountAmount,
+		Conditions:              dto.Conditions,
+		Comments:                dto.Comments,
+		EcomSegment:             dto.EcomSegment,
+		TotalPharmacies:         dto.TotalPharmacies,
+		PromoPharmacies:         dto.PromoPharmacies,
+		Status:                  dto.Status,
+		BaselineUnits:           dto.BaselineUnits,
+		PlanPromoUnits:          dto.PlanPromoUnits,
+		PlanInvestmentsRub:      dto.PlanInvestmentsRub,
+		ContractPrice:           dto.ContractPrice,
+		KeyRegion:               dto.KeyRegion,
+		Top20Segment:            dto.Top20Segment,
+		ActualPromoSalesUnits:   dto.ActualPromoSalesUnits,
+		ActualPromoRub:          dto.ActualPromoRub,
+		ActualInvestments:       dto.ActualInvestments,
+		ActualPromoUpliftUnits:  dto.ActualPromoUpliftUnits,
+		ActualPromoUpliftRub:    dto.ActualPromoUpliftRub,
+		ActualExternalEcomUnits: dto.ActualExternalEcomUnits,
+		ActualCorrectedBaseline: dto.ActualCorrectedBaseline,
+		Agreement1:              dto.Agreement1,
+		Agreement2:              dto.Agreement2,
 	}
+	MergeCalculatedIntoDBRow(r, c)
+	return r
+}
 
-	query += " ORDER BY p.brand_as"
+// MapToDTO — парсит JSON (map[string]interface{}) в PromoInputDTO (для INSERT).
+func MapToDTO(input map[string]interface{}) PromoInputDTO {
+	return PromoInputDTO{
+		NetworkName:             stringVal(input, "network_name"),
+		KAM:                     stringVal(input, "kam"),
+		Brand:                   stringVal(input, "brand"),
+		BrandAS:                 stringVal(input, "brand_as"),
+		SKU:                     stringVal(input, "sku"),
+		Year:                    intVal(input, "year"),
+		Month:                   intVal(input, "month"),
+		Quarter:                 intVal(input, "quarter"),
+		Mechanics:               stringVal(input, "mechanics"),
+		GTNOpex:                 stringVal(input, "gtn_opex"),
+		IDDirectum:              stringVal(input, "id_directum"),
+		DSNumber:                stringVal(input, "ds_number"),
+		DiscountAmount:          floatVal(input, "discount_amount"),
+		Conditions:              stringVal(input, "conditions"),
+		Comments:                stringVal(input, "comments"),
+		EcomSegment:             stringVal(input, "ecom_segment"),
+		TotalPharmacies:         intVal(input, "total_pharmacies"),
+		PromoPharmacies:         intVal(input, "promo_pharmacies"),
+		Status:                  stringVal(input, "status"),
+		Date:                    stringVal(input, "date"),
+		BaselineUnits:           floatVal(input, "baseline_units"),
+		BaselineRub:             floatVal(input, "baseline_rub"),
+		PlanPromoUnits:          floatVal(input, "plan_promo_units"),
+		PlanPromoRub:            floatVal(input, "plan_promo_rub"),
+		PlanInvestmentsRub:      floatVal(input, "plan_investments_rub"),
+		ContractPrice:           floatVal(input, "contract_price"),
+		GM:                      floatVal(input, "gm"),
+		KeyRegion:               stringVal(input, "key_region"),
+		Top20Segment:            stringVal(input, "top20_segment"),
+		OlapPrice:               floatVal(input, "olap_price"),
+		ActualPromoSalesUnits:   floatVal(input, "actual_promo_sales_units"),
+		ActualPromoRub:          floatVal(input, "actual_promo_rub"),
+		ActualInvestments:       floatVal(input, "actual_investments"),
+		ActualPromoUpliftUnits:  floatVal(input, "actual_promo_uplift_units"),
+		ActualPromoUpliftRub:    floatVal(input, "actual_promo_uplift_rub"),
+		ActualExternalEcomUnits: floatVal(input, "actual_external_ecom_units"),
+		ActualCorrectedBaseline: floatVal(input, "actual_corrected_baseline"),
+		Agreement1:              stringVal(input, "agreement1"),
+		Agreement2:              stringVal(input, "agreement2"),
+	}
+}
 
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
+// DBRowToDTO — конвертирует строку БД в DTO (для расчета вычисляемых полей при UPDATE).
+func DBRowToDTO(r *models.PromoRowDB) PromoInputDTO {
+	return PromoInputDTO{
+		NetworkName:             r.NetworkName,
+		KAM:                     r.KAM,
+		Brand:                   r.Brand,
+		BrandAS:                 r.BrandAS,
+		SKU:                     r.SKU,
+		Year:                    r.Year,
+		Month:                   r.Month,
+		Quarter:                 r.Quarter,
+		Mechanics:               r.Mechanics,
+		GTNOpex:                 r.GTNOpex,
+		IDDirectum:              r.IDDirectum,
+		DSNumber:                r.DSNumber,
+		DiscountAmount:          r.DiscountAmount,
+		Conditions:              r.Conditions,
+		Comments:                r.Comments,
+		EcomSegment:             r.EcomSegment,
+		TotalPharmacies:         r.TotalPharmacies,
+		PromoPharmacies:         r.PromoPharmacies,
+		Status:                  r.Status,
+		Date:                    r.Date,
+		BaselineUnits:           r.BaselineUnits,
+		BaselineRub:             r.BaselineRub,
+		PlanPromoUnits:          r.PlanPromoUnits,
+		PlanPromoRub:            r.PlanPromoRub,
+		PlanInvestmentsRub:      r.PlanInvestmentsRub,
+		ContractPrice:           r.ContractPrice,
+		GM:                      r.GM,
+		KeyRegion:               r.KeyRegion,
+		Top20Segment:            r.Top20Segment,
+		OlapPrice:               r.OlapPrice,
+		ActualPromoSalesUnits:   r.ActualPromoSalesUnits,
+		ActualPromoRub:          r.ActualPromoRub,
+		ActualInvestments:       r.ActualInvestments,
+		ActualPromoUpliftUnits:  r.ActualPromoUpliftUnits,
+		ActualPromoUpliftRub:    r.ActualPromoUpliftRub,
+		ActualExternalEcomUnits: r.ActualExternalEcomUnits,
+		ActualCorrectedBaseline: r.ActualCorrectedBaseline,
+		Agreement1:              r.Agreement1,
+		Agreement2:              r.Agreement2,
 	}
-	defer rows.Close()
+}
 
-	var brands []string
-	for rows.Next() {
-		var b string
-		if rows.Scan(&b) == nil {
-			brands = append(brands, b)
-		}
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+func floatVal(m map[string]interface{}, key string) float64 {
+	v, _ := strconv.ParseFloat(fmt.Sprint(m[key]), 64)
+	return v
+}
+func intVal(m map[string]interface{}, key string) int {
+	v, _ := strconv.Atoi(fmt.Sprint(m[key]))
+	return v
+}
+func stringVal(m map[string]interface{}, key string) string {
+	return fmt.Sprint(m[key])
+}
+
+// DBRowToMap — конвертирует PromoRowDB в map для JSON-ответа (обратная совместимость с фронтендом).
+func DBRowToMap(r *models.PromoRowDB) map[string]interface{} {
+	return map[string]interface{}{
+		"id":                                r.ID,
+		"network_name":                      r.NetworkName,
+		"kam":                               r.KAM,
+		"brand":                             r.Brand,
+		"brand_as":                          r.BrandAS,
+		"sku":                               r.SKU,
+		"year":                              r.Year,
+		"month":                             r.Month,
+		"quarter":                           r.Quarter,
+		"mechanics":                         r.Mechanics,
+		"gtn_opex":                          r.GTNOpex,
+		"baseline_units":                    r.BaselineUnits,
+		"baseline_rub":                      r.BaselineRub,
+		"plan_promo_units":                  r.PlanPromoUnits,
+		"plan_promo_rub":                    r.PlanPromoRub,
+		"plan_investments_rub":              r.PlanInvestmentsRub,
+		"plan_promo_uplift_units":           r.PlanPromoUpliftUnits,
+		"plan_promo_uplift_rub":             r.PlanPromoUpliftRub,
+		"plan_promo_uplift_pct_units":       r.PlanPromoUpliftPctUnits,
+		"plan_promo_uplift_pct_rub":         r.PlanPromoUpliftPctRub,
+		"plan_investments_pct":              r.PlanInvestmentsPct,
+		"plan_roi":                          r.PlanROI,
+		"contract_price":                    r.ContractPrice,
+		"gm":                                r.GM,
+		"id_directum":                       r.IDDirectum,
+		"ds_number":                         r.DSNumber,
+		"discount_amount":                   r.DiscountAmount,
+		"conditions":                        r.Conditions,
+		"comments":                          r.Comments,
+		"ecom_segment":                      r.EcomSegment,
+		"total_pharmacies":                  r.TotalPharmacies,
+		"promo_pharmacies":                  r.PromoPharmacies,
+		"status":                            r.Status,
+		"date":                              r.Date,
+		"key_region":                        r.KeyRegion,
+		"top20_segment":                     r.Top20Segment,
+		"olap_price":                        r.OlapPrice,
+		"plan_promo_cip_olap":               r.PlanPromoCipOlap,
+		"fact_promo_cip_olap":               r.FactPromoCipOlap,
+		"plan_promo_uplift_cip_olap":        r.PlanPromoUpliftCipOlap,
+		"fact_promo_uplift_cip_olap":        r.FactPromoUpliftCipOlap,
+		"actual_promo_sales_units":          r.ActualPromoSalesUnits,
+		"actual_investments":                r.ActualInvestments,
+		"actual_promo_rub":                  r.ActualPromoRub,
+		"actual_promo_uplift_units":         r.ActualPromoUpliftUnits,
+		"actual_promo_uplift_rub":           r.ActualPromoUpliftRub,
+		"actual_external_ecom_units":        r.ActualExternalEcomUnits,
+		"actual_corrected_baseline":         r.ActualCorrectedBaseline,
+		"agreement1":                        r.Agreement1,
+		"agreement2":                        r.Agreement2,
+		"net_promo_uplift_rub":              r.NetPromoUpliftRub,
+		"net_promo_uplift_pct":              r.NetPromoUpliftPct,
+		"actual_investments_pct":            r.ActualInvestmentsPct,
+		"actual_roi":                        r.ActualROI,
+		"actual_promo_rub_wo_ecom":          r.ActualPromoRubWoEcom,
+		"actual_promo_uplift_units_wo_ecom": r.ActualPromoUpliftUnitsWoEcom,
+		"actual_promo_uplift_rub_wo_ecom":   r.ActualPromoUpliftRubWoEcom,
+		"net_promo_uplift_rub_wo_ecom":      r.NetPromoUpliftRubWoEcom,
+		"net_promo_uplift_pct_wo_ecom":      r.NetPromoUpliftPctWoEcom,
+		"actual_investments_pct_wo_ecom":    r.ActualInvestmentsPctWoEcom,
+		"actual_roi_wo_ecom":                r.ActualROIWoEcom,
+		"plan_vs_fact_rub":                  r.PlanVsFactRub,
+		"plan_vs_fact_investments":          r.PlanVsFactInvestments,
+		"turnover_per_point":                r.TurnoverPerPoint,
+		"turnover_per_point_promo":          r.TurnoverPerPointPromo,
+		"updated_at":                        r.UpdatedAt,
 	}
-	if brands == nil {
-		brands = []string{}
-	}
-	return brands, nil
 }
 ```
 
@@ -3527,115 +3174,1027 @@ createRoot(document.getElementById('root')).render(
 }
 ```
 
-## File: backend/handlers/auth.go
+## File: backend/repository/promo_repo.go
 ```go
-package handlers
+package repository
 
 import (
-	"net/http"
+	"database/sql"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"backend/config"
-	"backend/repository"
-
-	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
+	"backend/models"
 )
 
-func Login(c *gin.Context) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
-		return
-	}
+// ─── Filters ────────────────────────────────────────────────────────────────
 
-	// Ищем пользователя в БД
-	user, err := repository.GetUserByUsername(req.Username)
-	if err != nil {
-		config.Logger.Error("login_db_error", "error", err.Error(), "username", req.Username)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
-		return
-	}
-
-	if user == nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
-		return
-	}
-
-	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	refreshToken, err := config.GenerateRefreshToken(req.Username, user.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
-	}
-
-	// Refresh token в httpOnly secure cookie
-	c.SetCookie(
-		"refresh_token",
-		refreshToken,
-		int(7*24*time.Hour.Seconds()), // 7 дней
-		"/api/auth",                   // доступен только для /api/auth/*
-		"",                            // domain (текущий)
-		false,                         // secure (false для localhost)
-		true,                          // httpOnly
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"token":    accessToken,
-		"username": req.Username,
-		"role":     user.Role,
-	})
+type PromoFilterParams struct {
+	YearFromStr, YearToStr                            string
+	Months                                            []string
+	Kams, Brands, SKUs, Networks, Mechanics, Statuses []string
 }
 
-func RefreshToken(c *gin.Context) {
-	refreshToken, err := c.Cookie("refresh_token")
+func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
+	where := "WHERE deleted_at IS NULL"
+	args := []interface{}{}
+	if params.YearFromStr != "" {
+		if y, _ := strconv.Atoi(params.YearFromStr); true {
+			where += " AND year >= ?"
+			args = append(args, y)
+		}
+	}
+	if params.YearToStr != "" {
+		if y, _ := strconv.Atoi(params.YearToStr); true {
+			where += " AND year <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(params.Months) > 0 {
+		placeholders := make([]string, 0, len(params.Months))
+		for _, m := range params.Months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			where += " AND month IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+	return where, args
+}
+
+func AddFilter(col string, values []string) (string, []interface{}) {
+	if len(values) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, 0, len(values))
+	newArgs := []interface{}{}
+	for _, v := range values {
+		if v != "" {
+			placeholders = append(placeholders, "?")
+			newArgs = append(newArgs, v)
+		}
+	}
+	if len(placeholders) > 0 {
+		return " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")", newArgs
+	}
+	return "", nil
+}
+
+func ExecDistinct(query string, args []interface{}) []string {
+	rows, err := config.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token не найден"})
-		return
+		return []string{}
+	}
+	defer rows.Close()
+	var vals []string
+	for rows.Next() {
+		var v sql.NullString
+		if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
+			vals = append(vals, v.String)
+		}
+	}
+	return vals
+}
+
+// GetFilterValues возвращает список уникальных значений для конкретной колонки
+func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, excludeCol string, filters map[string][]string) []string {
+	where := baseWhere
+	args := make([]interface{}, len(baseArgs))
+	copy(args, baseArgs)
+	for filterCol, values := range filters {
+		if filterCol != excludeCol {
+			cond, newArgs := AddFilter(filterCol, values)
+			if cond != "" {
+				where += cond
+				args = append(args, newArgs...)
+			}
+		}
+	}
+	query := "SELECT DISTINCT " + col + " FROM dbo.tbl_PromoActivities " + where + " AND " + col + " IS NOT NULL ORDER BY " + col
+	return ExecDistinct(query, args)
+}
+
+// GetChannelFilterValues — специальный запрос для канала через JOIN
+func GetChannelFilterValues(baseWhere string, baseArgs []interface{}, filters map[string][]string) []string {
+	where := baseWhere
+	args := make([]interface{}, len(baseArgs))
+	copy(args, baseArgs)
+	for filterCol, values := range filters {
+		cond, newArgs := AddFilter("p."+filterCol, values)
+		if cond != "" {
+			where += cond
+			args = append(args, newArgs...)
+		}
+	}
+	query := "SELECT DISTINCT m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics " + where + " AND m.channel IS NOT NULL ORDER BY m.channel"
+	return ExecDistinct(query, args)
+}
+
+// ─── Promo Data ─────────────────────────────────────────────────────────────
+
+func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize int, getAll bool) ([]models.PromoRow, error) {
+	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
+	args := []interface{}{}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
 	}
 
-	claims, err := config.ValidateRefreshToken(refreshToken)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
-		return
+	if params.YearFromStr != "" {
+		if y, _ := strconv.Atoi(params.YearFromStr); true {
+			query += " AND p.year >= ?"
+			args = append(args, y)
+		}
+	}
+	if params.YearToStr != "" {
+		if y, _ := strconv.Atoi(params.YearToStr); true {
+			query += " AND p.year <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(params.Months) > 0 {
+		placeholders := make([]string, 0, len(params.Months))
+		for _, m := range params.Months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
+		}
 	}
 
-	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
+	appendFilter("p.kam", params.Kams)
+	appendFilter("p.brand_as", params.Brands)
+	appendFilter("p.sku", params.SKUs)
+	appendFilter("p.network_name", params.Networks)
+	appendFilter("p.mechanics", params.Mechanics)
+	appendFilter("p.status", params.Statuses)
+	appendFilter("m.channel", channels)
+
+	if getAll {
+		query += " ORDER BY p.year DESC, p.month DESC"
+	} else {
+		if pageSize <= 0 {
+			pageSize = 100
+		}
+		if pageSize > 1000 {
+			pageSize = 1000
+		}
+		offset := page * pageSize
+		query += " ORDER BY p.year DESC, p.month DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+		args = append(args, offset, pageSize)
 	}
 
-	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
+	rows, err := config.DB.Query(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
-		return
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.PromoRow
+	for rows.Next() {
+		var r models.PromoRow
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.PromoRow{}
+	}
+	return results, nil
+}
+
+// ─── SKU / Lookups ──────────────────────────────────────────────────────────
+
+func GetSKUsByBrand(brand string) ([]string, error) {
+	rows, err := config.DB.Query("SELECT DISTINCT sku FROM dbo.tbl_PromoActivities WHERE brand_as = ? AND sku IS NOT NULL AND deleted_at IS NULL ORDER BY sku", brand)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var skus []string
+	for rows.Next() {
+		var s string
+		if rows.Scan(&s) == nil {
+			skus = append(skus, s)
+		}
+	}
+	return skus, nil
+}
+
+func GetLastContractPrice(sku string) (*float64, error) {
+	var price sql.NullFloat64
+	err := config.DB.QueryRow("SELECT TOP 1 contract_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", sku).Scan(&price)
+	if err != nil {
+		return nil, err
+	}
+	if price.Valid {
+		return &price.Float64, nil
+	}
+	return nil, nil
+}
+
+func GetKAMsByNetwork(network string) ([]string, error) {
+	rows, err := config.DB.Query("SELECT DISTINCT kam FROM dbo.tbl_KAMNetworkMapping WHERE network_name = ? AND kam IS NOT NULL ORDER BY kam", network)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var kams []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			kams = append(kams, k)
+		}
+	}
+	return kams, nil
+}
+
+func GetLastNetworkData(network string) (*int64, error) {
+	var totalPharmacies sql.NullInt64
+	err := config.DB.QueryRow("SELECT TOP 1 total_pharmacies FROM dbo.tbl_PromoActivities WHERE network_name = ? AND total_pharmacies IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC", network).Scan(&totalPharmacies)
+	if err != nil {
+		return nil, err
+	}
+	if totalPharmacies.Valid {
+		return &totalPharmacies.Int64, nil
+	}
+	return nil, nil
+}
+
+func GetNetworkGeoMapping(network string) (*models.NetworkGeo, error) {
+	var kam, networkType, top20Segment, keyRegion sql.NullString
+	err := config.DB.QueryRow(
+		"SELECT kam, network_type, top20_segment, key_region FROM dbo.tbl_NetworkGeoMapping WHERE network_name = ?",
+		network,
+	).Scan(&kam, &networkType, &top20Segment, &keyRegion)
+	if err != nil {
+		return nil, err
+	}
+	return &models.NetworkGeo{
+		KAM:          kam.String,
+		NetworkType:  networkType.String,
+		Top20Segment: top20Segment.String,
+		KeyRegion:    keyRegion.String,
+	}, nil
+}
+
+func GetSKUInfo(sku string) (brand, brandAs string, found bool) {
+	var b, ba sql.NullString
+	err := config.DB.QueryRow("SELECT brand, brand_as FROM dbo.tbl_SKUMapping WHERE sku = ?", sku).Scan(&b, &ba)
+	if err != nil {
+		return "", "", false
+	}
+	return b.String, ba.String, true
+}
+
+func GetLastSKUData(sku string) (*models.LastSKUData, error) {
+	var contractPrice, gm, olapPrice sql.NullFloat64
+	var totalPharmacies sql.NullInt64
+	var keyRegion, top20Segment sql.NullString
+
+	err := config.DB.QueryRow(
+		"SELECT TOP 1 contract_price, gm, total_pharmacies, key_region, top20_segment, olap_price FROM dbo.tbl_PromoActivities WHERE sku = ? AND contract_price IS NOT NULL AND deleted_at IS NULL ORDER BY year DESC, month DESC",
+		sku,
+	).Scan(&contractPrice, &gm, &totalPharmacies, &keyRegion, &top20Segment, &olapPrice)
+
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
 	}
 
-	// Обновляем refresh cookie
-	c.SetCookie(
-		"refresh_token",
-		newRefreshToken,
-		int(7*24*time.Hour.Seconds()),
-		"/api/auth",
-		"",
-		false,
-		true,
+	return &models.LastSKUData{
+		ContractPrice:   contractPrice.Float64,
+		GM:              gm.Float64,
+		TotalPharmacies: totalPharmacies.Int64,
+		KeyRegion:       keyRegion.String,
+		Top20Segment:    top20Segment.String,
+		OlapPrice:       olapPrice.Float64,
+	}, nil
+}
+
+// ─── History ────────────────────────────────────────────────────────────────
+
+func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models.HistoryRow, error) {
+	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE deleted_at IS NULL"
+	args := []interface{}{}
+	if sku != "" {
+		query += " AND sku = ?"
+		args = append(args, sku)
+	}
+	if network != "" {
+		query += " AND network_name = ?"
+		args = append(args, network)
+	}
+	if mechanics != "" {
+		query += " AND mechanics = ?"
+		args = append(args, mechanics)
+	}
+	if yearFrom != "" {
+		if y, _ := strconv.Atoi(yearFrom); true {
+			query += " AND year >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearTo != "" {
+		if y, _ := strconv.Atoi(yearTo); true {
+			query += " AND year <= ?"
+			args = append(args, y)
+		}
+	}
+	query += " ORDER BY year DESC, month DESC"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.HistoryRow
+	for rows.Next() {
+		var r models.HistoryRow
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.Year, &r.Month, &r.Mechanics, &r.SKU, &r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits, &r.PlanPromoUpliftUnits, &r.ActualPromoUpliftUnits, &r.PlanROI, &r.ActualROI); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
+
+// ─── Save / Delete ──────────────────────────────────────────────────────────
+
+func FetchExistingRow(id int) (*models.PromoRowDB, error) {
+	row := config.DB.QueryRow(
+		"SELECT network_name, kam, brand, brand_as, sku, "+
+			"year, month, quarter, mechanics, gtn_opex, "+
+			"baseline_units, baseline_rub, "+
+			"plan_promo_units, plan_promo_rub, plan_investments_rub, "+
+			"plan_promo_uplift_units, plan_promo_uplift_rub, "+
+			"plan_promo_uplift_pct_units, plan_promo_uplift_pct_rub, "+
+			"plan_investments_pct, plan_roi, "+
+			"contract_price, gm, "+
+			"id_directum, ds_number, discount_amount, "+
+			"conditions, comments, ecom_segment, "+
+			"total_pharmacies, promo_pharmacies, "+
+			"status, date, "+
+			"key_region, top20_segment, olap_price, "+
+			"plan_promo_cip_olap, fact_promo_cip_olap, "+
+			"plan_promo_uplift_cip_olap, fact_promo_uplift_cip_olap, "+
+			"actual_promo_sales_units, actual_investments, "+
+			"actual_promo_rub, actual_promo_uplift_units, actual_promo_uplift_rub, "+
+			"actual_external_ecom_units, actual_corrected_baseline, "+
+			"agreement1, agreement2, "+
+			"net_promo_uplift_rub, net_promo_uplift_pct, "+
+			"actual_investments_pct, actual_roi, "+
+			"actual_promo_rub_wo_ecom, actual_promo_uplift_units_wo_ecom, "+
+			"actual_promo_uplift_rub_wo_ecom, "+
+			"net_promo_uplift_rub_wo_ecom, net_promo_uplift_pct_wo_ecom, "+
+			"actual_investments_pct_wo_ecom, actual_roi_wo_ecom, "+
+			"plan_vs_fact_rub, plan_vs_fact_investments, "+
+			"turnover_per_point, turnover_per_point_promo, "+
+			"updated_at "+
+			"FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL",
+		id,
 	)
 
-	c.JSON(http.StatusOK, gin.H{
-		"token":    newAccessToken,
-		"username": claims.Username,
-		"role":     claims.Role,
-	})
+	var r models.PromoRowDB
+	var nsNetworkName, nsKAM, nsBrand, nsBrandAS, nsSKU sql.NullString
+	var nsMechanics, nsGTNOpex sql.NullString
+	var nsIDDirectum, nsDSNumber, nsConditions, nsComments, nsEcomSegment, nsStatus, nsDate sql.NullString
+	var nsKeyRegion, nsTop20Segment sql.NullString
+	var nsAgreement1, nsAgreement2 sql.NullString
+	var nsUpdatedAt sql.NullString
+	var nQuarter, nTotalPharmacies, nPromoPharmacies sql.NullInt64
+	var nBaselineUnits, nBaselineRub sql.NullFloat64
+	var nPlanPromoUnits, nPlanPromoRub, nPlanInvestmentsRub sql.NullFloat64
+	var nPlanPromoUpliftUnits, nPlanPromoUpliftRub sql.NullFloat64
+	var nPlanPromoUpliftPctUnits, nPlanPromoUpliftPctRub, nPlanInvestmentsPct, nPlanROI sql.NullFloat64
+	var nContractPrice, nGM, nDiscountAmount sql.NullFloat64
+	var nOlapPrice, nPlanPromoCipOlap, nFactPromoCipOlap, nPlanPromoUpliftCipOlap, nFactPromoUpliftCipOlap sql.NullFloat64
+	var nActualPromoSalesUnits, nActualInvestments, nActualPromoRub, nActualPromoUpliftUnits, nActualPromoUpliftRub sql.NullFloat64
+	var nActualExternalEcomUnits, nActualCorrectedBaseline sql.NullFloat64
+	var nNetPromoUpliftRub, nNetPromoUpliftPct, nActualInvestmentsPct, nActualROI sql.NullFloat64
+	var nActualPromoRubWoEcom, nActualPromoUpliftUnitsWoEcom, nActualPromoUpliftRubWoEcom sql.NullFloat64
+	var nNetPromoUpliftRubWoEcom, nNetPromoUpliftPctWoEcom, nActualInvestmentsPctWoEcom, nActualROIWoEcom sql.NullFloat64
+	var nPlanVsFactRub, nPlanVsFactInvestments, nTurnoverPerPoint, nTurnoverPerPointPromo sql.NullFloat64
+
+	err := row.Scan(
+		&nsNetworkName, &nsKAM, &nsBrand, &nsBrandAS, &nsSKU,
+		&r.Year, &r.Month, &nQuarter, &nsMechanics, &nsGTNOpex,
+		&nBaselineUnits, &nBaselineRub,
+		&nPlanPromoUnits, &nPlanPromoRub, &nPlanInvestmentsRub,
+		&nPlanPromoUpliftUnits, &nPlanPromoUpliftRub,
+		&nPlanPromoUpliftPctUnits, &nPlanPromoUpliftPctRub,
+		&nPlanInvestmentsPct, &nPlanROI,
+		&nContractPrice, &nGM,
+		&nsIDDirectum, &nsDSNumber, &nDiscountAmount,
+		&nsConditions, &nsComments, &nsEcomSegment,
+		&nTotalPharmacies, &nPromoPharmacies,
+		&nsStatus, &nsDate,
+		&nsKeyRegion, &nsTop20Segment, &nOlapPrice,
+		&nPlanPromoCipOlap, &nFactPromoCipOlap,
+		&nPlanPromoUpliftCipOlap, &nFactPromoUpliftCipOlap,
+		&nActualPromoSalesUnits, &nActualInvestments,
+		&nActualPromoRub, &nActualPromoUpliftUnits, &nActualPromoUpliftRub,
+		&nActualExternalEcomUnits, &nActualCorrectedBaseline,
+		&nsAgreement1, &nsAgreement2,
+		&nNetPromoUpliftRub, &nNetPromoUpliftPct,
+		&nActualInvestmentsPct, &nActualROI,
+		&nActualPromoRubWoEcom, &nActualPromoUpliftUnitsWoEcom,
+		&nActualPromoUpliftRubWoEcom,
+		&nNetPromoUpliftRubWoEcom, &nNetPromoUpliftPctWoEcom,
+		&nActualInvestmentsPctWoEcom, &nActualROIWoEcom,
+		&nPlanVsFactRub, &nPlanVsFactInvestments,
+		&nTurnoverPerPoint, &nTurnoverPerPointPromo,
+		&nsUpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	r.ID = id
+	r.NetworkName = nsNetworkName.String
+	r.KAM = nsKAM.String
+	r.Brand = nsBrand.String
+	r.BrandAS = nsBrandAS.String
+	r.SKU = nsSKU.String
+	r.Quarter = int(nQuarter.Int64)
+	r.Mechanics = nsMechanics.String
+	r.GTNOpex = nsGTNOpex.String
+	r.BaselineUnits = nBaselineUnits.Float64
+	r.BaselineRub = nBaselineRub.Float64
+	r.PlanPromoUnits = nPlanPromoUnits.Float64
+	r.PlanPromoRub = nPlanPromoRub.Float64
+	r.PlanInvestmentsRub = nPlanInvestmentsRub.Float64
+	r.PlanPromoUpliftUnits = nPlanPromoUpliftUnits.Float64
+	r.PlanPromoUpliftRub = nPlanPromoUpliftRub.Float64
+	r.PlanPromoUpliftPctUnits = nPlanPromoUpliftPctUnits.Float64
+	r.PlanPromoUpliftPctRub = nPlanPromoUpliftPctRub.Float64
+	r.PlanInvestmentsPct = nPlanInvestmentsPct.Float64
+	r.PlanROI = nPlanROI.Float64
+	r.ContractPrice = nContractPrice.Float64
+	r.GM = nGM.Float64
+	r.IDDirectum = nsIDDirectum.String
+	r.DSNumber = nsDSNumber.String
+	r.DiscountAmount = nDiscountAmount.Float64
+	r.Conditions = nsConditions.String
+	r.Comments = nsComments.String
+	r.EcomSegment = nsEcomSegment.String
+	r.TotalPharmacies = int(nTotalPharmacies.Int64)
+	r.PromoPharmacies = int(nPromoPharmacies.Int64)
+	r.Status = nsStatus.String
+	r.Date = nsDate.String
+	r.KeyRegion = nsKeyRegion.String
+	r.Top20Segment = nsTop20Segment.String
+	r.OlapPrice = nOlapPrice.Float64
+	r.PlanPromoCipOlap = nPlanPromoCipOlap.Float64
+	r.FactPromoCipOlap = nFactPromoCipOlap.Float64
+	r.PlanPromoUpliftCipOlap = nPlanPromoUpliftCipOlap.Float64
+	r.FactPromoUpliftCipOlap = nFactPromoUpliftCipOlap.Float64
+	r.ActualPromoSalesUnits = nActualPromoSalesUnits.Float64
+	r.ActualInvestments = nActualInvestments.Float64
+	r.ActualPromoRub = nActualPromoRub.Float64
+	r.ActualPromoUpliftUnits = nActualPromoUpliftUnits.Float64
+	r.ActualPromoUpliftRub = nActualPromoUpliftRub.Float64
+	r.ActualExternalEcomUnits = nActualExternalEcomUnits.Float64
+	r.ActualCorrectedBaseline = nActualCorrectedBaseline.Float64
+	r.Agreement1 = nsAgreement1.String
+	r.Agreement2 = nsAgreement2.String
+	r.NetPromoUpliftRub = nNetPromoUpliftRub.Float64
+	r.NetPromoUpliftPct = nNetPromoUpliftPct.Float64
+	r.ActualInvestmentsPct = nActualInvestmentsPct.Float64
+	r.ActualROI = nActualROI.Float64
+	r.ActualPromoRubWoEcom = nActualPromoRubWoEcom.Float64
+	r.ActualPromoUpliftUnitsWoEcom = nActualPromoUpliftUnitsWoEcom.Float64
+	r.ActualPromoUpliftRubWoEcom = nActualPromoUpliftRubWoEcom.Float64
+	r.NetPromoUpliftRubWoEcom = nNetPromoUpliftRubWoEcom.Float64
+	r.NetPromoUpliftPctWoEcom = nNetPromoUpliftPctWoEcom.Float64
+	r.ActualInvestmentsPctWoEcom = nActualInvestmentsPctWoEcom.Float64
+	r.ActualROIWoEcom = nActualROIWoEcom.Float64
+	r.PlanVsFactRub = nPlanVsFactRub.Float64
+	r.PlanVsFactInvestments = nPlanVsFactInvestments.Float64
+	r.TurnoverPerPoint = nTurnoverPerPoint.Float64
+	r.TurnoverPerPointPromo = nTurnoverPerPointPromo.Float64
+	r.UpdatedAt = nsUpdatedAt.String
+
+	return &r, nil
+}
+
+// UpdatePromo возвращает rowsAffected (0 = конфликт версий)
+func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) {
+	query := `UPDATE dbo.tbl_PromoActivities SET 
+		network_name = ?, kam = ?, brand = ?, brand_as = ?, sku = ?,
+		year = ?, month = ?, quarter = ?, mechanics = ?, gtn_opex = ?,
+		baseline_units = ?, baseline_rub = ?,
+		plan_promo_units = ?, plan_promo_rub = ?, plan_investments_rub = ?,
+		plan_promo_uplift_units = ?, plan_promo_uplift_rub = ?,
+		plan_promo_uplift_pct_units = ?, plan_promo_uplift_pct_rub = ?,
+		plan_investments_pct = ?, plan_roi = ?,
+		contract_price = ?, gm = ?,
+		id_directum = ?, ds_number = ?, discount_amount = ?,
+		conditions = ?, comments = ?, ecom_segment = ?,
+		total_pharmacies = ?, promo_pharmacies = ?,
+		status = ?, date = ?,
+		key_region = ?, top20_segment = ?, olap_price = ?,
+		plan_promo_cip_olap = ?, fact_promo_cip_olap = ?,
+		plan_promo_uplift_cip_olap = ?, fact_promo_uplift_cip_olap = ?,
+		actual_promo_sales_units = ?, actual_investments = ?,
+		actual_promo_rub = ?, actual_promo_uplift_units = ?, actual_promo_uplift_rub = ?,
+		actual_external_ecom_units = ?, actual_corrected_baseline = ?,
+		agreement1 = ?, agreement2 = ?,
+		net_promo_uplift_rub = ?, net_promo_uplift_pct = ?,
+		actual_investments_pct = ?, actual_roi = ?,
+		actual_promo_rub_wo_ecom = ?, actual_promo_uplift_units_wo_ecom = ?,
+		actual_promo_uplift_rub_wo_ecom = ?,
+		net_promo_uplift_rub_wo_ecom = ?, net_promo_uplift_pct_wo_ecom = ?,
+		actual_investments_pct_wo_ecom = ?, actual_roi_wo_ecom = ?,
+		plan_vs_fact_rub = ?, plan_vs_fact_investments = ?,
+		turnover_per_point = ?, turnover_per_point_promo = ?,
+		updated_at = GETDATE()
+		WHERE id = ? AND updated_at = ?`
+
+	values := []interface{}{
+		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
+		r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
+		r.BaselineUnits, r.BaselineRub,
+		r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
+		r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
+		r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
+		r.PlanInvestmentsPct, r.PlanROI,
+		r.ContractPrice, r.GM,
+		r.IDDirectum, r.DSNumber, r.DiscountAmount,
+		r.Conditions, r.Comments, r.EcomSegment,
+		r.TotalPharmacies, r.PromoPharmacies,
+		r.Status, r.Date,
+		r.KeyRegion, r.Top20Segment, r.OlapPrice,
+		r.PlanPromoCipOlap, r.FactPromoCipOlap,
+		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
+		r.ActualPromoSalesUnits, r.ActualInvestments,
+		r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
+		r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
+		r.Agreement1, r.Agreement2,
+		r.NetPromoUpliftRub, r.NetPromoUpliftPct,
+		r.ActualInvestmentsPct, r.ActualROI,
+		r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
+		r.ActualPromoUpliftRubWoEcom,
+		r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
+		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
+		r.PlanVsFactRub, r.PlanVsFactInvestments,
+		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
+		id, updatedAt,
+	}
+
+	result, err := config.DB.Exec(query, values...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func InsertPromo(r *models.PromoRowDB) (int64, error) {
+	query := `INSERT INTO dbo.tbl_PromoActivities (
+		network_name, kam, brand, brand_as, sku,
+		year, month, quarter, mechanics, gtn_opex,
+		baseline_units, baseline_rub,
+		plan_promo_units, plan_promo_rub, plan_investments_rub,
+		plan_promo_uplift_units, plan_promo_uplift_rub,
+		plan_promo_uplift_pct_units, plan_promo_uplift_pct_rub,
+		plan_investments_pct, plan_roi,
+		contract_price, gm,
+		id_directum, ds_number, discount_amount,
+		conditions, comments, ecom_segment,
+		total_pharmacies, promo_pharmacies,
+		status, date,
+		key_region, top20_segment, olap_price,
+		plan_promo_cip_olap, fact_promo_cip_olap,
+		plan_promo_uplift_cip_olap, fact_promo_uplift_cip_olap,
+		actual_promo_sales_units, actual_investments,
+		actual_promo_rub, actual_promo_uplift_units, actual_promo_uplift_rub,
+		actual_external_ecom_units, actual_corrected_baseline,
+		agreement1, agreement2,
+		net_promo_uplift_rub, net_promo_uplift_pct,
+		actual_investments_pct, actual_roi,
+		actual_promo_rub_wo_ecom, actual_promo_uplift_units_wo_ecom,
+		actual_promo_uplift_rub_wo_ecom,
+		net_promo_uplift_rub_wo_ecom, net_promo_uplift_pct_wo_ecom,
+		actual_investments_pct_wo_ecom, actual_roi_wo_ecom,
+		plan_vs_fact_rub, plan_vs_fact_investments,
+		turnover_per_point, turnover_per_point_promo,
+		updated_at
+	) OUTPUT INSERTED.id VALUES (
+		?, ?, ?, ?, ?,
+		?, ?, ?, ?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?, ?,
+		?, ?, ?,
+		?, ?, ?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		?, ?,
+		GETDATE()
+	)`
+
+	var newID int64
+	err := config.DB.QueryRow(query,
+		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
+		r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
+		r.BaselineUnits, r.BaselineRub,
+		r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
+		r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
+		r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
+		r.PlanInvestmentsPct, r.PlanROI,
+		r.ContractPrice, r.GM,
+		r.IDDirectum, r.DSNumber, r.DiscountAmount,
+		r.Conditions, r.Comments, r.EcomSegment,
+		r.TotalPharmacies, r.PromoPharmacies,
+		r.Status, r.Date,
+		r.KeyRegion, r.Top20Segment, r.OlapPrice,
+		r.PlanPromoCipOlap, r.FactPromoCipOlap,
+		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
+		r.ActualPromoSalesUnits, r.ActualInvestments,
+		r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
+		r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
+		r.Agreement1, r.Agreement2,
+		r.NetPromoUpliftRub, r.NetPromoUpliftPct,
+		r.ActualInvestmentsPct, r.ActualROI,
+		r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
+		r.ActualPromoUpliftRubWoEcom,
+		r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
+		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
+		r.PlanVsFactRub, r.PlanVsFactInvestments,
+		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
+	).Scan(&newID)
+	return newID, err
+}
+
+func SoftDeletePromo(id int) (int64, error) {
+	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE(), updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ─── Approvals ──────────────────────────────────────────────────────────────
+
+type ApprovalParams struct {
+	Role              string
+	KAM               string
+	ApprovalStatus    string
+	YearStr, MonthStr string
+}
+
+func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
+	currentYear := time.Now().Year()
+	currentMonth := int(time.Now().Month())
+
+	query := `
+		SELECT TOP 500
+			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
+			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
+			p.plan_investments_rub, p.plan_roi, p.actual_roi,
+			p.conditions, p.agreement1, p.agreement2, p.status,
+			p.agreement1_status, p.agreement1_comment,
+			p.agreement2_status, p.agreement2_comment,
+			0 as historical_count,
+			CAST(NULL AS FLOAT) as avg_historical_roi
+		FROM dbo.tbl_PromoActivities p
+		WHERE p.deleted_at IS NULL
+	`
+
+	args := []interface{}{}
+
+	if params.YearStr != "" {
+		y, _ := strconv.Atoi(params.YearStr)
+		query += " AND p.year = ?"
+		args = append(args, y)
+	} else if params.MonthStr != "" {
+		query += " AND p.year >= ?"
+		args = append(args, currentYear)
+	} else {
+		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		args = append(args, currentYear, currentYear, currentMonth)
+	}
+
+	if params.MonthStr != "" {
+		m, _ := strconv.Atoi(params.MonthStr)
+		query += " AND p.month = ?"
+		args = append(args, m)
+	}
+
+	if params.KAM != "" {
+		query += " AND p.kam = ?"
+		args = append(args, params.KAM)
+	}
+
+	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
+	statusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		statusField = "p.agreement2_status"
+	}
+
+	switch params.ApprovalStatus {
+	case "pending":
+		query += fmt.Sprintf(" AND %s IS NULL", statusField)
+	case "commented":
+		query += fmt.Sprintf(" AND %s = 'commented'", statusField)
+	case "approved":
+		query += fmt.Sprintf(" AND %s = 'approved'", statusField)
+	case "rejected":
+		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
+	}
+
+	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.ApprovalRow
+	for rows.Next() {
+		var r models.ApprovalRow
+		if err := rows.Scan(
+			&r.ID, &r.NetworkName, &r.BrandAS, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
+			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
+			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
+			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Agreement1Status, &r.Agreement1Comment,
+			&r.Agreement2Status, &r.Agreement2Comment,
+			&r.HistoricalCount, &r.AvgHistoricalROI,
+		); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.ApprovalRow{}
+	}
+	return results, nil
+}
+
+// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
+func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
+	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
+	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
+	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+
+	query := fmt.Sprintf(
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		agreementField, statusField, commentField,
+	)
+	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
+	return err
+}
+
+// ─── Approval Filters ───────────────────────────────────────────────────────
+
+type ApprovalFilterParams struct {
+	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
+}
+
+func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
+	currentYear := time.Now().Year()
+	currentMonth := int(time.Now().Month())
+
+	query := `
+		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics, p.kam
+		FROM dbo.tbl_PromoActivities p
+		WHERE p.deleted_at IS NULL
+	`
+	args := []interface{}{}
+
+	if params.YearStr != "" {
+		y, _ := strconv.Atoi(params.YearStr)
+		query += " AND p.year = ?"
+		args = append(args, y)
+	} else {
+		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		args = append(args, currentYear, currentYear, currentMonth)
+	}
+
+	if params.MonthStr != "" {
+		m, _ := strconv.Atoi(params.MonthStr)
+		query += " AND p.month = ?"
+		args = append(args, m)
+	}
+
+	if params.KAM != "" {
+		query += " AND p.kam = ?"
+		args = append(args, params.KAM)
+	}
+
+	if params.Network != "" {
+		query += " AND p.network_name = ?"
+		args = append(args, params.Network)
+	}
+
+	if params.Brand != "" {
+		query += " AND p.brand_as = ?"
+		args = append(args, params.Brand)
+	}
+
+	if params.MechFilter != "" {
+		query += " AND p.mechanics = ?"
+		args = append(args, params.MechFilter)
+	}
+
+	// Фильтруем по статусу конкретной роли (а не по OR двух полей)
+	filterStatusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		filterStatusField = "p.agreement2_status"
+	}
+
+	switch params.ApprovalStatus {
+	case "pending":
+		query += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
+	case "commented":
+		query += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
+	case "approved":
+		query += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
+	case "rejected":
+		query += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
+	}
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	defer rows.Close()
+
+	networkSet := make(map[string]bool)
+	brandSet := make(map[string]bool)
+	mechSet := make(map[string]bool)
+	kamSet := make(map[string]bool)
+
+	for rows.Next() {
+		var nw, br, mech, k sql.NullString
+		if rows.Scan(&nw, &br, &mech, &k) == nil {
+			if nw.Valid {
+				networkSet[nw.String] = true
+			}
+			if br.Valid {
+				brandSet[br.String] = true
+			}
+			if mech.Valid {
+				mechSet[mech.String] = true
+			}
+			if k.Valid {
+				kamSet[k.String] = true
+			}
+		}
+	}
+
+	for v := range networkSet {
+		networks = append(networks, v)
+	}
+	for v := range brandSet {
+		brands = append(brands, v)
+	}
+	for v := range mechSet {
+		mechanics = append(mechanics, v)
+	}
+	for v := range kamSet {
+		kams = append(kams, v)
+	}
+
+	sort.Strings(networks)
+	sort.Strings(brands)
+	sort.Strings(mechanics)
+	sort.Strings(kams)
+
+	return networks, brands, mechanics, kams, nil
+}
+
+func GetApprovalKAMs(field string) ([]string, error) {
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.kam 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL AND %s IS NULL AND p.kam IS NOT NULL
+		ORDER BY p.kam
+	`, field)
+
+	rows, err := config.DB.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var kams []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			kams = append(kams, k)
+		}
+	}
+	if kams == nil {
+		kams = []string{}
+	}
+	return kams, nil
+}
+
+func GetApprovalNetworks(field, kam string) ([]string, error) {
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.network_name 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL 
+		  AND %s IS NULL 
+		  AND p.kam = ? 
+		  AND p.network_name IS NOT NULL
+		ORDER BY p.network_name
+	`, field)
+
+	rows, err := config.DB.Query(query, kam)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var networks []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			networks = append(networks, n)
+		}
+	}
+	if networks == nil {
+		networks = []string{}
+	}
+	return networks, nil
+}
+
+func GetApprovalBrands(field, kam, network string) ([]string, error) {
+	query := fmt.Sprintf(`
+		SELECT DISTINCT p.brand_as 
+		FROM dbo.tbl_PromoActivities p 
+		WHERE p.deleted_at IS NULL 
+		  AND %s IS NULL 
+		  AND p.kam = ? 
+		  AND p.brand_as IS NOT NULL
+	`, field)
+	args := []interface{}{kam}
+
+	if network != "" {
+		query += " AND p.network_name = ?"
+		args = append(args, network)
+	}
+
+	query += " ORDER BY p.brand_as"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var brands []string
+	for rows.Next() {
+		var b string
+		if rows.Scan(&b) == nil {
+			brands = append(brands, b)
+		}
+	}
+	if brands == nil {
+		brands = []string{}
+	}
+	return brands, nil
 }
 ```
 
@@ -5062,142 +5621,116 @@ export default function PromoForm({ onSave }) {
 }
 ```
 
-## File: backend/models/types.go
+## File: backend/handlers/auth.go
 ```go
-package models
+package handlers
 
-type Row struct {
-	ID          int     `json:"id"`
-	Year        int     `json:"year"`
-	Month       int     `json:"month"`
-	BrandName   string  `json:"brandName"`
-	ProductName string  `json:"productName"`
-	NetworkName string  `json:"networkName"`
-	MetricType  string  `json:"metricType"`
-	MetricValue float64 `json:"metricValue"`
-	UnRub       *string `json:"un_rub"`
-	Segment     *string `json:"segment"`
-	Channel     *string `json:"channel"`
-	UpdatedAt   *string `json:"updated_at"`
+import (
+	"net/http"
+	"os"
+	"time"
+
+	"backend/config"
+	"backend/repository"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+)
+
+func Login(c *gin.Context) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+
+	// Ищем пользователя в БД
+	user, err := repository.GetUserByUsername(req.Username)
+	if err != nil {
+		config.Logger.Error("login_db_error", "error", err.Error(), "username", req.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+
+	if user == nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
+		return
+	}
+
+	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	refreshToken, err := config.GenerateRefreshToken(req.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	// Refresh token в httpOnly secure cookie
+	c.SetCookie(
+		"refresh_token",
+		refreshToken,
+		int(7*24*time.Hour.Seconds()),    // 7 дней
+		"/api/auth",                      // доступен только для /api/auth/*
+		"",                               // domain (текущий)
+		os.Getenv("ENV") == "production", // secure (true только на проде)
+		true,                             // httpOnly
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":    accessToken,
+		"username": req.Username,
+		"role":     user.Role,
+	})
 }
 
-type PromoRow struct {
-	ID                      int      `json:"id"`
-	NetworkName             *string  `json:"network_name"`
-	KAM                     *string  `json:"kam"`
-	IDDirectum              *string  `json:"id_directum"`
-	DSNumber                *string  `json:"ds_number"`
-	Year                    int      `json:"year"`
-	Month                   *int     `json:"month"`
-	Quarter                 *int     `json:"quarter"`
-	SKU                     *string  `json:"sku"`
-	Brand                   *string  `json:"brand"`
-	BrandAS                 *string  `json:"brand_as"`
-	Mechanics               *string  `json:"mechanics"`
-	DiscountAmount          *float64 `json:"discount_amount"`
-	GTNOpex                 *string  `json:"gtn_opex"`
-	Conditions              *string  `json:"conditions"`
-	Comments                *string  `json:"comments"`
-	BaselineUnits           *float64 `json:"baseline_units"`
-	BaselineRub             *float64 `json:"baseline_rub"`
-	PlanPromoUnits          *float64 `json:"plan_promo_units"`
-	PlanPromoRub            *float64 `json:"plan_promo_rub"`
-	PlanInvestmentsRub      *float64 `json:"plan_investments_rub"`
-	PlanPromoUpliftUnits    *float64 `json:"plan_promo_uplift_units"`
-	PlanPromoUpliftRub      *float64 `json:"plan_promo_uplift_rub"`
-	PlanPromoUpliftPctUnits *float64 `json:"plan_promo_uplift_pct_units"`
-	PlanPromoUpliftPctRub   *float64 `json:"plan_promo_uplift_pct_rub"`
-	PlanInvestmentsPct      *float64 `json:"plan_investments_pct"`
-	PlanROI                 *float64 `json:"plan_roi"`
-	ContractPrice           *float64 `json:"contract_price"`
-	GM                      *float64 `json:"gm"`
-	TotalPharmacies         *int     `json:"total_pharmacies"`
-	PromoPharmacies         *int     `json:"promo_pharmacies"`
-	ActualPromoSalesUnits   *float64 `json:"actual_promo_sales_units"`
-	ActualInvestments       *float64 `json:"actual_investments"`
-	Status                  *string  `json:"status"`
-	ActualPromoRub          *float64 `json:"actual_promo_rub"`
-	ActualPromoUpliftUnits  *float64 `json:"actual_promo_uplift_units"`
-	ActualPromoUpliftRub    *float64 `json:"actual_promo_uplift_rub"`
-	ActualExternalEcomUnits *float64 `json:"actual_external_ecom_units"`
-	ActualCorrectedBaseline *float64 `json:"actual_corrected_baseline"`
-	ActualROI               *float64 `json:"actual_roi"`
-	PlanVsFactRub           *float64 `json:"plan_vs_fact_rub"`
-	PlanVsFactInvestments   *float64 `json:"plan_vs_fact_investments"`
-	PromoChannel            *string  `json:"channel"`
-	Agreement1              *string  `json:"agreement1"`
-	Agreement2              *string  `json:"agreement2"`
-	Date                    *string  `json:"date"`
-	CreatedAt               *string  `json:"created_at"`
-	UpdatedAt               *string  `json:"updated_at"`
-}
+func RefreshToken(c *gin.Context) {
+	refreshToken, err := c.Cookie("refresh_token")
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token не найден"})
+		return
+	}
 
-type HistoryRow struct {
-	ID                     int      `json:"id"`
-	NetworkName            *string  `json:"network_name"`
-	Year                   int      `json:"year"`
-	Month                  int      `json:"month"`
-	Mechanics              *string  `json:"mechanics"`
-	SKU                    *string  `json:"sku"`
-	BaselineUnits          *float64 `json:"baseline_units"`
-	PlanPromoUnits         *float64 `json:"plan_promo_units"`
-	ActualPromoSalesUnits  *float64 `json:"actual_promo_sales_units"`
-	PlanPromoUpliftUnits   *float64 `json:"plan_promo_uplift_units"`
-	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
-	PlanROI                *float64 `json:"plan_roi"`
-	ActualROI              *float64 `json:"actual_roi"`
-}
+	claims, err := config.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
+		return
+	}
 
-type DrilldownRow struct {
-	Year       int     `json:"year"`
-	Month      int     `json:"month"`
-	MetricType string  `json:"metricType"`
-	TotalValue float64 `json:"totalValue"`
-	UnRub      *string `json:"un_rub"`
-	Segment    *string `json:"segment"`
-	Channel    *string `json:"channel"`
-}
+	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
 
-type NetworkGeo struct {
-	KAM          string `json:"kam"`
-	NetworkType  string `json:"network_type"`
-	Top20Segment string `json:"top20_segment"`
-	KeyRegion    string `json:"key_region"`
-}
+	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
 
-type LastSKUData struct {
-	ContractPrice   float64 `json:"contract_price"`
-	GM              float64 `json:"gm"`
-	TotalPharmacies int64   `json:"total_pharmacies"`
-	KeyRegion       string  `json:"key_region"`
-	Top20Segment    string  `json:"top20_segment"`
-	OlapPrice       float64 `json:"olap_price"`
-}
+	// Обновляем refresh cookie
+	c.SetCookie(
+		"refresh_token",
+		newRefreshToken,
+		int(7*24*time.Hour.Seconds()),
+		"/api/auth",
+		"",
+		os.Getenv("ENV") == "production",
+		true,
+	)
 
-type ApprovalRow struct {
-	ID                    int      `json:"id"`
-	NetworkName           *string  `json:"network_name"`
-	BrandAS               *string  `json:"brand_as"`
-	SKU                   *string  `json:"sku"`
-	Mechanics             *string  `json:"mechanics"`
-	Year                  int      `json:"year"`
-	Month                 *int     `json:"month"`
-	BaselineUnits         *float64 `json:"baseline_units"`
-	PlanPromoUnits        *float64 `json:"plan_promo_units"`
-	ActualPromoSalesUnits *float64 `json:"actual_promo_sales_units"`
-	PlanInvestmentsRub    *float64 `json:"plan_investments_rub"`
-	PlanROI               *float64 `json:"plan_roi"`
-	ActualROI             *float64 `json:"actual_roi"`
-	Conditions            *string  `json:"conditions"`
-	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
-	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
-	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
-	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
-	Agreement2Status      *string  `json:"agreement2_status"`
-	Agreement2Comment     *string  `json:"agreement2_comment"`
-	Status                *string  `json:"status"`
-	HistoricalCount       int      `json:"historical_count"`
-	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
+	c.JSON(http.StatusOK, gin.H{
+		"token":    newAccessToken,
+		"username": claims.Username,
+		"role":     claims.Role,
+	})
 }
 ```
 
@@ -5912,6 +6445,217 @@ export default function App() {
       </Box>
     </ThemeProvider>
   );
+}
+```
+
+## File: backend/models/types.go
+```go
+package models
+
+type Row struct {
+	ID          int     `json:"id"`
+	Year        int     `json:"year"`
+	Month       int     `json:"month"`
+	BrandName   string  `json:"brandName"`
+	ProductName string  `json:"productName"`
+	NetworkName string  `json:"networkName"`
+	MetricType  string  `json:"metricType"`
+	MetricValue float64 `json:"metricValue"`
+	UnRub       *string `json:"un_rub"`
+	Segment     *string `json:"segment"`
+	Channel     *string `json:"channel"`
+	UpdatedAt   *string `json:"updated_at"`
+}
+
+type PromoRow struct {
+	ID                      int      `json:"id"`
+	NetworkName             *string  `json:"network_name"`
+	KAM                     *string  `json:"kam"`
+	IDDirectum              *string  `json:"id_directum"`
+	DSNumber                *string  `json:"ds_number"`
+	Year                    int      `json:"year"`
+	Month                   *int     `json:"month"`
+	Quarter                 *int     `json:"quarter"`
+	SKU                     *string  `json:"sku"`
+	Brand                   *string  `json:"brand"`
+	BrandAS                 *string  `json:"brand_as"`
+	Mechanics               *string  `json:"mechanics"`
+	DiscountAmount          *float64 `json:"discount_amount"`
+	GTNOpex                 *string  `json:"gtn_opex"`
+	Conditions              *string  `json:"conditions"`
+	Comments                *string  `json:"comments"`
+	BaselineUnits           *float64 `json:"baseline_units"`
+	BaselineRub             *float64 `json:"baseline_rub"`
+	PlanPromoUnits          *float64 `json:"plan_promo_units"`
+	PlanPromoRub            *float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub      *float64 `json:"plan_investments_rub"`
+	PlanPromoUpliftUnits    *float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub      *float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits *float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub   *float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct      *float64 `json:"plan_investments_pct"`
+	PlanROI                 *float64 `json:"plan_roi"`
+	ContractPrice           *float64 `json:"contract_price"`
+	GM                      *float64 `json:"gm"`
+	TotalPharmacies         *int     `json:"total_pharmacies"`
+	PromoPharmacies         *int     `json:"promo_pharmacies"`
+	ActualPromoSalesUnits   *float64 `json:"actual_promo_sales_units"`
+	ActualInvestments       *float64 `json:"actual_investments"`
+	Status                  *string  `json:"status"`
+	ActualPromoRub          *float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits  *float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub    *float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits *float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline *float64 `json:"actual_corrected_baseline"`
+	ActualROI               *float64 `json:"actual_roi"`
+	PlanVsFactRub           *float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments   *float64 `json:"plan_vs_fact_investments"`
+	PromoChannel            *string  `json:"channel"`
+	Agreement1              *string  `json:"agreement1"`
+	Agreement2              *string  `json:"agreement2"`
+	Date                    *string  `json:"date"`
+	CreatedAt               *string  `json:"created_at"`
+	UpdatedAt               *string  `json:"updated_at"`
+}
+
+type HistoryRow struct {
+	ID                     int      `json:"id"`
+	NetworkName            *string  `json:"network_name"`
+	Year                   int      `json:"year"`
+	Month                  int      `json:"month"`
+	Mechanics              *string  `json:"mechanics"`
+	SKU                    *string  `json:"sku"`
+	BaselineUnits          *float64 `json:"baseline_units"`
+	PlanPromoUnits         *float64 `json:"plan_promo_units"`
+	ActualPromoSalesUnits  *float64 `json:"actual_promo_sales_units"`
+	PlanPromoUpliftUnits   *float64 `json:"plan_promo_uplift_units"`
+	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
+	PlanROI                *float64 `json:"plan_roi"`
+	ActualROI              *float64 `json:"actual_roi"`
+}
+
+type DrilldownRow struct {
+	Year       int     `json:"year"`
+	Month      int     `json:"month"`
+	MetricType string  `json:"metricType"`
+	TotalValue float64 `json:"totalValue"`
+	UnRub      *string `json:"un_rub"`
+	Segment    *string `json:"segment"`
+	Channel    *string `json:"channel"`
+}
+
+type NetworkGeo struct {
+	KAM          string `json:"kam"`
+	NetworkType  string `json:"network_type"`
+	Top20Segment string `json:"top20_segment"`
+	KeyRegion    string `json:"key_region"`
+}
+
+type LastSKUData struct {
+	ContractPrice   float64 `json:"contract_price"`
+	GM              float64 `json:"gm"`
+	TotalPharmacies int64   `json:"total_pharmacies"`
+	KeyRegion       string  `json:"key_region"`
+	Top20Segment    string  `json:"top20_segment"`
+	OlapPrice       float64 `json:"olap_price"`
+}
+
+// PromoRowDB — полная структура для записи/чтения строки в БД.
+// Все поля value-типы (не указатели) для простоты сериализации в JSON.
+// NULL поля — zero value (0, "").
+type PromoRowDB struct {
+	ID                           int     `json:"id"`
+	NetworkName                  string  `json:"network_name"`
+	KAM                          string  `json:"kam"`
+	Brand                        string  `json:"brand"`
+	BrandAS                      string  `json:"brand_as"`
+	SKU                          string  `json:"sku"`
+	Year                         int     `json:"year"`
+	Month                        int     `json:"month"`
+	Quarter                      int     `json:"quarter"`
+	Mechanics                    string  `json:"mechanics"`
+	GTNOpex                      string  `json:"gtn_opex"`
+	BaselineUnits                float64 `json:"baseline_units"`
+	BaselineRub                  float64 `json:"baseline_rub"`
+	PlanPromoUnits               float64 `json:"plan_promo_units"`
+	PlanPromoRub                 float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub           float64 `json:"plan_investments_rub"`
+	PlanPromoUpliftUnits         float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub           float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits      float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub        float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct           float64 `json:"plan_investments_pct"`
+	PlanROI                      float64 `json:"plan_roi"`
+	ContractPrice                float64 `json:"contract_price"`
+	GM                           float64 `json:"gm"`
+	IDDirectum                   string  `json:"id_directum"`
+	DSNumber                     string  `json:"ds_number"`
+	DiscountAmount               float64 `json:"discount_amount"`
+	Conditions                   string  `json:"conditions"`
+	Comments                     string  `json:"comments"`
+	EcomSegment                  string  `json:"ecom_segment"`
+	TotalPharmacies              int     `json:"total_pharmacies"`
+	PromoPharmacies              int     `json:"promo_pharmacies"`
+	Status                       string  `json:"status"`
+	Date                         string  `json:"date"`
+	KeyRegion                    string  `json:"key_region"`
+	Top20Segment                 string  `json:"top20_segment"`
+	OlapPrice                    float64 `json:"olap_price"`
+	PlanPromoCipOlap             float64 `json:"plan_promo_cip_olap"`
+	FactPromoCipOlap             float64 `json:"fact_promo_cip_olap"`
+	PlanPromoUpliftCipOlap       float64 `json:"plan_promo_uplift_cip_olap"`
+	FactPromoUpliftCipOlap       float64 `json:"fact_promo_uplift_cip_olap"`
+	ActualPromoSalesUnits        float64 `json:"actual_promo_sales_units"`
+	ActualInvestments            float64 `json:"actual_investments"`
+	ActualPromoRub               float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits       float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub         float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits      float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline      float64 `json:"actual_corrected_baseline"`
+	Agreement1                   string  `json:"agreement1"`
+	Agreement2                   string  `json:"agreement2"`
+	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
+	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
+	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
+	ActualROI                    float64 `json:"actual_roi"`
+	ActualPromoRubWoEcom         float64 `json:"actual_promo_rub_wo_ecom"`
+	ActualPromoUpliftUnitsWoEcom float64 `json:"actual_promo_uplift_units_wo_ecom"`
+	ActualPromoUpliftRubWoEcom   float64 `json:"actual_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftRubWoEcom      float64 `json:"net_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftPctWoEcom      float64 `json:"net_promo_uplift_pct_wo_ecom"`
+	ActualInvestmentsPctWoEcom   float64 `json:"actual_investments_pct_wo_ecom"`
+	ActualROIWoEcom              float64 `json:"actual_roi_wo_ecom"`
+	PlanVsFactRub                float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments        float64 `json:"plan_vs_fact_investments"`
+	TurnoverPerPoint             float64 `json:"turnover_per_point"`
+	TurnoverPerPointPromo        float64 `json:"turnover_per_point_promo"`
+	UpdatedAt                    string  `json:"updated_at"`
+}
+
+type ApprovalRow struct {
+	ID                    int      `json:"id"`
+	NetworkName           *string  `json:"network_name"`
+	BrandAS               *string  `json:"brand_as"`
+	SKU                   *string  `json:"sku"`
+	Mechanics             *string  `json:"mechanics"`
+	Year                  int      `json:"year"`
+	Month                 *int     `json:"month"`
+	BaselineUnits         *float64 `json:"baseline_units"`
+	PlanPromoUnits        *float64 `json:"plan_promo_units"`
+	ActualPromoSalesUnits *float64 `json:"actual_promo_sales_units"`
+	PlanInvestmentsRub    *float64 `json:"plan_investments_rub"`
+	PlanROI               *float64 `json:"plan_roi"`
+	ActualROI             *float64 `json:"actual_roi"`
+	Conditions            *string  `json:"conditions"`
+	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
+	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
+	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
+	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
+	Agreement2Status      *string  `json:"agreement2_status"`
+	Agreement2Comment     *string  `json:"agreement2_comment"`
+	Status                *string  `json:"status"`
+	HistoricalCount       int      `json:"historical_count"`
+	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
 }
 ```
 
@@ -6946,6 +7690,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"backend/config"
@@ -6971,6 +7716,13 @@ func GetPromoFilters(c *gin.Context) {
 		Networks:    c.QueryArray("network_name"),
 		Mechanics:   c.QueryArray("mechanics"),
 		Statuses:    c.QueryArray("status"),
+	}
+
+	// Кэшируем только если фильтры по году/месяцу не заданы (дефолтная страница)
+	cacheKey := "filters:" + params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
+	if cached, ok := config.FiltersCache.Get(cacheKey); ok {
+		c.JSON(http.StatusOK, cached)
+		return
 	}
 
 	baseWhere, baseArgs := repository.BuildBaseWhere(params)
@@ -7017,7 +7769,7 @@ func GetPromoFilters(c *gin.Context) {
 
 	_ = g.Wait()
 
-	c.JSON(http.StatusOK, gin.H{
+	result := gin.H{
 		"kam":          resKam,
 		"brand":        resBrand,
 		"sku":          resSKU,
@@ -7025,7 +7777,11 @@ func GetPromoFilters(c *gin.Context) {
 		"mechanics":    resMechanics,
 		"status":       resStatus,
 		"channel":      resChannel,
-	})
+	}
+
+	config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
+
+	c.JSON(http.StatusOK, result)
 }
 
 func GetPromoData(c *gin.Context) {
@@ -7182,6 +7938,88 @@ func GetLastSKUData(c *gin.Context) {
 
 // ─── Save / Delete ─────────────────────────────────────────────────────────
 
+func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
+	for k, v := range input {
+		if k == "id" || k == "deleted_at" || k == "updated_at" || k == "status" || strings.HasPrefix(k, "agreement") {
+			continue
+		}
+		switch k {
+		case "network_name":
+			r.NetworkName = fmt.Sprint(v)
+		case "kam":
+			r.KAM = fmt.Sprint(v)
+		case "brand":
+			r.Brand = fmt.Sprint(v)
+		case "brand_as":
+			r.BrandAS = fmt.Sprint(v)
+		case "sku":
+			r.SKU = fmt.Sprint(v)
+		case "year":
+			r.Year, _ = strconv.Atoi(fmt.Sprint(v))
+		case "month":
+			r.Month, _ = strconv.Atoi(fmt.Sprint(v))
+		case "quarter":
+			r.Quarter, _ = strconv.Atoi(fmt.Sprint(v))
+		case "mechanics":
+			r.Mechanics = fmt.Sprint(v)
+		case "gtn_opex":
+			r.GTNOpex = fmt.Sprint(v)
+		case "baseline_units":
+			r.BaselineUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "baseline_rub":
+			r.BaselineRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_promo_units":
+			r.PlanPromoUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_promo_rub":
+			r.PlanPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "plan_investments_rub":
+			r.PlanInvestmentsRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "contract_price":
+			r.ContractPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "gm":
+			r.GM, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "id_directum":
+			r.IDDirectum = fmt.Sprint(v)
+		case "ds_number":
+			r.DSNumber = fmt.Sprint(v)
+		case "discount_amount":
+			r.DiscountAmount, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "conditions":
+			r.Conditions = fmt.Sprint(v)
+		case "comments":
+			r.Comments = fmt.Sprint(v)
+		case "ecom_segment":
+			r.EcomSegment = fmt.Sprint(v)
+		case "total_pharmacies":
+			r.TotalPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+		case "promo_pharmacies":
+			r.PromoPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+		case "date":
+			r.Date = fmt.Sprint(v)
+		case "key_region":
+			r.KeyRegion = fmt.Sprint(v)
+		case "top20_segment":
+			r.Top20Segment = fmt.Sprint(v)
+		case "olap_price":
+			r.OlapPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_sales_units":
+			r.ActualPromoSalesUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_investments":
+			r.ActualInvestments, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_rub":
+			r.ActualPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_uplift_units":
+			r.ActualPromoUpliftUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_promo_uplift_rub":
+			r.ActualPromoUpliftRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_external_ecom_units":
+			r.ActualExternalEcomUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		case "actual_corrected_baseline":
+			r.ActualCorrectedBaseline, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+		}
+	}
+}
+
 func SavePromo(c *gin.Context) {
 	var input map[string]interface{}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -7194,28 +8032,25 @@ func SavePromo(c *gin.Context) {
 		idFloat, _ := strconv.ParseFloat(fmt.Sprint(id), 64)
 		idInt := int(idFloat)
 		if idInt > 0 {
-			existing, err := repository.FetchExistingRow(idInt)
+			row, err := repository.FetchExistingRow(idInt)
 			if err != nil {
 				config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Запись не найдена"})
 				return
 			}
 
-			// Сохраняем текущий updated_at для Optimistic Locking
-			updatedAt := safeString(existing, "updated_at")
+			updatedAt := row.UpdatedAt
 
-			for k, v := range input {
-				if k != "id" && k != "deleted_at" && k != "updated_at" && k != "agreement1" && k != "agreement2" {
-					existing[k] = v
-				}
-			}
+			// Применяем входящие данные поверх существующей строки
+			applyJSONToRow(row, input)
 
-			dto := services.MapToDTO(existing)
+			// Пересчитываем вычисляемые поля
+			dto := services.DBRowToDTO(row)
 			calcCtx := services.EnrichFromRepo(&dto)
 			calc := services.CalculateFields(&dto, calcCtx)
-			services.MergeCalculatedIntoMap(existing, calc)
+			services.MergeCalculatedIntoDBRow(row, calc)
 
-			rowsAffected, err := repository.UpdatePromo(idInt, existing, updatedAt)
+			rowsAffected, err := repository.UpdatePromo(idInt, row, updatedAt)
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -7226,16 +8061,16 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			existing["updated_at"] = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
+			row.UpdatedAt = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
 
 			config.Logger.Info("promo_updated",
 				"id", idInt,
-				"sku", fmt.Sprint(existing["sku"]),
-				"network", fmt.Sprint(existing["network_name"]),
+				"sku", row.SKU,
+				"network", row.NetworkName,
 				"user", "system",
 				"timestamp", time.Now().Format(time.RFC3339),
 			)
-			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": existing})
+			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
 			return
 		}
 	}
@@ -7244,32 +8079,33 @@ func SavePromo(c *gin.Context) {
 	dto := services.MapToDTO(input)
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
-	services.MergeCalculatedIntoMap(input, calc)
-	delete(input, "id")
+	row := services.DTOToDBRow(dto, calc)
 
-	newID, err := repository.InsertPromo(input)
+	newID, err := repository.InsertPromo(row)
 	if err != nil {
 		config.Logger.Error("promo_insert_failed",
 			"error", err.Error(),
-			"sku", fmt.Sprint(input["sku"]),
-			"network", fmt.Sprint(input["network_name"]),
+			"sku", dto.SKU,
+			"network", dto.NetworkName,
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	row.ID = int(newID)
+
 	config.Logger.Info("promo_created",
 		"id", newID,
-		"sku", fmt.Sprint(input["sku"]),
-		"network", fmt.Sprint(input["network_name"]),
-		"year", safeInt(input, "year"),
-		"month", safeInt(input, "month"),
-		"plan_units", safeFloat(input, "plan_promo_units"),
-		"plan_rub", safeFloat(input, "plan_promo_rub"),
+		"sku", dto.SKU,
+		"network", dto.NetworkName,
+		"year", dto.Year,
+		"month", dto.Month,
+		"plan_units", dto.PlanPromoUnits,
+		"plan_rub", dto.PlanPromoRub,
 		"user", "system",
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
-	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": input})
+	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": services.DBRowToMap(row)})
 }
 
 func DeletePromo(c *gin.Context) {

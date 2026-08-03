@@ -276,31 +276,49 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 		case "month":
 			r.Month, _ = strconv.Atoi(fmt.Sprint(v))
 		case "quarter":
-			r.Quarter, _ = strconv.Atoi(fmt.Sprint(v))
+			if val, err := strconv.Atoi(fmt.Sprint(v)); err == nil {
+				r.Quarter = &val
+			}
 		case "mechanics":
 			r.Mechanics = fmt.Sprint(v)
 		case "gtn_opex":
 			r.GTNOpex = fmt.Sprint(v)
 		case "baseline_units":
-			r.BaselineUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.BaselineUnits = &val
+			}
 		case "baseline_rub":
-			r.BaselineRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.BaselineRub = &val
+			}
 		case "plan_promo_units":
-			r.PlanPromoUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.PlanPromoUnits = &val
+			}
 		case "plan_promo_rub":
-			r.PlanPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.PlanPromoRub = &val
+			}
 		case "plan_investments_rub":
-			r.PlanInvestmentsRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.PlanInvestmentsRub = &val
+			}
 		case "contract_price":
-			r.ContractPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ContractPrice = &val
+			}
 		case "gm":
-			r.GM, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.GM = &val
+			}
 		case "id_directum":
 			r.IDDirectum = fmt.Sprint(v)
 		case "ds_number":
 			r.DSNumber = fmt.Sprint(v)
 		case "discount_amount":
-			r.DiscountAmount, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.DiscountAmount = &val
+			}
 		case "conditions":
 			r.Conditions = fmt.Sprint(v)
 		case "comments":
@@ -308,9 +326,13 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 		case "ecom_segment":
 			r.EcomSegment = fmt.Sprint(v)
 		case "total_pharmacies":
-			r.TotalPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+			if val, err := strconv.Atoi(fmt.Sprint(v)); err == nil {
+				r.TotalPharmacies = &val
+			}
 		case "promo_pharmacies":
-			r.PromoPharmacies, _ = strconv.Atoi(fmt.Sprint(v))
+			if val, err := strconv.Atoi(fmt.Sprint(v)); err == nil {
+				r.PromoPharmacies = &val
+			}
 		case "date":
 			r.Date = fmt.Sprint(v)
 		case "key_region":
@@ -318,21 +340,37 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 		case "top20_segment":
 			r.Top20Segment = fmt.Sprint(v)
 		case "olap_price":
-			r.OlapPrice, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.OlapPrice = &val
+			}
 		case "actual_promo_sales_units":
-			r.ActualPromoSalesUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualPromoSalesUnits = &val
+			}
 		case "actual_investments":
-			r.ActualInvestments, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualInvestments = &val
+			}
 		case "actual_promo_rub":
-			r.ActualPromoRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualPromoRub = &val
+			}
 		case "actual_promo_uplift_units":
-			r.ActualPromoUpliftUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualPromoUpliftUnits = &val
+			}
 		case "actual_promo_uplift_rub":
-			r.ActualPromoUpliftRub, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualPromoUpliftRub = &val
+			}
 		case "actual_external_ecom_units":
-			r.ActualExternalEcomUnits, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualExternalEcomUnits = &val
+			}
 		case "actual_corrected_baseline":
-			r.ActualCorrectedBaseline, _ = strconv.ParseFloat(fmt.Sprint(v), 64)
+			if val, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				r.ActualCorrectedBaseline = &val
+			}
 		}
 	}
 }
@@ -380,11 +418,12 @@ func SavePromo(c *gin.Context) {
 
 			row.UpdatedAt = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
 
+			usernameVal, _ := c.Get("username")
 			config.Logger.Info("promo_updated",
 				"id", idInt,
 				"sku", row.SKU,
 				"network", row.NetworkName,
-				"user", "system",
+				"user", fmt.Sprint(usernameVal),
 				"timestamp", time.Now().Format(time.RFC3339),
 			)
 			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
@@ -411,6 +450,7 @@ func SavePromo(c *gin.Context) {
 
 	row.ID = int(newID)
 
+	usernameVal, _ := c.Get("username")
 	config.Logger.Info("promo_created",
 		"id", newID,
 		"sku", dto.SKU,
@@ -419,7 +459,7 @@ func SavePromo(c *gin.Context) {
 		"month", dto.Month,
 		"plan_units", dto.PlanPromoUnits,
 		"plan_rub", dto.PlanPromoRub,
-		"user", "system",
+		"user", fmt.Sprint(usernameVal),
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": newID, "data": services.DBRowToMap(row)})
@@ -445,7 +485,8 @@ func DeletePromo(c *gin.Context) {
 		return
 	}
 
-	config.Logger.Info("promo_deleted", "id", id, "user", "system", "timestamp", time.Now().Format(time.RFC3339))
+	usernameVal, _ := c.Get("username")
+	config.Logger.Info("promo_deleted", "id", id, "user", fmt.Sprint(usernameVal), "timestamp", time.Now().Format(time.RFC3339))
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }
 
@@ -461,6 +502,9 @@ func GetApprovals(c *gin.Context) {
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		YearStr:        c.Query("year"),
 		MonthStr:       c.Query("month"),
+		Network:        c.Query("network_name"),
+		Brand:          c.Query("brand"),
+		Mechanics:      c.Query("mechanics"),
 	}
 
 	results, err := repository.GetApprovals(params)
@@ -532,12 +576,13 @@ func ApprovePromo(c *gin.Context) {
 		return
 	}
 
+	usernameVal, _ := c.Get("username")
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,
 		"status", status,
 		"comment", comment,
-		"user", "system",
+		"user", fmt.Sprint(usernameVal),
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Обновлено"})

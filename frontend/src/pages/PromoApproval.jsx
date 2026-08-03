@@ -94,19 +94,15 @@ export default function PromoApproval({ role, onDataChanged }) {
         approval_status: appliedStatus,
         year: appliedYear,
         month: appliedMonth,
+        network_name: appliedNetwork || undefined,
+        brand: appliedBrand || undefined,
+        mechanics: appliedMechanics || undefined,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      let filtered = data.data || [];
-      if (appliedNetwork) filtered = filtered.filter(a => a.network_name === appliedNetwork);
-      if (appliedBrand) filtered = filtered.filter(a => a.brand_as === appliedBrand);
-      if (appliedMechanics) filtered = filtered.filter(a => a.mechanics === appliedMechanics);
-      if (appliedYear) filtered = filtered.filter(a => a.year === parseInt(appliedYear));
-      if (appliedMonth) filtered = filtered.filter(a => a.month === parseInt(appliedMonth));
-
       // Очищаем старые DOM-рефы перед установкой новых данных
       commentRefs.current = {};
-      setApprovals(filtered);
+      setApprovals(data.data || []);
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;
       setError(err.message || 'Ошибка загрузки');

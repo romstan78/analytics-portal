@@ -1,7 +1,7 @@
 # Аналитический портал — Документация проекта
 
 **Дата:** 03.08.2026
-**Коммит:** текущий рабочий каталог (аудит + рефакторинг)
+**Коммит:** fix: Mass Assignment уязвимость + кэш фильтров + рефакторинг SavePromo на типизированные структуры
 **Стек:** Go (Gin) + React (Vite + MUI) + SQL Server (MSSQL)
 **Репозиторий:** github.com/romstan78/analytics-portal
 
@@ -47,9 +47,9 @@
 │   DrilldownModal.jsx — модал детализации                 │
 │                                                         │
 │ src/hooks/                                              │
-│   usePromoData.js — данные промо (React Query)           │
+│   usePromoData.ts — данные промо (React Query)           │
 │   usePromoFilters.js — фильтры промо                     │
-│   usePromoForm.js — форма редактирования                 │
+│   usePromoForm.ts — форма редактирования                 │
 │   usePromoCalculations.js — расчёт плановых/фактических  │
 │                                                         │
 │ src/api/                                                │
@@ -59,10 +59,11 @@
 │ src/types/                                              │
 │   promo.ts — TypeScript-типы: PromoRow, ApprovalRow,    │
 │     FilterOptions, PromoFormData                         │
+│ tsconfig.json — конфигурация TypeScript (allowJs)       │
 └─────────────────────────────────────────────────────────┘
     │ HTTP (CORS: из env CORS_ORIGINS, AllowCredentials)
     │ Access token: 15 мин в localStorage
-    │ Refresh token: 7 дней в httpOnly cookie
+    │ Refresh token: 7 дней в httpOnly cookie (Secure на проде)
     ▼
 ┌─────────────────────────────────────────────────────────┐
 │ Backend (Go + Gin)                                      │
@@ -72,24 +73,24 @@
 │ config/                                                 │
 │   db.go — подключение к SQL Server (25 connections)     │
 │   auth.go — JWT: Access (15 мин) + Refresh (7 дней)     │
+│   cache.go — InMemoryCache, FilterCacheTTL (5 мин)      │
 │ handlers/                                               │
-│   promo.go — тонкие обработчики HTTP (делегируют в      │
-│              services + repository)                     │
-│   promo_utils.go — safeFloat/safeInt/safeString         │
+│   promo.go — тонкие обработчики HTTP + applyJSONToRow   │
 │   sales.go — интернет-продажи                           │
-│   auth.go — логин + рефреш (через БД + bcrypt)          │
-│ services/             ← НОВЫЙ СЛОЙ                      │
-│   promo_service.go — PromoInputDTO, EnrichFromRepo,     │
-│     CalculateFields, MapToDTO, MergeCalculatedIntoMap   │
+│   auth.go — логин + рефреш (БД + bcrypt, Secure-флаг)   │
+│ services/                                               │
+│   promo_service.go — PromoInputDTO, CalculatedFields,   │
+│     EnrichFromRepo, CalculateFields,                     │
+│     MergeCalculatedIntoDBRow, DTOToDBRow, DBRowToDTO,   │
+│     MapToDTO, DBRowToMap                                │
 │ repository/                                              │
-│   promo_repo.go — все SQL-запросы промо                 │
+│   promo_repo.go — все SQL-запросы промо (типизирован)   │
 │   user_repo.go — запросы к tbl_Users                    │
 │ middleware/                                              │
 │   auth.go — AuthRequired + RoleRequired                 │
 │ models/                                                 │
-│   types.go — Row, PromoRow, ApprovalRow (с              │
-│     agreement1_status/comment), NetworkGeo,             │
-│     LastSKUData, HistoryRow, DrilldownRow               │
+│   types.go — Row, PromoRow, PromoRowDB, ApprovalRow,    │
+│     NetworkGeo, LastSKUData, HistoryRow, DrilldownRow   │
 │ migrations/                                             │
 │   001_create_tbl_users.sql — таблица пользователей       │
 │   002_split_agreement_fields.sql — разделение полей      │
@@ -129,16 +130,18 @@ backend/
 │   └── hash_password.go    — утилита: go run cmd/hash_password.go <пароль>
 ├── config/
 │   ├── auth.go             — JWT: GenerateAccessToken, GenerateRefreshToken, ValidateToken
+│   ├── cache.go            — InMemoryCache (RWMutex, TTL 5 мин) для фильтров
 │   └── db.go               — подключение к SQL Server, пул соединений, slog
 ├── handlers/
 │   ├── auth.go             — POST /api/auth/login (БД + bcrypt), POST /api/auth/refresh
-│   ├── promo.go            — тонкие обработчики, делегируют в services + repository
-│   ├── promo_utils.go      — safeFloat/safeInt/safeString (хелперы для map[string]interface{})
+│   ├── promo.go            — тонкие обработчики + applyJSONToRow (защита от Mass Assignment)
 │   └── sales.go            — GetData / GetFilterOptions / GetDrilldown
-├── services/                ← НОВЫЙ СЛОЙ
-│   └── promo_service.go    — PromoInputDTO, CalculatedFields, EnrichFromRepo, CalculateFields
+├── services/
+│   └── promo_service.go    — PromoInputDTO, CalculatedFields, EnrichFromRepo, CalculateFields,
+│                             MergeCalculatedIntoDBRow, DTOToDBRow, DBRowToDTO, MapToDTO, DBRowToMap
 ├── repository/
-│   ├── promo_repo.go       — все SQL-запросы: CRUD, фильтры, согласование (agreement_status)
+│   ├── promo_repo.go       — все SQL-запросы: FetchExistingRow (*PromoRowDB), UpdatePromo, InsertPromo,
+│                             фильтры, согласование (ApprovePromoWithStatus), ApprovePromo удалён
 │   └── user_repo.go        — GetUserByUsername (из tbl_Users)
 ├── middleware/
 │   └── auth.go             — AuthRequired + RoleRequired
@@ -147,8 +150,9 @@ backend/
 │   ├── 002_split_agreement_fields.sql
 │   └── seed_users.sql      — seed с реальными bcrypt-хешами
 └── models/
-    └── types.go            — Row, PromoRow, ApprovalRow (agreement1_status/comment),
-                              NetworkGeo, LastSKUData, HistoryRow, DrilldownRow
+    └── types.go            — Row, PromoRow, PromoRowDB (value-типы, без указателей),
+                              ApprovalRow (agreement1_status/comment), NetworkGeo,
+                              LastSKUData, HistoryRow, DrilldownRow
 ```
 
 ### Frontend
@@ -156,6 +160,7 @@ backend/
 frontend/src/
 ├── App.jsx                — роутинг, тема MUI (Modern)
 ├── main.jsx               — точка входа + QueryClientProvider
+├── tsconfig.json          — TypeScript-конфигурация (allowJs, strict)
 ├── api/
 │   ├── auth.js            — login/logout, refreshToken, saveSession
 │   └── promo.js           — fetchWithAuth (авто-рефреш при 401), 18 методов API
@@ -167,9 +172,9 @@ frontend/src/
 │   └── PromoEditDialog.jsx — диалог редактирования (Закрыть/Сохранить, без авто-закрытия)
 ├── hooks/
 │   ├── usePromoCalculations.js — расчёт плановых/фактических
-│   ├── usePromoData.js         — загрузка данных (React Query)
+│   ├── usePromoData.ts         — загрузка данных (React Query, типизирован)
 │   ├── usePromoFilters.js      — фильтры с debounce
-│   └── usePromoForm.js         — форма + сохранение
+│   └── usePromoForm.ts         — форма + сохранение (типизирован)
 ├── types/
 │   └── promo.ts           — TypeScript-типы: PromoRow, ApprovalRow, FilterOptions, PromoFormData
 └── pages/
@@ -188,7 +193,7 @@ frontend/src/
 ### Auth
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/auth/login` | No | JWT login (БД + bcrypt) → access token (JSON) + refresh token (httpOnly cookie) |
+| POST | `/api/auth/login` | No | JWT login (БД + bcrypt) → access token (JSON) + refresh token (httpOnly cookie, Secure на проде) |
 | POST | `/api/auth/refresh` | No (cookie) | Обновление access + refresh токенов |
 
 ### Internet Sales
@@ -202,7 +207,7 @@ frontend/src/
 ### Promo — Read
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/promo/filters` | JWT | Distinct filter options (7 параллельных запросов через errgroup) |
+| GET | `/api/promo/filters` | JWT | Distinct filter options (7 параллельных запросов через errgroup, кэш 5 мин) |
 | GET | `/api/promo/data` | JWT | All promo rows with filtering, pagination |
 | GET | `/api/promo/sku-by-brand` | JWT | SKUs for brand |
 | GET | `/api/promo/last-contract-price` | JWT | Last contract price for SKU |
@@ -227,7 +232,7 @@ frontend/src/
 ### Promo — Write
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/promo/save` | JWT + Roles | Create/Update (расчёт полей через services/promo_service.go) |
+| POST | `/api/promo/save` | JWT + Roles | Create/Update через типизированные структуры PromoRowDB, защита от Mass Assignment |
 | DELETE | `/api/promo/:id` | JWT + admin | Soft-delete promo |
 
 ---
@@ -280,13 +285,15 @@ frontend/src/
 
 ## Готово (Done)
 
-### Авторизация и безопасность
+### Безопасность
 - ✅ JWT-авторизация с ролями: admin, agreement1, agreement2
 - ✅ Middleware AuthRequired + RoleRequired
 - ✅ **Access Token (15 мин) + Refresh Token (7 дней, httpOnly cookie)**
-- ✅ **Авто-рефреш токена на фронтенде (fetchWithAuth при 401)**
-- ✅ **Пользователи в БД (tbl_Users) + bcrypt-хеширование паролей (cost=10)**
-- ✅ **Утилита cmd/hash_password.go для генерации хешей**
+- ✅ **Secure-флаг куки: `ENV=production` — только HTTPS**
+- ✅ **Защита от Mass Assignment: поля agreement* и status исключены в applyJSONToRow**
+- ✅ Авто-рефреш токена на фронтенде (fetchWithAuth при 401)
+- ✅ Пользователи в БД (tbl_Users) + bcrypt-хеширование паролей (cost=10)
+- ✅ Утилита cmd/hash_password.go для генерации хешей
 - ✅ Rate limiter (100 запросов/мин на IP, sync.RWMutex)
 - ✅ Structured logging (slog + lumberjack, ротация логов)
 - ✅ **CORS из переменной окружения (`CORS_ORIGINS`) + AllowCredentials: true**
@@ -316,17 +323,25 @@ frontend/src/
 
 ### Архитектура
 - ✅ **Четырёхслойная архитектура: handlers → services → repository → DB**
-- ✅ **services/promo_service.go: PromoInputDTO, EnrichFromRepo, CalculateFields**
-- ✅ **promo_utils.go очищен от бизнес-логики и прямых SQL-запросов**
-- ✅ repository/promo_repo.go — все SQL-запросы
+- ✅ **PromoRowDB — типизированная структура (0 map[string]interface{} в Save/Update)**
+- ✅ **services/promo_service.go: DTOToDBRow, DBRowToDTO, MergeCalculatedIntoDBRow, MapToDTO, DBRowToMap**
+- ✅ **config/cache.go: InMemoryCache (RWMutex, TTL 5 мин) для GetPromoFilters**
+- ✅ repository/promo_repo.go — все SQL-запросы (FetchExistingRow/UpdatePromo/InsertPromo на структурах)
 - ✅ repository/user_repo.go — запросы к tbl_Users + bcrypt
 - ✅ GetPromoFilters: 7 параллельных запросов через errgroup
-- ✅ Модели: NetworkGeo, LastSKUData, ApprovalRow с agreementN_status/comment
+- ✅ Среднее время загрузки страницы ~2.5 сек (без учёта MSSQL-планов)
+- ✅ Модели: NetworkGeo, LastSKUData, ApprovalRow, PromoRowDB
 
 ### Фронтенд-архитектура
-- ✅ **TanStack Query (React Query) в usePromoData.js**
+- ✅ **TanStack Query (React Query) в usePromoData.ts**
 - ✅ **TypeScript-типы в types/promo.ts**
+- ✅ **tsconfig.json: strict-режим, allowJs для постепенной миграции**
+- ✅ **Хуки usePromoData.ts и usePromoForm.ts типизированы**
 - ✅ **QueryClientProvider в main.jsx**
+
+### Удалённый код
+- ✅ `promo_utils.go` удалён (safeFloat/safeInt/safeString не нужны)
+- ✅ `ApprovePromo()` удалён из promo_repo.go (используется только ApprovePromoWithStatus)
 
 ### Другое
 - ✅ Главная страница (6 карточек, CSS Grid)
@@ -354,11 +369,14 @@ frontend/src/
 13. ~~CHARINDEX-парсинг согласований~~ → agreementN_status + agreementN_comment
 14. ~~Авто-закрытие диалога после сохранения~~ → остаётся открытым
 15. ~~Фильтры не обновлялись после согласования~~ → setRefreshFilters
+16. ~~Уязвимость Mass Assignment (agreement_status/comment)~~ → applyJSONToRow с чёрным списком
+17. ~~Secure-флаг куки не проверял ENV~~ → `os.Getenv("ENV") == "production"`
+18. ~~map[string]interface{} в Save/Update~~ → PromoRowDB (типизированные структуры)
+19. ~~Старый ApprovePromo в promo_repo.go~~ → удалён
+20. ~~Нагрузка на БД при загрузке фильтров~~ → in-memory кэш 5 мин
 
 ### Остаются (P2)
-16. **Нет тестов на фронтенд** — только бэкенд main_test.go
-17. **map[string]interface{} в Save/Update** — нужен полный переход на PromoInputDTO в репозитории
-18. **GetApprovalFilters всё ещё принимает brand/network/mechanics параметры** — фронтенд их не шлёт, но бэкенд обрабатывает
+21. **Нет тестов на фронтенд** — только бэкенд main_test.go
 
 ---
 
@@ -367,25 +385,23 @@ frontend/src/
 ### Ближайшие
 | # | Задача | Оценка |
 |---|--------|--------|
-| 1 | Полный переход на PromoInputDTO в repository (убрать map[string]interface{}) | 1 час |
-| 2 | Счётчик обработанных промо в согласовании | 15 мин |
-| 3 | Сортировка карточек по ROI / дате / сети | 20 мин |
-| 4 | Цветовая индикация убыточных промо | 10 мин |
-| 5 | Экспорт в CSV из согласования | 15 мин |
+| 1 | Счётчик обработанных промо в согласовании | 15 мин |
+| 2 | Сортировка карточек по ROI / дате / сети | 20 мин |
+| 3 | Цветовая индикация убыточных промо | 10 мин |
+| 4 | Экспорт в CSV из согласования | 15 мин |
 
 ### Технический долг
 | # | Задача | Оценка |
 |---|--------|--------|
-| 6 | Тесты на фронтенд (Jest + React Testing Library) | 3-4 дня |
-| 7 | Миграция оставшихся JSX-файлов на TypeScript | 1-2 дня |
-| 8 | Удалить старый ApprovePromo, оставить только ApprovePromoWithStatus | 15 мин |
+| 5 | Тесты на фронтенд (Jest + React Testing Library) | 3-4 дня |
+| 6 | Миграция оставшихся JSX-файлов на TypeScript | 1-2 дня |
 
 ### Будущий функционал
 | # | Задача | Оценка |
 |---|--------|--------|
-| 9 | Дашборд с графиками (ROI, uplift, план/факт) | TBD |
-| 10 | Мобильная версия | TBD |
-| 11 | Нормализация словарей (ID вместо строк) | TBD |
+| 7 | Дашборд с графиками (ROI, uplift, план/факт) | TBD |
+| 8 | Мобильная версия | TBD |
+| 9 | Нормализация словарей (ID вместо строк) | TBD |
 
 ---
 
@@ -422,6 +438,7 @@ DB_NAME=local_project_db
 DB_PORT=1433
 CORS_ORIGINS=http://localhost:5173
 JWT_SECRET=your-secret-here
+ENV=development
 ```
 
 ### Требования

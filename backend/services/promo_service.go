@@ -292,41 +292,48 @@ func PromoDate(year, month int) string {
 	return time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 }
 
+// ─── Указатели (алиасы на функции пакета models) ─────────────────────────
+
+var ptrFloat = models.PtrFloat
+var ptrInt = models.PtrInt
+var valFloat = models.ValFloat
+var valInt = models.ValInt
+
 // MergeCalculatedIntoDBRow — записывает вычисленные поля напрямую в структуру БД.
 func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
 	r.Year = c.Year
 	r.Month = c.Month
-	r.Quarter = c.Quarter
-	r.GM = c.GM
-	r.PlanPromoRub = c.PlanPromoRub
-	r.PlanPromoUpliftUnits = c.PlanPromoUpliftUnits
-	r.PlanPromoUpliftRub = c.PlanPromoUpliftRub
-	r.PlanPromoUpliftPctUnits = c.PlanPromoUpliftPctUnits
-	r.PlanPromoUpliftPctRub = c.PlanPromoUpliftPctRub
-	r.PlanInvestmentsPct = c.PlanInvestmentsPct
-	r.PlanROI = c.PlanROI
-	r.BaselineRub = c.BaselineRub
-	r.NetPromoUpliftRub = c.NetPromoUpliftRub
-	r.NetPromoUpliftPct = c.NetPromoUpliftPct
-	r.ActualInvestmentsPct = c.ActualInvestmentsPct
-	r.ActualROI = c.ActualROI
-	r.ActualPromoRubWoEcom = c.ActualPromoRubWoEcom
-	r.ActualPromoUpliftUnitsWoEcom = c.ActualPromoUpliftUnitsWoEcom
-	r.ActualPromoUpliftRubWoEcom = c.ActualPromoUpliftRubWoEcom
-	r.NetPromoUpliftRubWoEcom = c.NetPromoUpliftRubWoEcom
-	r.NetPromoUpliftPctWoEcom = c.NetPromoUpliftPctWoEcom
-	r.ActualInvestmentsPctWoEcom = c.ActualInvestmentsPctWoEcom
-	r.ActualROIWoEcom = c.ActualROIWoEcom
-	r.PlanVsFactRub = c.PlanVsFactRub
-	r.PlanVsFactInvestments = c.PlanVsFactInvestments
-	r.TurnoverPerPoint = c.TurnoverPerPoint
-	r.TurnoverPerPointPromo = c.TurnoverPerPointPromo
-	r.PlanPromoCipOlap = c.PlanPromoCipOlap
-	r.FactPromoCipOlap = c.FactPromoCipOlap
-	r.PlanPromoUpliftCipOlap = c.PlanPromoUpliftCipOlap
-	r.FactPromoUpliftCipOlap = c.FactPromoUpliftCipOlap
+	r.Quarter = ptrInt(c.Quarter)
+	r.GM = ptrFloat(c.GM)
+	r.PlanPromoRub = ptrFloat(c.PlanPromoRub)
+	r.PlanPromoUpliftUnits = ptrFloat(c.PlanPromoUpliftUnits)
+	r.PlanPromoUpliftRub = ptrFloat(c.PlanPromoUpliftRub)
+	r.PlanPromoUpliftPctUnits = ptrFloat(c.PlanPromoUpliftPctUnits)
+	r.PlanPromoUpliftPctRub = ptrFloat(c.PlanPromoUpliftPctRub)
+	r.PlanInvestmentsPct = ptrFloat(c.PlanInvestmentsPct)
+	r.PlanROI = ptrFloat(c.PlanROI)
+	r.BaselineRub = ptrFloat(c.BaselineRub)
+	r.NetPromoUpliftRub = ptrFloat(c.NetPromoUpliftRub)
+	r.NetPromoUpliftPct = ptrFloat(c.NetPromoUpliftPct)
+	r.ActualInvestmentsPct = ptrFloat(c.ActualInvestmentsPct)
+	r.ActualROI = ptrFloat(c.ActualROI)
+	r.ActualPromoRubWoEcom = ptrFloat(c.ActualPromoRubWoEcom)
+	r.ActualPromoUpliftUnitsWoEcom = ptrFloat(c.ActualPromoUpliftUnitsWoEcom)
+	r.ActualPromoUpliftRubWoEcom = ptrFloat(c.ActualPromoUpliftRubWoEcom)
+	r.NetPromoUpliftRubWoEcom = ptrFloat(c.NetPromoUpliftRubWoEcom)
+	r.NetPromoUpliftPctWoEcom = ptrFloat(c.NetPromoUpliftPctWoEcom)
+	r.ActualInvestmentsPctWoEcom = ptrFloat(c.ActualInvestmentsPctWoEcom)
+	r.ActualROIWoEcom = ptrFloat(c.ActualROIWoEcom)
+	r.PlanVsFactRub = ptrFloat(c.PlanVsFactRub)
+	r.PlanVsFactInvestments = ptrFloat(c.PlanVsFactInvestments)
+	r.TurnoverPerPoint = ptrFloat(c.TurnoverPerPoint)
+	r.TurnoverPerPointPromo = ptrFloat(c.TurnoverPerPointPromo)
+	r.PlanPromoCipOlap = ptrFloat(c.PlanPromoCipOlap)
+	r.FactPromoCipOlap = ptrFloat(c.FactPromoCipOlap)
+	r.PlanPromoUpliftCipOlap = ptrFloat(c.PlanPromoUpliftCipOlap)
+	r.FactPromoUpliftCipOlap = ptrFloat(c.FactPromoUpliftCipOlap)
 	r.Date = c.Date
-	r.OlapPrice = c.OlapPrice
+	r.OlapPrice = ptrFloat(c.OlapPrice)
 }
 
 // DTOToDBRow — создаёт PromoRowDB из DTO и вычисленных полей (для INSERT).
@@ -341,26 +348,26 @@ func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
 		GTNOpex:                 dto.GTNOpex,
 		IDDirectum:              dto.IDDirectum,
 		DSNumber:                dto.DSNumber,
-		DiscountAmount:          dto.DiscountAmount,
+		DiscountAmount:          ptrFloat(dto.DiscountAmount),
 		Conditions:              dto.Conditions,
 		Comments:                dto.Comments,
 		EcomSegment:             dto.EcomSegment,
-		TotalPharmacies:         dto.TotalPharmacies,
-		PromoPharmacies:         dto.PromoPharmacies,
+		TotalPharmacies:         ptrInt(dto.TotalPharmacies),
+		PromoPharmacies:         ptrInt(dto.PromoPharmacies),
 		Status:                  dto.Status,
-		BaselineUnits:           dto.BaselineUnits,
-		PlanPromoUnits:          dto.PlanPromoUnits,
-		PlanInvestmentsRub:      dto.PlanInvestmentsRub,
-		ContractPrice:           dto.ContractPrice,
+		BaselineUnits:           ptrFloat(dto.BaselineUnits),
+		PlanPromoUnits:          ptrFloat(dto.PlanPromoUnits),
+		PlanInvestmentsRub:      ptrFloat(dto.PlanInvestmentsRub),
+		ContractPrice:           ptrFloat(dto.ContractPrice),
 		KeyRegion:               dto.KeyRegion,
 		Top20Segment:            dto.Top20Segment,
-		ActualPromoSalesUnits:   dto.ActualPromoSalesUnits,
-		ActualPromoRub:          dto.ActualPromoRub,
-		ActualInvestments:       dto.ActualInvestments,
-		ActualPromoUpliftUnits:  dto.ActualPromoUpliftUnits,
-		ActualPromoUpliftRub:    dto.ActualPromoUpliftRub,
-		ActualExternalEcomUnits: dto.ActualExternalEcomUnits,
-		ActualCorrectedBaseline: dto.ActualCorrectedBaseline,
+		ActualPromoSalesUnits:   ptrFloat(dto.ActualPromoSalesUnits),
+		ActualPromoRub:          ptrFloat(dto.ActualPromoRub),
+		ActualInvestments:       ptrFloat(dto.ActualInvestments),
+		ActualPromoUpliftUnits:  ptrFloat(dto.ActualPromoUpliftUnits),
+		ActualPromoUpliftRub:    ptrFloat(dto.ActualPromoUpliftRub),
+		ActualExternalEcomUnits: ptrFloat(dto.ActualExternalEcomUnits),
+		ActualCorrectedBaseline: ptrFloat(dto.ActualCorrectedBaseline),
 		Agreement1:              dto.Agreement1,
 		Agreement2:              dto.Agreement2,
 	}
@@ -423,36 +430,36 @@ func DBRowToDTO(r *models.PromoRowDB) PromoInputDTO {
 		SKU:                     r.SKU,
 		Year:                    r.Year,
 		Month:                   r.Month,
-		Quarter:                 r.Quarter,
+		Quarter:                 valInt(r.Quarter),
 		Mechanics:               r.Mechanics,
 		GTNOpex:                 r.GTNOpex,
 		IDDirectum:              r.IDDirectum,
 		DSNumber:                r.DSNumber,
-		DiscountAmount:          r.DiscountAmount,
+		DiscountAmount:          valFloat(r.DiscountAmount),
 		Conditions:              r.Conditions,
 		Comments:                r.Comments,
 		EcomSegment:             r.EcomSegment,
-		TotalPharmacies:         r.TotalPharmacies,
-		PromoPharmacies:         r.PromoPharmacies,
+		TotalPharmacies:         valInt(r.TotalPharmacies),
+		PromoPharmacies:         valInt(r.PromoPharmacies),
 		Status:                  r.Status,
 		Date:                    r.Date,
-		BaselineUnits:           r.BaselineUnits,
-		BaselineRub:             r.BaselineRub,
-		PlanPromoUnits:          r.PlanPromoUnits,
-		PlanPromoRub:            r.PlanPromoRub,
-		PlanInvestmentsRub:      r.PlanInvestmentsRub,
-		ContractPrice:           r.ContractPrice,
-		GM:                      r.GM,
+		BaselineUnits:           valFloat(r.BaselineUnits),
+		BaselineRub:             valFloat(r.BaselineRub),
+		PlanPromoUnits:          valFloat(r.PlanPromoUnits),
+		PlanPromoRub:            valFloat(r.PlanPromoRub),
+		PlanInvestmentsRub:      valFloat(r.PlanInvestmentsRub),
+		ContractPrice:           valFloat(r.ContractPrice),
+		GM:                      valFloat(r.GM),
 		KeyRegion:               r.KeyRegion,
 		Top20Segment:            r.Top20Segment,
-		OlapPrice:               r.OlapPrice,
-		ActualPromoSalesUnits:   r.ActualPromoSalesUnits,
-		ActualPromoRub:          r.ActualPromoRub,
-		ActualInvestments:       r.ActualInvestments,
-		ActualPromoUpliftUnits:  r.ActualPromoUpliftUnits,
-		ActualPromoUpliftRub:    r.ActualPromoUpliftRub,
-		ActualExternalEcomUnits: r.ActualExternalEcomUnits,
-		ActualCorrectedBaseline: r.ActualCorrectedBaseline,
+		OlapPrice:               valFloat(r.OlapPrice),
+		ActualPromoSalesUnits:   valFloat(r.ActualPromoSalesUnits),
+		ActualPromoRub:          valFloat(r.ActualPromoRub),
+		ActualInvestments:       valFloat(r.ActualInvestments),
+		ActualPromoUpliftUnits:  valFloat(r.ActualPromoUpliftUnits),
+		ActualPromoUpliftRub:    valFloat(r.ActualPromoUpliftRub),
+		ActualExternalEcomUnits: valFloat(r.ActualExternalEcomUnits),
+		ActualCorrectedBaseline: valFloat(r.ActualCorrectedBaseline),
 		Agreement1:              r.Agreement1,
 		Agreement2:              r.Agreement2,
 	}
