@@ -568,6 +568,9 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
+			// Обновляем updated_at в ответе — в БД уже новое значение
+			existing["updated_at"] = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
+
 			config.Logger.Info("promo_updated",
 				"id", idInt,
 				"sku", fmt.Sprint(existing["sku"]),
