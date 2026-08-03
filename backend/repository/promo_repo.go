@@ -1,15 +1,17 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"backend/config"
 	"backend/models"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // ─── Filters ────────────────────────────────────────────────────────────────
@@ -962,53 +964,50 @@ type ApprovalFilterParams struct {
 	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
 }
 
-func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
+// buildApprovalWhere — строит WHERE-условия для страницы согласования.
+// excludeCol — колонка, которую НЕ фильтруем (чтобы не сужать саму себя).
+func buildApprovalWhere(params ApprovalFilterParams, excludeCol string) (string, []interface{}) {
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
-	query := `
-		SELECT DISTINCT p.network_name, p.brand_as, p.mechanics, p.kam
-		FROM dbo.tbl_PromoActivities p
-		WHERE p.deleted_at IS NULL
-	`
+	where := "p.deleted_at IS NULL"
 	args := []interface{}{}
 
 	if params.YearStr != "" {
 		y, _ := strconv.Atoi(params.YearStr)
-		query += " AND p.year = ?"
+		where += " AND p.year = ?"
 		args = append(args, y)
 	} else {
-		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		where += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
 		args = append(args, currentYear, currentYear, currentMonth)
 	}
 
 	if params.MonthStr != "" {
 		m, _ := strconv.Atoi(params.MonthStr)
-		query += " AND p.month = ?"
+		where += " AND p.month = ?"
 		args = append(args, m)
 	}
 
-	if params.KAM != "" {
-		query += " AND p.kam = ?"
+	if params.KAM != "" && excludeCol != "kam" {
+		where += " AND p.kam = ?"
 		args = append(args, params.KAM)
 	}
 
-	if params.Network != "" {
-		query += " AND p.network_name = ?"
+	if params.Network != "" && excludeCol != "network_name" {
+		where += " AND p.network_name = ?"
 		args = append(args, params.Network)
 	}
 
-	if params.Brand != "" {
-		query += " AND p.brand_as = ?"
+	if params.Brand != "" && excludeCol != "brand_as" {
+		where += " AND p.brand_as = ?"
 		args = append(args, params.Brand)
 	}
 
-	if params.MechFilter != "" {
-		query += " AND p.mechanics = ?"
+	if params.MechFilter != "" && excludeCol != "mechanics" {
+		where += " AND p.mechanics = ?"
 		args = append(args, params.MechFilter)
 	}
 
-	// Фильтруем по статусу конкретной роли (а не по OR двух полей)
 	filterStatusField := "p.agreement1_status"
 	if params.Role == "agreement2" {
 		filterStatusField = "p.agreement2_status"
@@ -1016,63 +1015,54 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 
 	switch params.ApprovalStatus {
 	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
+		where += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
 	case "commented":
-		query += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
+		where += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
 	case "approved":
-		query += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
+		where += fmt.Sprintf(" AND %s = 'approved'", filterStatusField)
 	case "rejected":
-		query += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
+		where += fmt.Sprintf(" AND %s = 'rejected'", filterStatusField)
 	}
 
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	defer rows.Close()
+	return where, args
+}
 
-	networkSet := make(map[string]bool)
-	brandSet := make(map[string]bool)
-	mechSet := make(map[string]bool)
-	kamSet := make(map[string]bool)
+// GetApprovalFilters — перекрёстная фильтрация: 4 горутины, excludeCol для каждой колонки.
+func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
+	var (
+		resNetwork, resBrand, resMech, resKam []string
+	)
 
-	for rows.Next() {
-		var nw, br, mech, k sql.NullString
-		if rows.Scan(&nw, &br, &mech, &k) == nil {
-			if nw.Valid {
-				networkSet[nw.String] = true
-			}
-			if br.Valid {
-				brandSet[br.String] = true
-			}
-			if mech.Valid {
-				mechSet[mech.String] = true
-			}
-			if k.Valid {
-				kamSet[k.String] = true
-			}
-		}
-	}
+	g, _ := errgroup.WithContext(context.Background())
 
-	for v := range networkSet {
-		networks = append(networks, v)
-	}
-	for v := range brandSet {
-		brands = append(brands, v)
-	}
-	for v := range mechSet {
-		mechanics = append(mechanics, v)
-	}
-	for v := range kamSet {
-		kams = append(kams, v)
-	}
+	g.Go(func() error {
+		where, args := buildApprovalWhere(params, "network_name")
+		query := "SELECT DISTINCT p.network_name FROM dbo.tbl_PromoActivities p WHERE " + where + " AND p.network_name IS NOT NULL ORDER BY p.network_name"
+		resNetwork = ExecDistinct(query, args)
+		return nil
+	})
+	g.Go(func() error {
+		where, args := buildApprovalWhere(params, "brand_as")
+		query := "SELECT DISTINCT p.brand_as FROM dbo.tbl_PromoActivities p WHERE " + where + " AND p.brand_as IS NOT NULL ORDER BY p.brand_as"
+		resBrand = ExecDistinct(query, args)
+		return nil
+	})
+	g.Go(func() error {
+		where, args := buildApprovalWhere(params, "mechanics")
+		query := "SELECT DISTINCT p.mechanics FROM dbo.tbl_PromoActivities p WHERE " + where + " AND p.mechanics IS NOT NULL ORDER BY p.mechanics"
+		resMech = ExecDistinct(query, args)
+		return nil
+	})
+	g.Go(func() error {
+		where, args := buildApprovalWhere(params, "kam")
+		query := "SELECT DISTINCT p.kam FROM dbo.tbl_PromoActivities p WHERE " + where + " AND p.kam IS NOT NULL ORDER BY p.kam"
+		resKam = ExecDistinct(query, args)
+		return nil
+	})
 
-	sort.Strings(networks)
-	sort.Strings(brands)
-	sort.Strings(mechanics)
-	sort.Strings(kams)
+	_ = g.Wait()
 
-	return networks, brands, mechanics, kams, nil
+	return resNetwork, resBrand, resMech, resKam, nil
 }
 
 func GetApprovalKAMs(field string) ([]string, error) {

@@ -1,7 +1,7 @@
 # Аналитический портал — Документация проекта
 
 **Дата:** 03.08.2026
-**Коммит:** fix: Mass Assignment уязвимость + кэш фильтров + рефакторинг SavePromo на типизированные структуры
+**Коммит:** fix: Roadmap аудита — 0 vs NULL, аудит-лог, фильтры согласования, Confirm Dialog, TS-хук
 **Стек:** Go (Gin) + React (Vite + MUI) + SQL Server (MSSQL)
 **Репозиторий:** github.com/romstan78/analytics-portal
 
@@ -13,11 +13,8 @@
 2. [Структура файлов](#структура-файлов)
 3. [Бэкенд — API эндпоинты](#бэкенд--api-эндпоинты)
 4. [База данных](#база-данных)
-5. [Фронтенд — страницы](#фронтенд--страницы)
-6. [Фронтенд — компоненты и хуки](#фронтенд--компоненты-и-хуки)
-7. [Готово (Done)](#готово-done)
-8. [Известные проблемы (Bugs)](#известные-проблемы-bugs)
-9. [План доработок](#план-доработок)
+5. [Готово (Done)](#готово-done)
+6. [План доработок](#план-доработок)
 
 ---
 
@@ -32,8 +29,7 @@
 │   Home.jsx — главная страница (6 карточек, CSS Grid)    │
 │   Login.jsx — JWT-авторизация + Refresh Token cookie    │
 │   InternetSales.jsx — интернет-продажи (DataTable)       │
-│   PromoAnalysis.jsx — анализ промо (таблица + форма +    │
-│     согласование, 3 вкладки)                             │
+│   PromoAnalysis.jsx — анализ промо (3 вкладки)          │
 │   PromoForm.jsx — форма создания нового промо            │
 │   PromoApproval.jsx — страница согласования              │
 │                                                         │
@@ -42,7 +38,8 @@
 │   DataTable.jsx — таблица с пагинацией                   │
 │   PromoEditDialog.jsx — диалог редактирования промо      │
 │     (agreement1/2 только read-only чипы,                 │
-│     кнопки Закрыть/Сохранить, без авто-закрытия)        │
+│     кнопки Закрыть/Сохранить, без авто-закрытия,        │
+│     Confirm Dialog для согласующих)                     │
 │   ApprovalCard.jsx — карточка согласования + skeleton    │
 │   DrilldownModal.jsx — модал детализации                 │
 │                                                         │
@@ -50,7 +47,7 @@
 │   usePromoData.ts — данные промо (React Query)           │
 │   usePromoFilters.js — фильтры промо                     │
 │   usePromoForm.ts — форма редактирования                 │
-│   usePromoCalculations.js — расчёт плановых/фактических  │
+│   usePromoCalculations.ts — расчёт плановых/фактических  │
 │                                                         │
 │ src/api/                                                │
 │   promo.js — API-запросы (fetchWithAuth + auto-refresh) │
@@ -76,6 +73,7 @@
 │   cache.go — InMemoryCache, FilterCacheTTL (5 мин)      │
 │ handlers/                                               │
 │   promo.go — тонкие обработчики HTTP + applyJSONToRow   │
+│     (защита Mass Assignment, аудит-лог с username)       │
 │   sales.go — интернет-продажи                           │
 │   auth.go — логин + рефреш (БД + bcrypt, Secure-флаг)   │
 │ services/                                               │
@@ -85,12 +83,18 @@
 │     MapToDTO, DBRowToMap                                │
 │ repository/                                              │
 │   promo_repo.go — все SQL-запросы промо (типизирован)   │
+│     GetApprovalFilters: 4 горутины errgroup +            │
+│     buildApprovalWhere(excludeCol) перекрёстная          │
+│     фильтрация                                          │
 │   user_repo.go — запросы к tbl_Users                    │
 │ middleware/                                              │
 │   auth.go — AuthRequired + RoleRequired                 │
 │ models/                                                 │
-│   types.go — Row, PromoRow, PromoRowDB, ApprovalRow,    │
-│     NetworkGeo, LastSKUData, HistoryRow, DrilldownRow   │
+│   types.go — Row, PromoRow, PromoRowDB (числовые поля   │
+│     — указатели *float64/*int для NULL vs 0),           │
+│     PtrFloat/PtrInt/ValFloat/ValInt хелперы,            │
+│     ApprovalRow, NetworkGeo, LastSKUData,                │
+│     HistoryRow, DrilldownRow                            │
 │ migrations/                                             │
 │   001_create_tbl_users.sql — таблица пользователей       │
 │   002_split_agreement_fields.sql — разделение полей      │
@@ -134,14 +138,15 @@ backend/
 │   └── db.go               — подключение к SQL Server, пул соединений, slog
 ├── handlers/
 │   ├── auth.go             — POST /api/auth/login (БД + bcrypt), POST /api/auth/refresh
-│   ├── promo.go            — тонкие обработчики + applyJSONToRow (защита от Mass Assignment)
+│   ├── promo.go            — тонкие обработчики + applyJSONToRow (защита Mass Assignment, аудит-лог)
 │   └── sales.go            — GetData / GetFilterOptions / GetDrilldown
 ├── services/
 │   └── promo_service.go    — PromoInputDTO, CalculatedFields, EnrichFromRepo, CalculateFields,
 │                             MergeCalculatedIntoDBRow, DTOToDBRow, DBRowToDTO, MapToDTO, DBRowToMap
 ├── repository/
 │   ├── promo_repo.go       — все SQL-запросы: FetchExistingRow (*PromoRowDB), UpdatePromo, InsertPromo,
-│                             фильтры, согласование (ApprovePromoWithStatus), ApprovePromo удалён
+│   │                         фильтры, согласование (GetApprovals с фильтрацией в SQL,
+│   │                         GetApprovalFilters: 4 горутины + buildApprovalWhere(excludeCol))
 │   └── user_repo.go        — GetUserByUsername (из tbl_Users)
 ├── middleware/
 │   └── auth.go             — AuthRequired + RoleRequired
@@ -150,9 +155,10 @@ backend/
 │   ├── 002_split_agreement_fields.sql
 │   └── seed_users.sql      — seed с реальными bcrypt-хешами
 └── models/
-    └── types.go            — Row, PromoRow, PromoRowDB (value-типы, без указателей),
+    └── types.go            — Row, PromoRow, PromoRowDB (числовые поля — указатели для NULL vs 0),
                               ApprovalRow (agreement1_status/comment), NetworkGeo,
-                              LastSKUData, HistoryRow, DrilldownRow
+                              LastSKUData, HistoryRow, DrilldownRow,
+                              PtrFloat/PtrInt/ValFloat/ValInt (хелперы указателей)
 ```
 
 ### Frontend
@@ -169,12 +175,12 @@ frontend/src/
 │   ├── DataTable.jsx      — таблица MUI DataGrid
 │   ├── DrilldownModal.jsx — модал детализации
 │   ├── FilterPanel.jsx    — панель фильтров с Autocomplete
-│   └── PromoEditDialog.jsx — диалог редактирования (Закрыть/Сохранить, без авто-закрытия)
+│   └── PromoEditDialog.jsx — диалог редактирования (Закрыть/Сохранить, Confirm Dialog для согласующих)
 ├── hooks/
-│   ├── usePromoCalculations.js — расчёт плановых/фактических
+│   ├── usePromoCalculations.ts — расчёт плановых/фактических (типизирован, PlanFields/ActualFields)
 │   ├── usePromoData.ts         — загрузка данных (React Query, типизирован)
 │   ├── usePromoFilters.js      — фильтры с debounce
-│   └── usePromoForm.ts         — форма + сохранение (типизирован)
+│   └── usePromoForm.ts         — форма + сохранение (типизирован, 0 vs NULL исправлен)
 ├── types/
 │   └── promo.ts           — TypeScript-типы: PromoRow, ApprovalRow, FilterOptions, PromoFormData
 └── pages/
@@ -182,7 +188,7 @@ frontend/src/
     ├── InternetSales.jsx   — интернет-продажи
     ├── Login.jsx           — страница входа (credentials: 'include')
     ├── PromoAnalysis.jsx   — анализ промо (3 вкладки)
-    ├── PromoApproval.jsx   — согласование (фильтры перезапрашиваются после действий)
+    ├── PromoApproval.jsx   — согласование (перекрёстная фильтрация, без клиентского .filter())
     └── PromoForm.jsx       — создание нового промо
 ```
 
@@ -222,8 +228,8 @@ frontend/src/
 ### Promo — Approval
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/promo/approvals` | JWT | Approval list (фильтр по agreementN_status) |
-| GET | `/api/promo/approval-filters` | JWT | Networks/brands/mechanics/kams (ролевая фильтрация) |
+| GET | `/api/promo/approvals` | JWT | Approval list (фильтрация в SQL: kam, network_name, brand, mechanics, year, month) |
+| GET | `/api/promo/approval-filters` | JWT | Networks/brands/mechanics/kams (4 горутины errgroup, перекрёстная фильтрация excludeCol) |
 | GET | `/api/promo/approval-kams` | JWT | KAMs with pending approval |
 | GET | `/api/promo/approval-networks` | JWT | Networks for KAM |
 | GET | `/api/promo/approval-brands` | JWT | Brands for KAM+network |
@@ -292,11 +298,19 @@ frontend/src/
 - ✅ **Secure-флаг куки: `ENV=production` — только HTTPS**
 - ✅ **Защита от Mass Assignment: поля agreement* и status исключены в applyJSONToRow**
 - ✅ Авто-рефреш токена на фронтенде (fetchWithAuth при 401)
+- ✅ **Аудит-лог: promo_updated/created/deleted/approved — реальный username из JWT**
 - ✅ Пользователи в БД (tbl_Users) + bcrypt-хеширование паролей (cost=10)
 - ✅ Утилита cmd/hash_password.go для генерации хешей
 - ✅ Rate limiter (100 запросов/мин на IP, sync.RWMutex)
 - ✅ Structured logging (slog + lumberjack, ротация логов)
 - ✅ **CORS из переменной окружения (`CORS_ORIGINS`) + AllowCredentials: true**
+
+### Целостность данных
+- ✅ **0 vs NULL: usePromoForm.ts — `x !== '' ? parseFloat(x) : null` вместо `parseFloat(x) \|\| null`**
+- ✅ **PromoRowDB: 40+ числовых полей переведены на указатели (`*float64`, `*int`)**
+- ✅ **FetchExistingRow: сканирование через `sql.Null*` с проверкой `.Valid`**
+- ✅ **applyJSONToRow: присваивание числовых полей через `&val`**
+- ✅ **Хелперы PtrFloat/PtrInt/ValFloat/ValInt в models/types.go**
 
 ### Просмотр и редактирование промо
 - ✅ DataGrid с пагинацией, сортировкой, поиском, экспортом CSV
@@ -307,11 +321,14 @@ frontend/src/
 - ✅ Автообновление UI после редактирования/удаления
 - ✅ **agreement1/agreement2 — только read-only чипы в диалоге, защита на бэкенде**
 - ✅ **PromoEditDialog: кнопки Закрыть/Сохранить, форма остаётся после сохранения**
+- ✅ **PromoEditDialog: Confirm Dialog для согласующих (agreement1/agreement2) при сохранении**
 
 ### Согласование
 - ✅ Карточки промо в CSS Grid (React.memo для производительности)
 - ✅ Три действия: Комментарий / Согласовано / Отклонено
-- ✅ Перекрёстная каскадная фильтрация (справочники перезапрашиваются после действий)
+- ✅ **Перекрёстная фильтрация: 4 горутины errgroup, buildApprovalWhere(excludeCol)**
+- ✅ **GetApprovals фильтрует network_name/brand/mechanics в SQL (не на клиенте)**
+- ✅ **Фронтенд передаёт все applied-фильтры в API, без клиентского .filter()**
 - ✅ Фильтр «Состояние согласования» (5 состояний)
 - ✅ Кнопка «Применить» (контроль момента загрузки)
 - ✅ Защита от загрузки без фильтров
@@ -329,6 +346,7 @@ frontend/src/
 - ✅ repository/promo_repo.go — все SQL-запросы (FetchExistingRow/UpdatePromo/InsertPromo на структурах)
 - ✅ repository/user_repo.go — запросы к tbl_Users + bcrypt
 - ✅ GetPromoFilters: 7 параллельных запросов через errgroup
+- ✅ GetApprovalFilters: 4 параллельных запроса через errgroup + excludeCol
 - ✅ Среднее время загрузки страницы ~2.5 сек (без учёта MSSQL-планов)
 - ✅ Модели: NetworkGeo, LastSKUData, ApprovalRow, PromoRowDB
 
@@ -336,47 +354,12 @@ frontend/src/
 - ✅ **TanStack Query (React Query) в usePromoData.ts**
 - ✅ **TypeScript-типы в types/promo.ts**
 - ✅ **tsconfig.json: strict-режим, allowJs для постепенной миграции**
-- ✅ **Хуки usePromoData.ts и usePromoForm.ts типизированы**
+- ✅ **Хуки usePromoData.ts, usePromoForm.ts и usePromoCalculations.ts типизированы**
 - ✅ **QueryClientProvider в main.jsx**
 
 ### Удалённый код
 - ✅ `promo_utils.go` удалён (safeFloat/safeInt/safeString не нужны)
-- ✅ `ApprovePromo()` удалён из promo_repo.go (используется только ApprovePromoWithStatus)
-
-### Другое
-- ✅ Главная страница (6 карточек, CSS Grid)
-- ✅ Интернет-продажи (FilterPanel + DataTable + DrilldownModal)
-- ✅ Основная документация в project.md
-- ✅ **Миграции с реальными bcrypt-хешами**
-
----
-
-## Известные проблемы (Bugs)
-
-### Исправлены ✅
-1. ~~usePromoData: JSON.stringify в зависимостях → лишние HTTP-запросы~~ → React Query
-2. ~~Rate limiter: глобальный sync.Mutex~~ → sync.RWMutex
-3. ~~Memory leak: commentRefs в PromoApproval~~ → исправлено
-4. ~~409 Conflict~~ → Optimistic Locking с корректной обработкой
-5. ~~GetPromoFilters: 7 последовательных запросов~~ → errgroup
-6. ~~ApprovalCard: преждевременное скрытие~~ → skeleton overlay
-7. ~~Фильтр по бренду: .includes(sku)~~ → точное совпадение
-8. ~~CORS: хардкод~~ → env CORS_ORIGINS
-9. ~~JWT без refresh token~~ → Access + Refresh httpOnly cookie
-10. ~~agreement1/2 редактируемы~~ → read-only чипы
-11. ~~Хардкод пользователей в handlers/auth.go~~ → БД + bcrypt
-12. ~~SQL-запросы в calculatePromoFields~~ → services/promo_service.go
-13. ~~CHARINDEX-парсинг согласований~~ → agreementN_status + agreementN_comment
-14. ~~Авто-закрытие диалога после сохранения~~ → остаётся открытым
-15. ~~Фильтры не обновлялись после согласования~~ → setRefreshFilters
-16. ~~Уязвимость Mass Assignment (agreement_status/comment)~~ → applyJSONToRow с чёрным списком
-17. ~~Secure-флаг куки не проверял ENV~~ → `os.Getenv("ENV") == "production"`
-18. ~~map[string]interface{} в Save/Update~~ → PromoRowDB (типизированные структуры)
-19. ~~Старый ApprovePromo в promo_repo.go~~ → удалён
-20. ~~Нагрузка на БД при загрузке фильтров~~ → in-memory кэш 5 мин
-
-### Остаются (P2)
-21. **Нет тестов на фронтенд** — только бэкенд main_test.go
+- ✅ `usePromoCalculations.js` удалён (заменён на .ts)
 
 ---
 
