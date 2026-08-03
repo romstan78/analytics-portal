@@ -18,7 +18,7 @@ export default function DataTable({
   const [rawRows, setRawRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const filtersKey = JSON.stringify(filters);
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   // Серверная пагинация
   const [paginationModel, setPaginationModel] = useState({
