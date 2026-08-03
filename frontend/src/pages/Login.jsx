@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Box, Card, TextField, Button, Typography, Alert } from '@mui/material';
 import { Lock as LockIcon } from '@mui/icons-material';
+import { saveSession } from '../api/auth';
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('');
@@ -20,15 +21,14 @@ export default function Login({ onLogin }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
+        credentials: 'include', // получаем httpOnly refresh cookie
       });
       const data = await response.json();
       if (!response.ok) {
         setError(data.error || 'Ошибка входа');
         return;
       }
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('username', data.username);
-      localStorage.setItem('role', data.role);
+      saveSession(data);
       onLogin(data);
     } catch (err) {
       setError('Сервер недоступен');

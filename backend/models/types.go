@@ -92,9 +92,26 @@ type DrilldownRow struct {
 	Channel    *string `json:"channel"`
 }
 
+type NetworkGeo struct {
+	KAM          string `json:"kam"`
+	NetworkType  string `json:"network_type"`
+	Top20Segment string `json:"top20_segment"`
+	KeyRegion    string `json:"key_region"`
+}
+
+type LastSKUData struct {
+	ContractPrice   float64 `json:"contract_price"`
+	GM              float64 `json:"gm"`
+	TotalPharmacies int64   `json:"total_pharmacies"`
+	KeyRegion       string  `json:"key_region"`
+	Top20Segment    string  `json:"top20_segment"`
+	OlapPrice       float64 `json:"olap_price"`
+}
+
 type ApprovalRow struct {
 	ID                    int      `json:"id"`
 	NetworkName           *string  `json:"network_name"`
+	BrandAS               *string  `json:"brand_as"`
 	SKU                   *string  `json:"sku"`
 	Mechanics             *string  `json:"mechanics"`
 	Year                  int      `json:"year"`

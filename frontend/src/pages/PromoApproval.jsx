@@ -30,7 +30,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [draftBrand, setDraftBrand] = useState('');
   const [draftMechanics, setDraftMechanics] = useState('');
   const [draftStatus, setDraftStatus] = useState('pending');
-  const [draftYear, setDraftYear] = useState('');
+  const [draftYear, setDraftYear] = useState(String(new Date().getFullYear()));
   const [draftMonth, setDraftMonth] = useState('');
 
   // Флаг: была ли нажата кнопка «Применить»
@@ -42,7 +42,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [appliedBrand, setAppliedBrand] = useState('');
   const [appliedMechanics, setAppliedMechanics] = useState('');
   const [appliedStatus, setAppliedStatus] = useState('pending');
-  const [appliedYear, setAppliedYear] = useState('');
+  const [appliedYear, setAppliedYear] = useState(String(new Date().getFullYear()));
   const [appliedMonth, setAppliedMonth] = useState('');
 
   // Справочники (зависят от appliedStatus)
@@ -100,7 +100,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
       let filtered = data.data || [];
       if (appliedNetwork) filtered = filtered.filter(a => a.network_name === appliedNetwork);
-      if (appliedBrand) filtered = filtered.filter(a => a.sku && a.sku.includes(appliedBrand));
+      if (appliedBrand) filtered = filtered.filter(a => a.brand_as === appliedBrand);
       if (appliedMechanics) filtered = filtered.filter(a => a.mechanics === appliedMechanics);
       if (appliedYear) filtered = filtered.filter(a => a.year === parseInt(appliedYear));
       if (appliedMonth) filtered = filtered.filter(a => a.month === parseInt(appliedMonth));
@@ -136,9 +136,9 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   const handleReset = () => {
     setDraftKam(''); setDraftNetwork(''); setDraftBrand(''); setDraftMechanics('');
-    setDraftStatus('pending'); setDraftYear(''); setDraftMonth('');
+    setDraftStatus('pending'); setDraftYear(String(new Date().getFullYear())); setDraftMonth('');
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
-    setAppliedStatus('pending'); setAppliedYear(''); setAppliedMonth('');
+    setAppliedStatus('pending'); setAppliedYear(String(new Date().getFullYear())); setAppliedMonth('');
     setApprovals([]);
     setHasApplied(false);
   };

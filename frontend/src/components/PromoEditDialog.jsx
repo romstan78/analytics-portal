@@ -99,7 +99,7 @@ export default function PromoEditDialog({
 
   const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
   const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
-  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'agreement1', 'agreement2', 'id_directum', 'ds_number'];
+  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
 
   const handleFieldChange = (field) => (e) => {
     const rawValue = e.target.value;
@@ -194,18 +194,8 @@ export default function PromoEditDialog({
   
                     <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
                     <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    {isKAM ? (
-                      <AgreementChip label="Согласование 1" value={form.agreement1} />
-                    ) : (
-                      <TextField label="Согласование 1" size="small" fullWidth value={form.agreement1 || ''}
-                        onChange={updateField('agreement1')} sx={renderAgreementSx(form.agreement1)} />
-                    )}
-                    {isKAM ? (
-                      <AgreementChip label="Согласование 2" value={form.agreement2} />
-                    ) : (
-                      <TextField label="Согласование 2" size="small" fullWidth value={form.agreement2 || ''}
-                        onChange={updateField('agreement2')} sx={renderAgreementSx(form.agreement2)} />
-                    )}
+                    <AgreementChip label="Согласование 1" value={form.agreement1} />
+                    <AgreementChip label="Согласование 2" value={form.agreement2} />
                   </Box>
   
                   {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}

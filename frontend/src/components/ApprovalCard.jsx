@@ -2,6 +2,7 @@ import { memo } from 'react';
 import {
   Box, Typography, Card, CardContent, CardActions,
   Button, Chip, Collapse, Grid, TextField,
+  LinearProgress, CircularProgress,
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -35,8 +36,14 @@ const ApprovalCard = memo(function ApprovalCard({
   const isSubmitting = submitting[id] || false;
 
   return (
-    <Box>
-      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ position: 'relative' }}>
+      {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
+      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column', opacity: isSubmitting ? 0.7 : 1 }}>
+        {isSubmitting && (
+          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
+            <CircularProgress size={32} />
+          </Box>
+        )}
         <CardContent sx={{ flex: 1, pb: 1 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
             {item.network_name || '—'}

@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,15 +99,24 @@ func main() {
 	limiter := NewRateLimiter(100, 1*time.Minute)
 
 	r := gin.Default()
+	corsOrigins := []string{"http://localhost:5173"}
+	if env := os.Getenv("CORS_ORIGINS"); env != "" {
+		corsOrigins = strings.Split(env, ",")
+		for i := range corsOrigins {
+			corsOrigins[i] = strings.TrimSpace(corsOrigins[i])
+		}
+	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"http://localhost:5173"},
-		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Content-Type", "Authorization"},
+		AllowOrigins:     corsOrigins,
+		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
 	}))
 	r.Use(RateLimitMiddleware(limiter))
 
 	// ─── Публичный роут (без авторизации) ────────────────────────────────
 	r.POST("/api/auth/login", handlers.Login)
+	r.POST("/api/auth/refresh", handlers.RefreshToken)
 
 	// ─── Защищённые роуты (требуется JWT) ────────────────────────────────
 	api := r.Group("/api")

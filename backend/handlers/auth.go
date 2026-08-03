@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"backend/config"
 
@@ -34,15 +35,75 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	token, err := config.GenerateToken(req.Username, user.Role)
+	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
 		return
 	}
 
+	refreshToken, err := config.GenerateRefreshToken(req.Username, user.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	// Refresh token в httpOnly secure cookie
+	c.SetCookie(
+		"refresh_token",
+		refreshToken,
+		int(7*24*time.Hour.Seconds()), // 7 дней
+		"/api/auth",                   // доступен только для /api/auth/*
+		"",                            // domain (текущий)
+		false,                         // secure (false для localhost)
+		true,                          // httpOnly
+	)
+
 	c.JSON(http.StatusOK, gin.H{
-		"token":    token,
+		"token":    accessToken,
 		"username": req.Username,
 		"role":     user.Role,
+	})
+}
+
+func RefreshToken(c *gin.Context) {
+	refreshToken, err := c.Cookie("refresh_token")
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token не найден"})
+		return
+	}
+
+	claims, err := config.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
+		return
+	}
+
+	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
+		return
+	}
+
+	// Обновляем refresh cookie
+	c.SetCookie(
+		"refresh_token",
+		newRefreshToken,
+		int(7*24*time.Hour.Seconds()),
+		"/api/auth",
+		"",
+		false,
+		true,
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":    newAccessToken,
+		"username": claims.Username,
+		"role":     claims.Role,
 	})
 }

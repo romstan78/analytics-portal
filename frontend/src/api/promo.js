@@ -1,24 +1,36 @@
+import { refreshToken } from './auth';
+
 const API_BASE = 'http://localhost:8080';
 
 // ─── Утилита: fetch с авторизацией и таймаутом ──────────────────────────────
-function fetchWithAuth(url, options = {}, timeout = 15000) {
+async function fetchWithAuth(url, options = {}, timeout = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
 
-  const token = localStorage.getItem('token');
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
+  const doFetch = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, { ...options, headers, signal: controller.signal });
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+
+  let res = await doFetch();
+
+  // При 401 пробуем обновить токен и повторить
+  if (res.status === 401) {
+    const refreshed = await refreshToken();
+    if (refreshed) {
+      res = await doFetch();
+    }
   }
 
-  return fetch(url, {
-    ...options,
-    headers,
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timer));
+  clearTimeout(timer);
+  return res;
 }
 
 // ─── Утилита: построение query string ──────────────────────────────────────
