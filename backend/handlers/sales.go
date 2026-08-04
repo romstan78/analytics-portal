@@ -70,6 +70,7 @@ func GetData(c *gin.Context) {
 	unRubs := c.QueryArray("un_rub")
 	segments := c.QueryArray("segment")
 	channels := c.QueryArray("channel")
+	search := c.Query("search")
 
 	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
 	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
@@ -141,6 +142,12 @@ func GetData(c *gin.Context) {
 	appendFilter("n.un_rub", unRubs)
 	appendFilter("n.segment", segments)
 	appendFilter("n.channel", channels)
+
+	if search != "" {
+		likeArg := "%" + search + "%"
+		baseWhere += " AND (n.brandName LIKE ? OR n.productName LIKE ? OR n.networkName LIKE ? OR n.metric_type LIKE ?)"
+		args = append(args, likeArg, likeArg, likeArg, likeArg)
+	}
 
 	all := c.Query("all")
 

@@ -41,7 +41,7 @@ export function usePromoData(
 
   const queryKey = ['promoData', filters, refreshTrigger] as const;
 
-  const fetchPromoData = useCallback(async (): Promise<PromoRow[]> => {
+  const fetchPromoData = useCallback(async ({ signal }: { signal?: AbortSignal }): Promise<PromoRow[]> => {
     const currentFilters = filtersRef.current;
     const params = new URLSearchParams();
     Object.entries(currentFilters).forEach(([key, value]) => {
@@ -56,6 +56,7 @@ export function usePromoData(
     const response = await fetch(
       `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
       {
+        signal,
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },

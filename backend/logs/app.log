@@ -404,3 +404,89 @@
 {"time":"2026-08-03T17:48:18.571631+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T17:48:18+07:00"}
 {"time":"2026-08-03T17:48:45.952624+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T17:48:45+07:00"}
 {"time":"2026-08-03T18:02:45.899098+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"system","timestamp":"2026-08-03T18:02:45+07:00"}
+{"time":"2026-08-03T18:19:45.950898+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T18:19:45.951653+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T18:25:05.694943+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-03T18:25:05.696309+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-03T18:27:49.065263+07:00","level":"INFO","msg":"promo_approved","id":77115,"field":"agreement1","status":"approved","comment":"","user":"admin","timestamp":"2026-08-03T18:27:49+07:00"}
+{"time":"2026-08-04T00:39:15.013413+07:00","level":"INFO","msg":"promo_updated","id":79348,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"OZON","user":"admin","timestamp":"2026-08-04T00:39:15+07:00"}
+{"time":"2026-08-04T17:39:17.867129+07:00","level":"ERROR","msg":"promo_insert_failed","error":"sql: expected 65 arguments, got 64","sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС"}
+{"time":"2026-08-04T17:39:33.798203+07:00","level":"ERROR","msg":"promo_insert_failed","error":"sql: expected 65 arguments, got 64","sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС"}
+{"time":"2026-08-04T17:57:34.166135+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-04T17:57:34.168688+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-04T17:58:46.349768+07:00","level":"INFO","msg":"promo_updated","id":79348,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"OZON","user":"admin","timestamp":"2026-08-04T17:58:46+07:00"}
+{"time":"2026-08-04T17:59:09.052827+07:00","level":"INFO","msg":"promo_updated","id":79348,"sku":"ЭНТЕРОЛ КАПС 250МГ №50","network":"OZON","user":"admin","timestamp":"2026-08-04T17:59:09+07:00"}
+{"time":"2026-08-04T18:00:41.880418+07:00","level":"INFO","msg":"promo_approved","id":79348,"field":"agreement1","status":"rejected","comment":"","user":"admin","timestamp":"2026-08-04T18:00:41+07:00"}
+{"time":"2026-08-04T18:02:44.835628+07:00","level":"INFO","msg":"promo_created","id":79349,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС","year":2027,"month":1,"plan_units":19500,"plan_rub":9925500,"user":"admin","timestamp":"2026-08-04T18:02:44+07:00"}
+{"time":"2026-08-04T18:06:46.820551+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-04T18:06:46.821303+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-04T18:07:16.462794+07:00","level":"INFO","msg":"promo_deleted","id":"79349","user":"admin","timestamp":"2026-08-04T18:07:16+07:00"}
+{"time":"2026-08-04T18:08:18.934644+07:00","level":"INFO","msg":"promo_created","id":79350,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС","year":2027,"month":1,"plan_units":19800,"plan_rub":10078200,"user":"admin","timestamp":"2026-08-04T18:08:18+07:00"}
+{"time":"2026-08-04T18:09:07.917675+07:00","level":"INFO","msg":"promo_approved","id":79350,"field":"agreement1","status":"commented","comment":"подумаем","user":"admin","timestamp":"2026-08-04T18:09:07+07:00"}
+{"time":"2026-08-04T18:10:02.099097+07:00","level":"INFO","msg":"promo_approved","id":79350,"field":"agreement1","status":"approved","comment":"дерзай","user":"admin","timestamp":"2026-08-04T18:10:02+07:00"}
+{"time":"2026-08-04T18:13:52.664624+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-04T18:13:52.665158+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-04T18:15:19.914428+07:00","level":"INFO","msg":"promo_updated","id":79350,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС","user":"admin","timestamp":"2026-08-04T18:15:19+07:00"}
+{"time":"2026-08-04T18:16:15.004108+07:00","level":"INFO","msg":"promo_created","id":79351,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","year":2027,"month":1,"plan_units":1700,"plan_rub":1373600,"user":"admin","timestamp":"2026-08-04T18:16:15+07:00"}
+{"time":"2026-08-04T18:16:37.423943+07:00","level":"INFO","msg":"promo_approved","id":79351,"field":"agreement1","status":"rejected","comment":"","user":"admin","timestamp":"2026-08-04T18:16:37+07:00"}
+{"time":"2026-08-05T00:13:03.224862+07:00","level":"ERROR","msg":"db_ping_failed","error":"unable to open tcp connection with host 'localhost:1433': dial tcp [::1]:1433: connect: connection refused"}
+{"time":"2026-08-05T00:13:03.225697+07:00","level":"INFO","msg":"Нет соединения с БД: unable to open tcp connection with host 'localhost:1433': dial tcp [::1]:1433: connect: connection refused"}
+{"time":"2026-08-05T00:13:51.472729+07:00","level":"ERROR","msg":"db_ping_failed","error":"read tcp 127.0.0.1:55649->127.0.0.1:1433: read: connection reset by peer"}
+{"time":"2026-08-05T00:13:51.473221+07:00","level":"INFO","msg":"Нет соединения с БД: read tcp 127.0.0.1:55649->127.0.0.1:1433: read: connection reset by peer"}
+{"time":"2026-08-05T00:32:19.397123+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T00:32:19.398826+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T00:43:21.582299+07:00","level":"INFO","msg":"promo_updated","id":79344,"sku":"КЕЛО-КОТ 6 ГР","network":"Эдельвейс АС","user":"admin","timestamp":"2026-08-05T00:43:21+07:00"}
+{"time":"2026-08-05T00:43:32.854861+07:00","level":"INFO","msg":"promo_updated","id":79344,"sku":"КЕЛО-КОТ 6 ГР","network":"Эдельвейс АС","user":"admin","timestamp":"2026-08-05T00:43:32+07:00"}
+{"time":"2026-08-05T00:44:12.395441+07:00","level":"INFO","msg":"promo_approved","id":79347,"field":"agreement1","status":"rejected","comment":"","user":"admin","timestamp":"2026-08-05T00:44:12+07:00"}
+{"time":"2026-08-05T00:53:08.666267+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T00:53:08.668306+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T00:53:08.668518+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T00:53:08.66854+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T00:53:20.862895+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T00:53:20.864062+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T00:57:14.658069+07:00","level":"INFO","msg":"promo_updated","id":77156,"sku":"ЭНТЕРОЛ ПОР 250МГ №20","network":"Алоэ АС","user":"admin","timestamp":"2026-08-05T00:57:14+07:00"}
+{"time":"2026-08-05T00:57:23.743939+07:00","level":"INFO","msg":"promo_updated","id":77156,"sku":"ЭНТЕРОЛ ПОР 250МГ №20","network":"Алоэ АС","user":"admin","timestamp":"2026-08-05T00:57:23+07:00"}
+{"time":"2026-08-05T01:02:25.902179+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:02:25.903098+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:04:22.820113+07:00","level":"INFO","msg":"promo_approved","id":77205,"field":"agreement1","status":"approved","comment":"нормально, проводим!","user":"admin","timestamp":"2026-08-05T01:04:22+07:00"}
+{"time":"2026-08-05T01:05:18.124612+07:00","level":"INFO","msg":"promo_updated","id":77017,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"Гармония Здоровья АС","user":"admin","timestamp":"2026-08-05T01:05:18+07:00"}
+{"time":"2026-08-05T01:09:55.400989+07:00","level":"INFO","msg":"promo_approved","id":79347,"field":"agreement1","status":"approved","comment":"","user":"admin","timestamp":"2026-08-05T01:09:55+07:00"}
+{"time":"2026-08-05T01:10:08.836779+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"admin","timestamp":"2026-08-05T01:10:08+07:00"}
+{"time":"2026-08-05T01:16:46.335758+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:16:46.337573+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:19:37.596749+07:00","level":"INFO","msg":"batch_approved","count":16,"affected":16,"status":"approved","user":"admin","timestamp":"2026-08-05T01:19:37+07:00"}
+{"time":"2026-08-05T01:25:28.645097+07:00","level":"INFO","msg":"promo_updated","id":79351,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:25:28+07:00"}
+{"time":"2026-08-05T01:25:37.724995+07:00","level":"INFO","msg":"promo_updated","id":79351,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:25:37+07:00"}
+{"time":"2026-08-05T01:27:13.951542+07:00","level":"INFO","msg":"batch_approved","count":10,"affected":10,"status":"approved","user":"admin","timestamp":"2026-08-05T01:27:13+07:00"}
+{"time":"2026-08-05T01:27:34.036917+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"admin","timestamp":"2026-08-05T01:27:34+07:00"}
+{"time":"2026-08-05T01:30:29.327524+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:30:29.328526+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:30:44.586893+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:30:44+07:00"}
+{"time":"2026-08-05T01:31:01.5838+07:00","level":"INFO","msg":"promo_updated","id":77328,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"Фармдисконт АС","user":"admin","timestamp":"2026-08-05T01:31:01+07:00"}
+{"time":"2026-08-05T01:34:04.041657+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:34:04.042776+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:34:04.043011+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T01:34:04.043044+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T01:35:03.171615+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:35:03.172965+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:36:22.782495+07:00","level":"INFO","msg":"promo_updated","id":79350,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"Аптека 36,6 Москва АС","user":"admin","timestamp":"2026-08-05T01:36:22+07:00"}
+{"time":"2026-08-05T01:36:45.468747+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:36:45+07:00"}
+{"time":"2026-08-05T01:37:07.45929+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:37:07+07:00"}
+{"time":"2026-08-05T01:37:13.469033+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:37:13+07:00"}
+{"time":"2026-08-05T01:37:22.821869+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:37:22+07:00"}
+{"time":"2026-08-05T01:37:47.169935+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:37:47+07:00"}
+{"time":"2026-08-05T01:38:01.811455+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:38:01+07:00"}
+{"time":"2026-08-05T01:39:19.107845+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:39:19.108879+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:39:19.109058+07:00","level":"ERROR","msg":"server_failed","error":"listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T01:39:19.109077+07:00","level":"INFO","msg":"Ошибка запуска: listen tcp :8080: bind: address already in use"}
+{"time":"2026-08-05T01:40:50.338912+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:40:50.339718+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:41:24.483036+07:00","level":"INFO","msg":"promo_updated","id":79351,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:41:24+07:00"}
+{"time":"2026-08-05T01:41:54.824388+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"admin","timestamp":"2026-08-05T01:41:54+07:00"}
+{"time":"2026-08-05T01:42:27.100691+07:00","level":"INFO","msg":"promo_updated","id":79347,"sku":"ОТИПАКС КАПЛИ 16Г №1","network":"OZON","user":"admin","timestamp":"2026-08-05T01:42:27+07:00"}
+{"time":"2026-08-05T01:42:49.232261+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T01:42:49.233606+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T01:42:50.215118+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"admin","timestamp":"2026-08-05T01:42:50+07:00"}
+{"time":"2026-08-05T01:43:09.743971+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:43:09+07:00"}
+{"time":"2026-08-05T01:43:53.094623+07:00","level":"INFO","msg":"promo_approved","id":79348,"field":"agreement1","status":"approved","comment":"попробуй ","user":"admin","timestamp":"2026-08-05T01:43:53+07:00"}

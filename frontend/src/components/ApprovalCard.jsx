@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import {
   Box, Typography, Card, CardContent, CardActions,
-  Button, Chip, Collapse, Grid, TextField,
+  Button, Chip, Collapse, Grid, TextField, Checkbox,
   LinearProgress, CircularProgress,
 } from '@mui/material';
 import {
@@ -29,22 +29,42 @@ const MONTHS = [
 ];
 
 const ApprovalCard = memo(function ApprovalCard({
-  item, expanded, submitting, onCommentRef,
-  onToggleExpand, onOpenConfirm, onCommentOnly,
+  item, expanded, submitting, selected, onToggleSelect,
+  onCommentRef, onToggleExpand, onOpenConfirm, onCommentOnly,
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
 
+  // Цвет левой рамки по ROI
+  const leftBorderColor = item.plan_roi != null
+    ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
+    : '#94a3b8';
+
   return (
     <Box sx={{ position: 'relative' }}>
       {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
-      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column', opacity: isSubmitting ? 0.7 : 1 }}>
+      <Card elevation={2} sx={{
+        borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 },
+        height: '100%', display: 'flex', flexDirection: 'column',
+        opacity: isSubmitting ? 0.7 : 1,
+        borderLeft: `4px solid ${leftBorderColor}`,
+      }}>
         {isSubmitting && (
           <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
             <CircularProgress size={32} />
           </Box>
         )}
-        <CardContent sx={{ flex: 1, pb: 1 }}>
+        {/* Чекбокс для массового выбора */}
+        <Box sx={{ position: 'absolute', top: 4, left: 4, zIndex: 3 }}>
+          <Checkbox
+            size="small"
+            checked={selected || false}
+            onChange={onToggleSelect}
+            onClick={(e) => e.stopPropagation()}
+            sx={{ p: 0.5, '& .MuiSvgIcon-root': { fontSize: 18 } }}
+          />
+        </Box>
+        <CardContent sx={{ flex: 1, pb: 1, pt: 3 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
             {item.network_name || '—'}
           </Typography>

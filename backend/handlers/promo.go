@@ -257,9 +257,20 @@ func GetLastSKUData(c *gin.Context) {
 
 func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
-		if k == "id" || k == "deleted_at" || k == "updated_at" || k == "status" || strings.HasPrefix(k, "agreement") {
+		if k == "id" || k == "deleted_at" || k == "updated_at" || strings.HasPrefix(k, "agreement") {
 			continue
 		}
+
+		// Если значение nil или строка "<nil>" — пропускаем, чтобы не затирать поле мусором.
+		// Пустую строку обрабатываем ниже — она должна очищать строковые поля.
+		if v == nil {
+			continue
+		}
+		strVal := fmt.Sprint(v)
+		if strVal == "<nil>" {
+			continue
+		}
+
 		switch k {
 		case "network_name":
 			r.NetworkName = fmt.Sprint(v)
@@ -325,6 +336,8 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 			r.Comments = fmt.Sprint(v)
 		case "ecom_segment":
 			r.EcomSegment = fmt.Sprint(v)
+		case "status":
+			r.Status = fmt.Sprint(v)
 		case "total_pharmacies":
 			if val, err := strconv.Atoi(fmt.Sprint(v)); err == nil {
 				r.TotalPharmacies = &val
@@ -416,7 +429,14 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			row.UpdatedAt = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
+			// Перечитываем строку из БД, чтобы получить точный updated_at из GETDATE()
+			refetched, fetchErr := repository.FetchExistingRow(idInt)
+			if fetchErr != nil {
+				config.Logger.Error("promo_update_refetch_failed", "error", fetchErr.Error(), "id", idInt)
+				// Возвращаем как есть, без обновлённого updated_at
+				c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
+				return
+			}
 
 			usernameVal, _ := c.Get("username")
 			config.Logger.Info("promo_updated",
@@ -426,7 +446,7 @@ func SavePromo(c *gin.Context) {
 				"user", fmt.Sprint(usernameVal),
 				"timestamp", time.Now().Format(time.RFC3339),
 			)
-			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
+			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(refetched)})
 			return
 		}
 	}
@@ -672,6 +692,80 @@ func GetApprovalBrands(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": brands})
+}
+
+// ─── Batch Approve ─────────────────────────────────────────────────────────
+
+func BatchApprovePromo(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
+	agreementNum := 1
+	if roleStr == "agreement2" {
+		agreementNum = 2
+	}
+
+	var req struct {
+		IDs     []int  `json:"ids"`
+		Status  string `json:"status"`
+		Comment string `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids не может быть пустым"})
+		return
+	}
+
+	var status string
+	var comment string
+	var legacyValue string
+	switch req.Status {
+	case "comment":
+		if req.Comment == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "комментарий не может быть пустым"})
+			return
+		}
+		status = "commented"
+		comment = req.Comment
+		legacyValue = req.Comment
+	case "согласовано":
+		status = "approved"
+		comment = req.Comment
+		legacyValue = "согласовано"
+		if req.Comment != "" {
+			legacyValue = "согласовано: " + req.Comment
+		}
+	case "отклонено":
+		status = "rejected"
+		comment = req.Comment
+		legacyValue = "отклонено"
+		if req.Comment != "" {
+			legacyValue = "отклонено: " + req.Comment
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые status: comment, согласовано, отклонено"})
+		return
+	}
+
+	rowsAffected, err := repository.BatchApprove(agreementNum, req.IDs, status, comment, legacyValue)
+	if err != nil {
+		config.Logger.Error("batch_approve_failed", "error", err.Error(), "count", len(req.IDs))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
+		return
+	}
+
+	usernameVal, _ := c.Get("username")
+	config.Logger.Info("batch_approved",
+		"count", len(req.IDs),
+		"affected", rowsAffected,
+		"status", status,
+		"user", fmt.Sprint(usernameVal),
+		"timestamp", time.Now().Format(time.RFC3339),
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Обновлено", "affected": rowsAffected})
 }
 
 // ─── Log helpers (используются для логирования, оставлены для совместимости) ─

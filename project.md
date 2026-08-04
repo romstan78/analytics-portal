@@ -1,7 +1,7 @@
 # Аналитический портал — Документация проекта
 
-**Дата:** 03.08.2026
-**Коммит:** fix: Roadmap аудита — 0 vs NULL, аудит-лог, фильтры согласования, Confirm Dialog, TS-хук
+**Дата:** 04.08.2026
+**Коммит:** fix: INSERT placeholders mismatch, nil agreement1/2, NULL факт-поля
 **Стек:** Go (Gin) + React (Vite + MUI) + SQL Server (MSSQL)
 **Репозиторий:** github.com/romstan78/analytics-portal
 
@@ -311,6 +311,10 @@ frontend/src/
 - ✅ **FetchExistingRow: сканирование через `sql.Null*` с проверкой `.Valid`**
 - ✅ **applyJSONToRow: присваивание числовых полей через `&val`**
 - ✅ **Хелперы PtrFloat/PtrInt/ValFloat/ValInt в models/types.go**
+- ✅ **DTOToDBRow: optFloat() для нулевых фактических значений; обнуление производных полей в nil**
+- ✅ **stringVal: nil → '' вместо '<nil>' (agreement1/2 при создании промо)**
+- ✅ **InsertPromo: исправлен mismatch VALUES (64 arg = 64 placeholder)**
+- ✅ **PromoAnalysis: valueFormatter с проверкой v !== 0 для фактических колонок**
 
 ### Просмотр и редактирование промо
 - ✅ DataGrid с пагинацией, сортировкой, поиском, экспортом CSV

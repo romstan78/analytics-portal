@@ -164,6 +164,17 @@ export const promoAPI = {
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
       return json;
     }),
+
+  // Массовое согласование
+  batchApprove: (ids, status, comment = '') =>
+    fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ ids, status, comment }),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
+      return json;
+    }),
 };
 
 // ─── API: Интернет-продажи ─────────────────────────────────────────────────

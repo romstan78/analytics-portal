@@ -125,6 +125,7 @@ export default function PromoAnalysis({ role }) {
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const map = {};
@@ -161,6 +162,11 @@ export default function PromoAnalysis({ role }) {
     usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
+  // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
+  useEffect(() => {
+    if (tab === 0) refetch();
+  }, [tab]);
+
   // ─── Загрузка справочников ────────────────────────────────────────────
   useEffect(() => { promoAPI.getInvestmentTypes().then(data => setInvestmentTypes(data.data || [])); }, []);
   useEffect(() => { 
@@ -195,16 +201,24 @@ export default function PromoAnalysis({ role }) {
     setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
   };
 
-  // ─── Поиск по таблице (клиентский) ────────────────────────────────────
+  // Debounce поиска (300ms) — чтобы не тормозить при вводе
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  // ─── Поиск по таблице (клиентский, с debounce) ────────────────────────
   const filteredRows = useMemo(() => {
-    if (!searchText.trim()) return rows;
-    const lower = searchText.toLowerCase();
+    if (!debouncedSearch) return rows;
+    const lower = debouncedSearch.toLowerCase();
     return rows.filter(row =>
       Object.values(row).some(val =>
         val != null && String(val).toLowerCase().includes(lower)
       )
     );
-  }, [rows, searchText]);
+  }, [rows, debouncedSearch]);
 
   const visibleCols = useMemo(
     () => COLUMNS.filter(c => visibleColumns[c.field] !== false),
@@ -213,20 +227,10 @@ export default function PromoAnalysis({ role }) {
 
   const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
 
-  // ─── Экспорт CSV ──────────────────────────────────────────────────────
-  const handleExport = async () => {
+  // ─── Экспорт CSV (клиентский — выгружаем отфильтрованные строки) ─────
+  const handleExport = () => {
     try {
-      const params = new URLSearchParams();
-      params.set('all', 'true');
-      Object.entries(appliedFilters).forEach(([k, v]) => {
-        if (Array.isArray(v)) v.forEach(x => { if (x) params.append(k, String(x)); });
-        else if (v) params.set(k, String(v));
-      });
-      const res = await fetch(`http://localhost:8080/api/promo/data?${params}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      });
-      const json = await res.json();
-      const data = json.data || [];
+      const data = filteredRows;
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';

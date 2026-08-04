@@ -148,6 +148,7 @@ func main() {
 		api.GET("/promo/approval-networks", handlers.GetApprovalNetworks)
 		api.GET("/promo/approval-brands", handlers.GetApprovalBrands)
 		api.POST("/promo/approve", handlers.ApprovePromo)
+		api.POST("/promo/approve/batch", handlers.BatchApprovePromo)
 
 		// Промо — удаление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)

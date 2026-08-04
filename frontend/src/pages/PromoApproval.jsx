@@ -3,8 +3,14 @@ import {
   Box, Typography, CircularProgress, Alert, Snackbar,
   TextField, MenuItem, Dialog,
   DialogTitle, DialogContent, DialogActions,
-  Paper, Stack, Button,
+  Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
+  Checkbox, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow,
 } from '@mui/material';
+import {
+  ViewModule as CardIcon,
+  TableRows as TableIcon,
+} from '@mui/icons-material';
 import ApprovalCard from '../components/ApprovalCard';
 import { promoAPI } from '../api/promo';
 
@@ -24,6 +30,9 @@ const APPROVAL_STATUSES = [
 ];
 
 export default function PromoApproval({ role, onDataChanged }) {
+  // Вид: cards | table
+  const [viewMode, setViewMode] = useState('cards');
+
   // Черновики фильтров (меняются сразу)
   const [draftKam, setDraftKam] = useState('');
   const [draftNetwork, setDraftNetwork] = useState('');
@@ -36,7 +45,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   // Флаг: была ли нажата кнопка «Применить»
   const [hasApplied, setHasApplied] = useState(false);
 
-  // Применённые фильтры (по кнопке «Применить»)
+  // Применённые фильтры
   const [appliedKam, setAppliedKam] = useState('');
   const [appliedNetwork, setAppliedNetwork] = useState('');
   const [appliedBrand, setAppliedBrand] = useState('');
@@ -45,7 +54,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [appliedYear, setAppliedYear] = useState(String(new Date().getFullYear()));
   const [appliedMonth, setAppliedMonth] = useState('');
 
-  // Справочники (зависят от appliedStatus)
+  // Справочники
   const [kams, setKams] = useState([]);
   const [networks, setNetworks] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -57,13 +66,17 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [expandedCards, setExpandedCards] = useState({});
   const [submitting, setSubmitting] = useState({});
 
+  // Массовое согласование
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
+
   const commentRefs = useRef({});
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
 
-  // Загрузка справочников при смене фильтров (включая KAM из того же запроса)
+  // Загрузка справочников
   useEffect(() => {
     promoAPI.getApprovalFilters({
       approval_status: appliedStatus,
@@ -83,7 +96,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       .catch(err => console.error('Ошибка справочников:', err));
   }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
-  // Загрузка данных при изменении применённых фильтров (только после «Применить»)
+  // Загрузка данных
   const fetchApprovals = useCallback(async () => {
     if (!hasApplied || (!appliedKam && !appliedNetwork && !appliedBrand && !appliedMechanics && !appliedYear && !appliedMonth)) return;
     const currentFetchId = ++fetchIdRef.current;
@@ -102,9 +115,9 @@ export default function PromoApproval({ role, onDataChanged }) {
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      // Очищаем старые DOM-рефы перед установкой новых данных
       commentRefs.current = {};
       setApprovals(data.data || []);
+      setSelectedIds(new Set()); // сбрасываем выделение при новой загрузке
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;
       setError(err.message || 'Ошибка загрузки');
@@ -113,11 +126,8 @@ export default function PromoApproval({ role, onDataChanged }) {
     }
   }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
 
-  useEffect(() => {
-    fetchApprovals();
-  }, [fetchApprovals]);
+  useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
-  // Кнопка «Применить» — только если выбран хоть один фильтр
   const handleApply = () => {
     const hasAnyFilter = draftKam || draftNetwork || draftBrand || draftMechanics || draftYear || draftMonth;
     if (!hasAnyFilter) return;
@@ -137,6 +147,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
     setAppliedStatus('pending'); setAppliedYear(String(new Date().getFullYear())); setAppliedMonth('');
     setApprovals([]);
+    setSelectedIds(new Set());
     setHasApplied(false);
   };
 
@@ -154,7 +165,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
       delete commentRefs.current[id];
-      setSnackbar({ open: true, message: status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён', severity: 'success' });
+      setSnackbar({ open: true, message: '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
     } catch (err) {
@@ -170,6 +181,69 @@ export default function PromoApproval({ role, onDataChanged }) {
     openConfirm(id, 'comment');
   };
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
+
+  // Чекбоксы
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    const allIds = approvals.map(a => a.id);
+    if (selectedIds.size === allIds.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allIds));
+    }
+  };
+
+  // Массовое согласование
+  const openBatchDialog = (status) => {
+    if (selectedIds.size === 0) return;
+    setBatchDialog({ open: true, status });
+  };
+  const handleBatchAction = async () => {
+    const ids = Array.from(selectedIds);
+    const status = batchDialog.status;
+    setBatchDialog({ open: false, status: '' });
+    setSubmitting(prev => {
+      const next = { ...prev };
+      ids.forEach(id => { next[id] = true; });
+      return next;
+    });
+    try {
+      await promoAPI.batchApprove(ids, status, '');
+      setApprovals(prev => prev.filter(a => !selectedIds.has(a.id)));
+      setSelectedIds(new Set());
+      setSnackbar({ open: true, message: `✅ ${ids.length} промо обновлено`, severity: 'success' });
+      setRefreshFilters(prev => prev + 1);
+      if (onDataChanged) onDataChanged();
+    } catch (err) {
+      setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+    } finally {
+      setSubmitting(prev => {
+        const next = { ...prev };
+        ids.forEach(id => { delete next[id]; });
+        return next;
+      });
+    }
+  };
+
+  // Форматирование ROI с цветом (всегда 1 десятичный знак)
+  const formatROI = (value) => {
+    if (value == null) return '';
+    const num = Number(value);
+    return num.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  };
+  const getROIColor = (value) => {
+    if (value == null) return undefined;
+    const num = Number(value);
+    if (num > 0) return '#16a34a';
+    if (num < 0) return '#dc2626';
+    return undefined;
+  };
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
@@ -217,6 +291,36 @@ export default function PromoApproval({ role, onDataChanged }) {
         </Stack>
       </Paper>
 
+      {/* Переключатель вида и массовые действия */}
+      {approvals.length > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          <ToggleButtonGroup
+            value={viewMode}
+            exclusive
+            onChange={(_, v) => v && setViewMode(v)}
+            size="small"
+          >
+            <ToggleButton value="cards"><CardIcon sx={{ mr: 0.5, fontSize: 18 }} />Карточки</ToggleButton>
+            <ToggleButton value="table"><TableIcon sx={{ mr: 0.5, fontSize: 18 }} />Таблица</ToggleButton>
+          </ToggleButtonGroup>
+          <Box sx={{ flex: 1 }} />
+          <Button
+            variant="contained" color="success" size="small"
+            disabled={selectedIds.size === 0}
+            onClick={() => openBatchDialog('согласовано')}
+          >
+            Согласовать ({selectedIds.size})
+          </Button>
+          <Button
+            variant="contained" color="error" size="small"
+            disabled={selectedIds.size === 0}
+            onClick={() => openBatchDialog('отклонено')}
+          >
+            Отклонить ({selectedIds.size})
+          </Button>
+        </Box>
+      )}
+
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
@@ -228,13 +332,15 @@ export default function PromoApproval({ role, onDataChanged }) {
         </Box>
       )}
 
-      {!loading && approvals.length > 0 && (
+      {/* Вид: Карточки */}
+      {!loading && approvals.length > 0 && viewMode === 'cards' && (
         <>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Найдено: {approvals.length} промо</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
             {approvals.map(a => (
               <ApprovalCard key={a.id} item={a}
                 expanded={expandedCards[a.id] || false} submitting={submitting}
+                selected={selectedIds.has(a.id)} onToggleSelect={() => toggleSelect(a.id)}
                 onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
                 onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
             ))}
@@ -242,6 +348,68 @@ export default function PromoApproval({ role, onDataChanged }) {
         </>
       )}
 
+      {/* Вид: Таблица */}
+      {!loading && approvals.length > 0 && viewMode === 'table' && (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: '#f1f5f9' }}>
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    size="small"
+                    indeterminate={selectedIds.size > 0 && selectedIds.size < approvals.length}
+                    checked={selectedIds.size === approvals.length}
+                    onChange={toggleSelectAll}
+                  />
+                </TableCell>
+                <TableCell>Период</TableCell>
+                <TableCell>Сеть</TableCell>
+                <TableCell>Бренд</TableCell>
+                <TableCell>SKU</TableCell>
+                <TableCell>Механика</TableCell>
+                <TableCell align="right">План (уп)</TableCell>
+                <TableCell align="right">Факт (уп)</TableCell>
+                <TableCell align="right">Инвестиции</TableCell>
+                <TableCell align="right">ROI</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {approvals.map(a => (
+                <TableRow key={a.id} hover selected={selectedIds.has(a.id)}>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={selectedIds.has(a.id)}
+                      onChange={() => toggleSelect(a.id)}
+                    />
+                  </TableCell>
+                  <TableCell>{a.year}.{String(a.month).padStart(2, '0')}</TableCell>
+                  <TableCell>{a.network_name}</TableCell>
+                  <TableCell>{a.brand_as}</TableCell>
+                  <TableCell>{a.sku}</TableCell>
+                  <TableCell>{a.mechanics}</TableCell>
+                  <TableCell align="right">
+                    {a.plan_promo_units != null ? Number(a.plan_promo_units).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    {a.actual_promo_sales_units != null ? Number(a.actual_promo_sales_units).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    {a.plan_investments_rub != null ? Number(a.plan_investments_rub).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography fontWeight={600} color={getROIColor(a.plan_roi)}>
+                      {formatROI(a.plan_roi)}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* Диалог подтверждения (единичное действие) */}
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '' })}>
         <DialogTitle>{confirmDialog.status === 'comment' ? 'Сохранить комментарий?' : 'Подтвердите действие'}</DialogTitle>
         <DialogContent>
@@ -257,6 +425,25 @@ export default function PromoApproval({ role, onDataChanged }) {
             color={confirmDialog.status === 'отклонено' ? 'error' : confirmDialog.status === 'comment' ? 'primary' : 'success'}
             onClick={handleConfirmedAction}>
             {confirmDialog.status === 'comment' ? 'Отправить комментарий' : confirmDialog.status === 'согласовано' ? 'Согласовать' : 'Отклонить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Диалог массового согласования */}
+      <Dialog open={batchDialog.open} onClose={() => setBatchDialog({ open: false, status: '' })}>
+        <DialogTitle>Массовое действие</DialogTitle>
+        <DialogContent>
+          <Typography>
+            {batchDialog.status === 'согласовано' && `Согласовать ${selectedIds.size} промо?`}
+            {batchDialog.status === 'отклонено' && `Отклонить ${selectedIds.size} промо?`}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBatchDialog({ open: false, status: '' })}>Отмена</Button>
+          <Button variant="contained"
+            color={batchDialog.status === 'отклонено' ? 'error' : 'success'}
+            onClick={handleBatchAction}>
+            {batchDialog.status === 'согласовано' ? 'Согласовать все' : 'Отклонить все'}
           </Button>
         </DialogActions>
       </Dialog>

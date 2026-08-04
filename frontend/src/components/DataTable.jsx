@@ -29,6 +29,7 @@ export default function DataTable({
 
   // Тулбар
   const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const map = {};
@@ -45,16 +46,18 @@ export default function DataTable({
     }));
   }, [rawRows, paginationModel.page]);
 
-  // Клиентский поиск (по текущей странице)
-  const filteredRows = useMemo(() => {
-    if (!searchText.trim()) return rows;
-    const lower = searchText.toLowerCase();
-    return rows.filter(row =>
-      Object.values(row).some(val =>
-        val != null && String(val).toLowerCase().includes(lower)
-      )
-    );
-  }, [rows, searchText]);
+  // Debounce поиска (400ms) — чтобы не дёргать API на каждый символ
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  // Сброс страницы при изменении поиска
+  useEffect(() => {
+    setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }, [debouncedSearch]);
 
   const visibleCols = useMemo(
     () => columns.filter(c => visibleColumns[c.field] !== false),
@@ -82,6 +85,9 @@ export default function DataTable({
     try {
       const params = new URLSearchParams();
       params.set('all', 'true');
+      if (debouncedSearch) {
+        params.set('search', debouncedSearch);
+      }
       Object.entries(filters).forEach(([key, value]) => { 
         if (Array.isArray(value)) { 
           value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
@@ -136,6 +142,9 @@ export default function DataTable({
       const params = new URLSearchParams();
       params.set('page', String(paginationModel.page));
       params.set('pageSize', String(paginationModel.pageSize));
+      if (debouncedSearch) {
+        params.set('search', debouncedSearch);
+      }
       
       Object.entries(filters).forEach(([key, value]) => { 
         if (Array.isArray(value)) { 
@@ -158,7 +167,7 @@ export default function DataTable({
       setTotalRows(json.totalRows || data.length);
       if (onDataLoaded) onDataLoaded(data);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
-  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize]);
+  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
 
   // Сброс страницы при смене фильтров
   useEffect(() => {
@@ -198,7 +207,7 @@ export default function DataTable({
           ))}
         </Menu>
 
-        <TextField size="small" placeholder="Поиск по странице..." value={searchText}
+        <TextField size="small" placeholder="Поиск..." value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
           sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
@@ -218,7 +227,7 @@ export default function DataTable({
       {/* Таблица */}
       <DataGrid 
         apiRef={apiRef}
-        rows={filteredRows} 
+        rows={rows} 
         columns={visibleCols}
         getRowId={(row) => row._rowId}
         loading={loading} 

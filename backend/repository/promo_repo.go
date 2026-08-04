@@ -959,6 +959,35 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 	return err
 }
 
+// BatchApprove — массовое согласование массива ID
+func BatchApprove(agreementNum int, ids []int, status string, comment string, legacyValue string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
+	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
+	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+
+	placeholders := make([]string, 0, len(ids))
+	args := []interface{}{legacyValue, status, comment}
+	for _, id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id IN (%s) AND deleted_at IS NULL",
+		agreementField, statusField, commentField, strings.Join(placeholders, ","),
+	)
+
+	result, err := config.DB.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // ─── Approval Filters ───────────────────────────────────────────────────────
 
 type ApprovalFilterParams struct {
