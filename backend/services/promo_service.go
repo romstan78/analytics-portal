@@ -299,6 +299,14 @@ var ptrInt = models.PtrInt
 var valFloat = models.ValFloat
 var valInt = models.ValInt
 
+// optFloat возвращает указатель только для ненулевого значения.
+func optFloat(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return ptrFloat(v)
+}
+
 // MergeCalculatedIntoDBRow — записывает вычисленные поля напрямую в структуру БД.
 func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
 	r.Year = c.Year
@@ -361,17 +369,41 @@ func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
 		ContractPrice:           ptrFloat(dto.ContractPrice),
 		KeyRegion:               dto.KeyRegion,
 		Top20Segment:            dto.Top20Segment,
-		ActualPromoSalesUnits:   ptrFloat(dto.ActualPromoSalesUnits),
-		ActualPromoRub:          ptrFloat(dto.ActualPromoRub),
-		ActualInvestments:       ptrFloat(dto.ActualInvestments),
-		ActualPromoUpliftUnits:  ptrFloat(dto.ActualPromoUpliftUnits),
-		ActualPromoUpliftRub:    ptrFloat(dto.ActualPromoUpliftRub),
-		ActualExternalEcomUnits: ptrFloat(dto.ActualExternalEcomUnits),
-		ActualCorrectedBaseline: ptrFloat(dto.ActualCorrectedBaseline),
+		ActualPromoSalesUnits:   optFloat(dto.ActualPromoSalesUnits),
+		ActualPromoRub:          optFloat(dto.ActualPromoRub),
+		ActualInvestments:       optFloat(dto.ActualInvestments),
+		ActualPromoUpliftUnits:  optFloat(dto.ActualPromoUpliftUnits),
+		ActualPromoUpliftRub:    optFloat(dto.ActualPromoUpliftRub),
+		ActualExternalEcomUnits: optFloat(dto.ActualExternalEcomUnits),
+		ActualCorrectedBaseline: optFloat(dto.ActualCorrectedBaseline),
 		Agreement1:              dto.Agreement1,
 		Agreement2:              dto.Agreement2,
 	}
 	MergeCalculatedIntoDBRow(r, c)
+
+	// Если фактические данные не вводились — обнуляем производные фактические поля в nil
+	if dto.ActualPromoSalesUnits == 0 && dto.ActualInvestments == 0 && dto.ActualPromoUpliftUnits == 0 {
+		r.ActualPromoRub = nil
+		r.ActualPromoUpliftRub = nil
+		r.ActualROI = nil
+		r.ActualInvestmentsPct = nil
+		r.ActualPromoRubWoEcom = nil
+		r.ActualPromoUpliftUnitsWoEcom = nil
+		r.ActualPromoUpliftRubWoEcom = nil
+		r.ActualROIWoEcom = nil
+		r.ActualInvestmentsPctWoEcom = nil
+		r.NetPromoUpliftRub = nil
+		r.NetPromoUpliftPct = nil
+		r.NetPromoUpliftRubWoEcom = nil
+		r.NetPromoUpliftPctWoEcom = nil
+		r.PlanVsFactRub = nil
+		r.PlanVsFactInvestments = nil
+		r.TurnoverPerPoint = nil
+		r.TurnoverPerPointPromo = nil
+		r.FactPromoCipOlap = nil
+		r.FactPromoUpliftCipOlap = nil
+	}
+
 	return r
 }
 
@@ -476,7 +508,11 @@ func intVal(m map[string]interface{}, key string) int {
 	return v
 }
 func stringVal(m map[string]interface{}, key string) string {
-	return fmt.Sprint(m[key])
+	v := m[key]
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 // DBRowToMap — конвертирует PromoRowDB в map для JSON-ответа (обратная совместимость с фронтендом).
