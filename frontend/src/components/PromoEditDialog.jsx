@@ -79,6 +79,29 @@ const renderAgreementSx = (value) => {
 };
 
 // ─── Компонент ─────────────────────────────────────────────────────────────
+// Цвета по ролям (для отображения истории)
+const ROLE_COLORS = {
+  'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
+  'agreement1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'agreement2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'согласование1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'согласование2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'КАМ': { bg: '#f5f3ff', text: '#7c3aed', dot: '#7c3aed' },
+};
+const ROLE_ICONS = { 'admin': '👑', 'agreement1': '✅', 'agreement2': '✅', 'согласование1': '✅', 'согласование2': '✅', 'КАМ': '💬' };
+
+function parseComments(raw) {
+  if (!raw) return [];
+  const lines = raw.split('\n').filter(l => l.trim());
+  const messages = [];
+  const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (m) messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
+  }
+  return messages;
+}
+
 export default function PromoEditDialog({
   open, onClose, form, setForm, recalcPlan, recalcActual,
   onSave, onDelete, saving, deleting,
@@ -87,6 +110,7 @@ export default function PromoEditDialog({
 }) {
   const [editingFields, setEditingFields] = useState({});
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [newComment, setNewComment] = useState(''); // отдельное поле для нового комментария КАМ
 
   const fetchSKUInfoForEdit = async (sku) => {
     try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
@@ -100,7 +124,7 @@ export default function PromoEditDialog({
 
   const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
   const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
-  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
+  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
 
   const handleFieldChange = (field) => (e) => {
     const rawValue = e.target.value;
@@ -129,8 +153,15 @@ export default function PromoEditDialog({
     if (isApprover) {
       setConfirmOpen(true);
     } else {
-      onSave();
+      onSave(newComment.trim() || null);
+      setNewComment('');
     }
+  };
+
+  const handleConfirmSave = () => {
+    setConfirmOpen(false);
+    onSave(newComment.trim() || null);
+    setNewComment('');
   };
 
   return (
@@ -211,8 +242,30 @@ export default function PromoEditDialog({
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
                     <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
                       value={form.conditions || ''} onChange={updateField('conditions')} />
-                    <TextField label="Комментарии" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.comments || ''} onChange={updateField('comments')} />
+                  {/* История комментариев (только чтение) */}
+                  {form.comments && (() => {
+                    const msgs = parseComments(form.comments);
+                    return msgs.length > 0 && (
+                      <Box sx={{ mt: 1.5, p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', maxHeight: 180, overflowY: 'auto' }}>
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: '#64748b', fontSize: '0.7rem', mb: 1, display: 'block' }}>📝 История переписки</Typography>
+                        {msgs.map((msg, idx) => {
+                          const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
+                          return (
+                            <Box key={idx} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: style.bg, borderLeft: `3px solid ${style.dot}`, mb: 0.5 }}>
+                              <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.7rem' }}>
+                                {ROLE_ICONS[msg.role] || '💬'} {msg.role === 'КАМ' ? msg.author : msg.role}
+                                {msg.date && ` · ${msg.date}`}
+                              </Typography>
+                              <Typography sx={{ fontSize: '0.7rem', color: '#475569' }}>{msg.text}</Typography>
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    );
+                  })()}
+                  {/* Поле для нового комментария КАМ */}
+                  <TextField label="Новый комментарий" size="small" fullWidth multiline minRows={1} maxRows={3}
+                    value={newComment} onChange={(e) => setNewComment(e.target.value)} />
                   </Box>
                 </Paper>
   
@@ -301,10 +354,7 @@ export default function PromoEditDialog({
           <Button
             variant="contained"
             color="warning"
-            onClick={() => {
-              setConfirmOpen(false);
-              onSave();
-            }}
+            onClick={handleConfirmSave}
           >
             Подтвердить и сохранить
           </Button>

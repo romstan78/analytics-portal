@@ -6,7 +6,7 @@ services:
     container_name: my_local_mssql
     environment:
       ACCEPT_EULA: Y
-      SA_PASSWORD: $#Pfchfytw_0378 # Очень важный пароль. Обязательно сложный!
+      SA_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
     ports:
       - "1433:1433" # MSSQL стандартный порт
     volumes:

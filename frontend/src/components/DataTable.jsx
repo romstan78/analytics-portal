@@ -3,14 +3,12 @@ import { DataGrid } from '@mui/x-data-grid';
 import { 
   Box, Alert, TextField, Button, Menu, MenuItem, 
   Checkbox, ListItemText, Typography, Divider, ButtonGroup,
-  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { 
   ViewColumn as ColumnsIcon,
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
-import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 
 export default function DataTable({ 
@@ -34,7 +32,6 @@ export default function DataTable({
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
-  const [exportDialog, setExportDialog] = useState({ open: false, data: null });
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const map = {};
     columns.forEach(c => { map[c.field] = true; });
@@ -138,43 +135,6 @@ export default function DataTable({
     }
   };
 
-  const confirmedExportXLSX = async (data) => {
-    setLoading(true);
-    try {
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet('Export Data');
-
-      worksheet.columns = visibleCols.map(c => ({
-        header: c.headerName || c.field,
-        key: c.field,
-        width: c.width ? c.width / 7 : 20,
-      }));
-
-      const headerRow = worksheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
-      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      data.forEach(row => worksheet.addRow(row));
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      saveAs(new Blob([buffer]), `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (err) {
-      console.error('Ошибка экспорта Excel:', err);
-    } finally {
-      setLoading(false);
-      setExportDialog({ open: false, data: null });
-    }
-  };
-
-  const handleExportXLSX = async () => {
-    const data = await fetchExportData();
-    if (data.length > 10000) {
-      setExportDialog({ open: true, data });
-    } else {
-      confirmedExportXLSX(data);
-    }
-  };
 
   // Загрузка данных с пагинацией
   const fetchData = useCallback(async () => {
@@ -264,28 +224,8 @@ export default function DataTable({
         <ButtonGroup size="small" variant="text">
           <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
             sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
-          <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
-            sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
         </ButtonGroup>
       </Box>
-
-      {/* Диалог подтверждения большого экспорта */}
-      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false, data: null })}>
-        <DialogTitle>Подтверждение экспорта</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Количество строк для экспорта: {(exportDialog.data?.length || 0).toLocaleString('ru-RU')}.<br />
-            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
-            Продолжить?
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setExportDialog({ open: false, data: null })}>Отмена</Button>
-          <Button variant="contained" onClick={() => confirmedExportXLSX(exportDialog.data)}>
-            Экспортировать
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Таблица */}
       <DataGrid 

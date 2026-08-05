@@ -421,6 +421,32 @@ func SavePromo(c *gin.Context) {
 			// Применяем входящие данные поверх существующей строки
 			applyJSONToRow(row, input)
 
+			// Сохраняем комментарий КАМ с датой и ролью, не затирая историю согласования
+			if newComment, ok := input["comments"]; ok {
+				var newCommentStr string
+				if newComment != nil {
+					newCommentStr = strings.TrimSpace(fmt.Sprint(newComment))
+				}
+				if newCommentStr != "" && newCommentStr != "<nil>" {
+					// Сохраняем ВСЮ историю (как структурированные строки вида
+					// [DD.MM.YYYY роль|автор]: текст, так и любые прочие строки),
+					// чтобы ничего не терялось при последовательных сохранениях.
+					var historyLines []string
+					for _, line := range strings.Split(row.Comments, "\n") {
+						line = strings.TrimSpace(line)
+						if line != "" {
+							historyLines = append(historyLines, line)
+						}
+					}
+					// Добавляем новый комментарий КАМ с меткой
+					usernameVal, _ := c.Get("username")
+					timestamp := time.Now().Format("02.01.2006")
+					kamLine := fmt.Sprintf("[%s КАМ|%s]: %s", timestamp, fmt.Sprint(usernameVal), newCommentStr)
+					historyLines = append(historyLines, kamLine)
+					row.Comments = strings.Join(historyLines, "\n")
+				}
+			}
+
 			// Пересчитываем вычисляемые поля
 			dto := services.DBRowToDTO(row)
 			calcCtx := services.EnrichFromRepo(&dto)
@@ -465,6 +491,15 @@ func SavePromo(c *gin.Context) {
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
 	row := services.DTOToDBRow(dto, calc)
+
+	// Первый комментарий КАМ при создании промо тоже оформляем как строку истории
+	// вида [DD.MM.YYYY КАМ|автор]: текст, чтобы он корректно накапливался дальше.
+	insertComments := strings.TrimSpace(fmt.Sprint(row.Comments))
+	if insertComments != "" && insertComments != "<nil>" {
+		usernameVal, _ := c.Get("username")
+		ts := time.Now().Format("02.01.2006")
+		row.Comments = fmt.Sprintf("[%s КАМ|%s]: %s", ts, fmt.Sprint(usernameVal), insertComments)
+	}
 
 	newID, err := repository.InsertPromo(row)
 	if err != nil {

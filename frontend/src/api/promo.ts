@@ -1,4 +1,4 @@
-import { refreshToken } from './auth';
+import { refreshToken, logout } from './auth';
 
 const API_BASE = 'http://localhost:8080';
 
@@ -47,10 +47,14 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, timeout = 1
     if (refreshed) {
       res = await doFetch();
     } else {
-      // Рефреш не удался — разлогиниваем и редиректим
-      localStorage.removeItem('token');
-      window.location.href = '/login';
-      throw new Error('Сессия истекла');
+      // Рефреш не удался — полный logout и редирект
+      logout();
+      window.location.replace('/login');
+      // Заглушка с валидным JSON, чтобы не ломать вызывающий код при разборе
+      return new Response('{}', {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
   }
 

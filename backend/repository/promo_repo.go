@@ -848,7 +848,7 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	currentMonth := int(time.Now().Month())
 
 	query := `
-		SELECT TOP 500
+		SELECT
 			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
@@ -987,11 +987,12 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 		return err
 	}
 
-	// Добавляем новый комментарий с пометкой автора и времени
+	// Добавляем новый комментарий с пометкой автора, даты и роли
 	newComments := currentComments.String
 	if comment != "" {
-		timestamp := time.Now().Format("02.01.2006 15:04")
-		commentLine := fmt.Sprintf("[%s %s]: %s\n", timestamp, username, comment)
+		timestamp := time.Now().Format("02.01.2006")
+		roleLabel := fmt.Sprintf("согласование%d", agreementNum)
+		commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, username, comment)
 		newComments += commentLine
 	}
 
@@ -1053,7 +1054,8 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 		}
 		newComments := currentComments.String
 		if comment != "" {
-			commentLine := fmt.Sprintf("[%s batch]: %s\n", timestamp, comment)
+			roleLabel := fmt.Sprintf("согласование%d", agreementNum)
+			commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, "batch", comment)
 			newComments += commentLine
 		}
 		commentUpdates[id] = newComments

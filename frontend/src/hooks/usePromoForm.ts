@@ -125,13 +125,14 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
     setEditMode(true);
   }, []);
 
-  // ─── Сохранение (INSERT или UPDATE) ─────────────────────────────────────
-  const handleSave = useCallback(async (): Promise<SaveResult> => {
+  // ─── Сохранение (INSERT или UPDATE). commentOverride — комментарий КАМ из диалога (обходит batching) ──
+  const handleSave = useCallback(async (commentOverride?: string | null): Promise<SaveResult> => {
     if (!form.sku || !form.network_name) {
       return { success: false, message: '⚠️ Заполните Сеть и SKU' };
     }
     setSaving(true);
     try {
+      const commentsValue = commentOverride !== undefined ? commentOverride : (form.comments ?? null);
       const payload: Record<string, unknown> = {
         id: form.id || undefined,
         network_name: form.network_name, kam: form.kam, brand: form.brand, brand_as: form.brand,
@@ -146,7 +147,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         ds_number: form.ds_number ?? null,
         discount_amount: parseFloat(form.discount_amount) || null,
         conditions: form.conditions ?? null,
-        comments: form.comments ?? null,
+        comments: commentsValue,
         ecom_segment: form.ecom_segment,
         total_pharmacies: form.total_pharmacies !== '' ? parseInt(form.total_pharmacies) : null,
         promo_pharmacies: form.promo_pharmacies !== '' ? parseInt(form.promo_pharmacies) : null,

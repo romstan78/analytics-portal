@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
@@ -139,6 +139,13 @@ export default function App() {
     logout();
     setAuth({ token: null, username: null, role: null });
   };
+
+  // Слушаем принудительный разлогин из api/promo.ts
+  useEffect(() => {
+    const onForceLogout = () => setAuth({ token: null, username: null, role: null });
+    window.addEventListener('auth:logout', onForceLogout);
+    return () => window.removeEventListener('auth:logout', onForceLogout);
+  }, []);
 
   if (!auth.token) {
     return (

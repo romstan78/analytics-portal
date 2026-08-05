@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,8 +37,14 @@ func setupRouter() *gin.Engine {
 	return r
 }
 
-// cleanupTestData удаляет тестовые записи после прогона
+// cleanupTestData удаляет тестовые записи после прогона.
+// Защита: выполняется только если имя БД содержит _test или _dev.
 func cleanupTestData() {
+	dbName := os.Getenv("DB_NAME")
+	if !strings.Contains(dbName, "_test") && !strings.Contains(dbName, "_dev") {
+		fmt.Println("[WARN] cleanupTestData: БД не тестовая, пропускаем DELETE")
+		return
+	}
 	config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'")
 }
 

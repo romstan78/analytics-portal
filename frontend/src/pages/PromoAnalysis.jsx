@@ -23,7 +23,7 @@ import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
-import { usePromoCalculations } from '../hooks/usePromoCalculations.ts';
+import { usePromoCalculations } from '../hooks/usePromoCalculations';
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
@@ -174,8 +174,8 @@ export default function PromoAnalysis({ role }) {
   // ─── Обработчики действий ─────────────────────────────────────────────
   const handleRowClick = (params) => { formHandleRowClick(params.row); setEditDialogOpen(true); };
 
-  const handleSave = async () => { 
-    const result = await formHandleSave(); 
+  const handleSave = async (commentOverride) => { 
+    const result = await formHandleSave(commentOverride); 
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
 

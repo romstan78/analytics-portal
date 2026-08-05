@@ -12,6 +12,7 @@ export const logout = (): void => {
   localStorage.removeItem('token');
   localStorage.removeItem('username');
   localStorage.removeItem('role');
+  window.dispatchEvent(new CustomEvent('auth:logout'));
 };
 
 // Сохраняет данные сессии из ответа логина/рефреша
@@ -25,7 +26,7 @@ export const saveSession = (data: SessionData): void => {
 // Возвращает true если успешно
 export const refreshToken = async (): Promise<boolean> => {
   try {
-    const res = await fetch('/api/auth/refresh', {
+    const res = await fetch('http://localhost:8080/api/auth/refresh', {
       method: 'POST',
       credentials: 'include', // отправляем httpOnly cookie
     });
