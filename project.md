@@ -1,7 +1,7 @@
 # Аналитический портал — Документация проекта
 
-**Дата:** 04.08.2026
-**Коммит:** fix: INSERT placeholders mismatch, nil agreement1/2, NULL факт-поля
+**Дата:** 05.08.2026
+**Коммит:** feat: Excel-экспорт, настройка карточек, лимит 50, фильтр комментариев
 **Стек:** Go (Gin) + React (Vite + MUI) + SQL Server (MSSQL)
 **Репозиторий:** github.com/romstan78/analytics-portal
 
@@ -28,30 +28,40 @@
 │ src/pages/                                              │
 │   Home.jsx — главная страница (6 карточек, CSS Grid)    │
 │   Login.jsx — JWT-авторизация + Refresh Token cookie    │
-│   InternetSales.jsx — интернет-продажи (DataTable)       │
+│   InternetSales.jsx — интернет-продажи (DataTable)      │
 │   PromoAnalysis.jsx — анализ промо (3 вкладки)          │
 │   PromoForm.jsx — форма создания нового промо            │
 │   PromoApproval.jsx — страница согласования              │
+│     (переключатель Карточки/Таблица, mass-actions,       │
+│     sticky-панель фильтров, лимит 50 карточек,           │
+│     настройка полей через Drawer, фильтр has_comments)   │
 │                                                         │
 │ src/components/                                         │
 │   FilterPanel.jsx — панель фильтров (многоразовая)       │
-│   DataTable.jsx — таблица с пагинацией                   │
+│   DataTable.jsx — таблица с пагинацией + серверный поиск│
+│     (Excel/CSV экспорт, предупреждение при >10000 строк) │
 │   PromoEditDialog.jsx — диалог редактирования промо      │
-│     (agreement1/2 только read-only чипы,                 │
-│     кнопки Закрыть/Сохранить, без авто-закрытия,        │
-│     Confirm Dialog для согласующих)                     │
-│   ApprovalCard.jsx — карточка согласования + skeleton    │
+│     (agreement1/2 editable, чипы статуса)                │
+│   ApprovalCard.jsx — карточка согласования               │
+│     (динамические поля, история comments, agreement1/2,   │
+│     conditions всегда видимы)                            │
 │   DrilldownModal.jsx — модал детализации                 │
 │                                                         │
 │ src/hooks/                                              │
-│   usePromoData.ts — данные промо (React Query)           │
+│   usePromoData.ts — данные промо (React Query +         │
+│     AbortController signal для отмены устаревших запросов)│
 │   usePromoFilters.js — фильтры промо                     │
 │   usePromoForm.ts — форма редактирования                 │
 │   usePromoCalculations.ts — расчёт плановых/фактических  │
 │                                                         │
 │ src/api/                                                │
 │   promo.js — API-запросы (fetchWithAuth + auto-refresh) │
+│     + batchApprove (массовое согласование)               │
+│     + has_comments фильтр                                │
 │   auth.js — login/logout/refreshToken/saveSession       │
+│                                                         │
+│ src/utils/                                              │
+│   cardFields.js — FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS   │
 │                                                         │
 │ src/types/                                              │
 │   promo.ts — TypeScript-типы: PromoRow, ApprovalRow,    │
@@ -73,8 +83,10 @@
 │   cache.go — InMemoryCache, FilterCacheTTL (5 мин)      │
 │ handlers/                                               │
 │   promo.go — тонкие обработчики HTTP + applyJSONToRow   │
-│     (защита Mass Assignment, аудит-лог с username)       │
-│   sales.go — интернет-продажи                           │
+│     (agreement1/2 editable, защита Mass Assignment,      │
+│     аудит-лог с username,                               │
+│     BatchApprovePromo для массового согласования)        │
+│   sales.go — интернет-продажи (серверный поиск LIKE)    │
 │   auth.go — логин + рефреш (БД + bcrypt, Secure-флаг)   │
 │ services/                                               │
 │   promo_service.go — PromoInputDTO, CalculatedFields,   │
@@ -82,19 +94,19 @@
 │     MergeCalculatedIntoDBRow, DTOToDBRow, DBRowToDTO,   │
 │     MapToDTO, DBRowToMap                                │
 │ repository/                                              │
-│   promo_repo.go — все SQL-запросы промо (типизирован)   │
+│   promo_repo.go — все SQL-запросы промо                 │
 │     GetApprovalFilters: 4 горутины errgroup +            │
-│     buildApprovalWhere(excludeCol) перекрёстная          │
-│     фильтрация                                          │
+│     buildApprovalWhere(excludeCol),                      │
+│     ApprovePromoWithStatus: фиксирует статус в           │
+│     agreementN, дописывает комментарий в comments        │
+│     с пометкой [дата автор], фильтр has_comments         │
 │   user_repo.go — запросы к tbl_Users                    │
 │ middleware/                                              │
 │   auth.go — AuthRequired + RoleRequired                 │
 │ models/                                                 │
-│   types.go — Row, PromoRow, PromoRowDB (числовые поля   │
-│     — указатели *float64/*int для NULL vs 0),           │
-│     PtrFloat/PtrInt/ValFloat/ValInt хелперы,            │
-│     ApprovalRow, NetworkGeo, LastSKUData,                │
-│     HistoryRow, DrilldownRow                            │
+│   types.go — Row, PromoRow, PromoRowDB,                 │
+│     ApprovalRow (добавлено Comments),                   │
+│     PtrFloat/PtrInt/ValFloat/ValInt хелперы             │
 │ migrations/                                             │
 │   001_create_tbl_users.sql — таблица пользователей       │
 │   002_split_agreement_fields.sql — разделение полей      │
@@ -109,8 +121,9 @@
 │ SQL Server (MSSQL)                                      │
 │                                                         │
 │ dbo.tbl_PromoActivities — промо-акции                    │
-│   (новые поля: agreement1_status, agreement1_comment,   │
-│    agreement2_status, agreement2_comment)               │
+│   (agreement1_status, agreement1_comment,               │
+│    agreement2_status, agreement2_comment,               │
+│    comments — история переписки КАМ + согласующих)       │
 │ dbo.tbl_EcomSalesNormalized — интернет-продажи           │
 │ dbo.tbl_MechanicsChannelMapping — механика → канал       │
 │ dbo.tbl_ChannelSegmentMapping — канал ↔ сегмент          │
@@ -138,15 +151,18 @@ backend/
 │   └── db.go               — подключение к SQL Server, пул соединений, slog
 ├── handlers/
 │   ├── auth.go             — POST /api/auth/login (БД + bcrypt), POST /api/auth/refresh
-│   ├── promo.go            — тонкие обработчики + applyJSONToRow (защита Mass Assignment, аудит-лог)
-│   └── sales.go            — GetData / GetFilterOptions / GetDrilldown
+│   ├── promo.go            — обработчики + applyJSONToRow (agreement1/2 editable,
+│   │                         agreementN_status/_comment защищены от прямого редактирования,
+│   │                         аудит-лог, BatchApprovePromo для массового согласования)
+│   └── sales.go            — GetData / GetFilterOptions / GetDrilldown (серверный поиск LIKE)
 ├── services/
 │   └── promo_service.go    — PromoInputDTO, CalculatedFields, EnrichFromRepo, CalculateFields,
 │                             MergeCalculatedIntoDBRow, DTOToDBRow, DBRowToDTO, MapToDTO, DBRowToMap
 ├── repository/
 │   ├── promo_repo.go       — все SQL-запросы: FetchExistingRow (*PromoRowDB), UpdatePromo, InsertPromo,
-│   │                         фильтры, согласование (GetApprovals с фильтрацией в SQL,
-│   │                         GetApprovalFilters: 4 горутины + buildApprovalWhere(excludeCol))
+│   │                         фильтры, GetApprovals (Comments + has_comments),
+│   │                         GetApprovalFilters: 4 горутины + buildApprovalWhere(excludeCol),
+│   │                         ApprovePromoWithStatus (append в comments), BatchApprove
 │   └── user_repo.go        — GetUserByUsername (из tbl_Users)
 ├── middleware/
 │   └── auth.go             — AuthRequired + RoleRequired
@@ -155,9 +171,8 @@ backend/
 │   ├── 002_split_agreement_fields.sql
 │   └── seed_users.sql      — seed с реальными bcrypt-хешами
 └── models/
-    └── types.go            — Row, PromoRow, PromoRowDB (числовые поля — указатели для NULL vs 0),
-                              ApprovalRow (agreement1_status/comment), NetworkGeo,
-                              LastSKUData, HistoryRow, DrilldownRow,
+    └── types.go            — Row, PromoRow, PromoRowDB, ApprovalRow (+Comments),
+                              NetworkGeo, LastSKUData, HistoryRow, DrilldownRow,
                               PtrFloat/PtrInt/ValFloat/ValInt (хелперы указателей)
 ```
 
@@ -169,26 +184,36 @@ frontend/src/
 ├── tsconfig.json          — TypeScript-конфигурация (allowJs, strict)
 ├── api/
 │   ├── auth.js            — login/logout, refreshToken, saveSession
-│   └── promo.js           — fetchWithAuth (авто-рефреш при 401), 18 методов API
+│   └── promo.js           — fetchWithAuth (авто-рефреш при 401), 19 методов API
+│                            (вкл. batchApprove, has_comments)
 ├── components/
-│   ├── ApprovalCard.jsx   — карточка согласования + LinearProgress + CircularProgress overlay
-│   ├── DataTable.jsx      — таблица MUI DataGrid
+│   ├── ApprovalCard.jsx   — карточка: динамические поля, agreement1/2, conditions,
+│   │                        история comments (💬 Комментарии), цветная рамка по ROI
+│   ├── DataTable.jsx      — таблица MUI DataGrid + Export CSV/Excel (ExcelJS),
+│   │                        предупреждение при >10000 строк
 │   ├── DrilldownModal.jsx — модал детализации
 │   ├── FilterPanel.jsx    — панель фильтров с Autocomplete
-│   └── PromoEditDialog.jsx — диалог редактирования (Закрыть/Сохранить, Confirm Dialog для согласующих)
+│   └── PromoEditDialog.jsx — диалог редактирования (agreement1/2 editable,
+│                              Закрыть/Сохранить, Confirm Dialog для согласующих)
 ├── hooks/
-│   ├── usePromoCalculations.ts — расчёт плановых/фактических (типизирован, PlanFields/ActualFields)
-│   ├── usePromoData.ts         — загрузка данных (React Query, типизирован)
+│   ├── usePromoCalculations.ts — расчёт плановых/фактических
+│   ├── usePromoData.ts         — загрузка данных (React Query, AbortController signal)
+│   ├── usePromoData.js         — JS-версия
 │   ├── usePromoFilters.js      — фильтры с debounce
-│   └── usePromoForm.ts         — форма + сохранение (типизирован, 0 vs NULL исправлен)
+│   └── usePromoForm.ts         — форма + сохранение (0 vs NULL исправлен)
+├── utils/
+│   └── cardFields.js           — FIELD_GROUPS (Основные, Плановые, Фактические, Исторические)
+│                                  DEFAULT_VISIBLE_FIELDS, ALL_FIELDS_FLAT, FIELDS_MAP
 ├── types/
-│   └── promo.ts           — TypeScript-типы: PromoRow, ApprovalRow, FilterOptions, PromoFormData
+│   └── promo.ts           — TypeScript-типы
 └── pages/
     ├── Home.jsx            — главная страница
     ├── InternetSales.jsx   — интернет-продажи
-    ├── Login.jsx           — страница входа (credentials: 'include')
-    ├── PromoAnalysis.jsx   — анализ промо (3 вкладки)
-    ├── PromoApproval.jsx   — согласование (перекрёстная фильтрация, без клиентского .filter())
+    ├── Login.jsx           — страница входа
+    ├── PromoAnalysis.jsx   — анализ промо (3 вкладки, Export CSV/Excel)
+    ├── PromoApproval.jsx   — согласование (переключатель Карточки/Таблица через startTransition,
+    │                         лимит 50 карточек, sticky-фильтры, Drawer настройки полей,
+    │                         фильтр has_comments, массовое согласование)
     └── PromoForm.jsx       — создание нового промо
 ```
 
@@ -205,7 +230,7 @@ frontend/src/
 ### Internet Sales
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/data` | JWT | Paginated data |
+| GET | `/api/data` | JWT | Paginated data + серверный поиск (`search` param → LIKE в SQL) |
 | GET | `/api/data?all=true` | JWT | All data (export) |
 | GET | `/api/filters` | JWT | Filter options + segment↔channel mapping |
 | GET | `/api/drilldown` | JWT | Drilldown by brand+network |
@@ -228,17 +253,18 @@ frontend/src/
 ### Promo — Approval
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/promo/approvals` | JWT | Approval list (фильтрация в SQL: kam, network_name, brand, mechanics, year, month) |
+| GET | `/api/promo/approvals` | JWT | Approval list (фильтрация: kam, network_name, brand, mechanics, year, month, has_comments). Возвращает comments в каждой строке. |
 | GET | `/api/promo/approval-filters` | JWT | Networks/brands/mechanics/kams (4 горутины errgroup, перекрёстная фильтрация excludeCol) |
 | GET | `/api/promo/approval-kams` | JWT | KAMs with pending approval |
 | GET | `/api/promo/approval-networks` | JWT | Networks for KAM |
 | GET | `/api/promo/approval-brands` | JWT | Brands for KAM+network |
-| POST | `/api/promo/approve` | JWT | Approve/reject/comment (пишет в agreementN + agreementN_status + agreementN_comment) |
+| POST | `/api/promo/approve` | JWT | Approve/reject/comment (пишет в agreementN + _status + _comment + дописывает комментарий в comments с пометкой автора) |
+| POST | `/api/promo/approve/batch` | JWT | Массовое согласование массива ID |
 
 ### Promo — Write
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/promo/save` | JWT + Roles | Create/Update через типизированные структуры PromoRowDB, защита от Mass Assignment |
+| POST | `/api/promo/save` | JWT + Roles | Create/Update. agreement1/agreement2 — editable; agreementN_status/_comment — защищены (только через согласование). Refetch после UPDATE. |
 | DELETE | `/api/promo/:id` | JWT + admin | Soft-delete promo |
 
 ---
@@ -261,9 +287,10 @@ frontend/src/
 | actual_promo_sales_units / actual_promo_rub | float | Факт |
 | plan_investments_rub / actual_investments | float | Инвестиции |
 | plan_roi / actual_roi | float | ROI |
-| agreement1 / agreement2 | nvarchar | Статус согласования (legacy, для обратной совместимости) |
-| **agreement1_status / agreement2_status** | nvarchar(20) | Статус: pending/approved/rejected/commented |
-| **agreement1_comment / agreement2_comment** | nvarchar(max) | Текст комментария |
+| agreement1 / agreement2 | nvarchar | Статус согласования (Согласовано/Отклонено/комментарий) |
+| agreement1_status / agreement2_status | nvarchar(20) | Статус: approved/rejected/commented (управляется только через /approve) |
+| agreement1_comment / agreement2_comment | nvarchar(max) | Текст комментария согласующего |
+| **comments** | nvarchar(max) | **История переписки: комментарии КАМ + согласующих с пометками [дата автор]** |
 | status | nvarchar | Статус промо |
 | deleted_at | datetime | Soft delete |
 | updated_at | datetime | Обновлён (используется для Optimistic Locking) |
@@ -296,70 +323,58 @@ frontend/src/
 - ✅ Middleware AuthRequired + RoleRequired
 - ✅ **Access Token (15 мин) + Refresh Token (7 дней, httpOnly cookie)**
 - ✅ **Secure-флаг куки: `ENV=production` — только HTTPS**
-- ✅ **Защита от Mass Assignment: поля agreement* и status исключены в applyJSONToRow**
+- ✅ **Защита Mass Assignment: agreementN_status/_comment исключены из applyJSONToRow**
 - ✅ Авто-рефреш токена на фронтенде (fetchWithAuth при 401)
 - ✅ **Аудит-лог: promo_updated/created/deleted/approved — реальный username из JWT**
-- ✅ Пользователи в БД (tbl_Users) + bcrypt-хеширование паролей (cost=10)
-- ✅ Утилита cmd/hash_password.go для генерации хешей
+- ✅ Пользователи в БД (tbl_Users) + bcrypt-хеширование паролей
 - ✅ Rate limiter (100 запросов/мин на IP, sync.RWMutex)
 - ✅ Structured logging (slog + lumberjack, ротация логов)
 - ✅ **CORS из переменной окружения (`CORS_ORIGINS`) + AllowCredentials: true**
 
 ### Целостность данных
-- ✅ **0 vs NULL: usePromoForm.ts — `x !== '' ? parseFloat(x) : null` вместо `parseFloat(x) \|\| null`**
-- ✅ **PromoRowDB: 40+ числовых полей переведены на указатели (`*float64`, `*int`)**
+- ✅ **0 vs NULL: usePromoForm.ts — `x !== '' ? parseFloat(x) : null`**
+- ✅ **PromoRowDB: числовые поля — указатели (`*float64`, `*int`)**
 - ✅ **FetchExistingRow: сканирование через `sql.Null*` с проверкой `.Valid`**
-- ✅ **applyJSONToRow: присваивание числовых полей через `&val`**
-- ✅ **Хелперы PtrFloat/PtrInt/ValFloat/ValInt в models/types.go**
-- ✅ **DTOToDBRow: optFloat() для нулевых фактических значений; обнуление производных полей в nil**
+- ✅ **applyJSONToRow: защита от `"<nil>"`, agreementN редактируемы, _status/_comment защищены**
+- ✅ **Хелперы PtrFloat/PtrInt/ValFloat/ValInt**
 - ✅ **stringVal: nil → '' вместо '<nil>' (agreement1/2 при создании промо)**
-- ✅ **InsertPromo: исправлен mismatch VALUES (64 arg = 64 placeholder)**
-- ✅ **PromoAnalysis: valueFormatter с проверкой v !== 0 для фактических колонок**
+- ✅ **Optimistic Locking: строковое сравнение updated_at, refetch после UPDATE**
 
 ### Просмотр и редактирование промо
-- ✅ DataGrid с пагинацией, сортировкой, поиском, экспортом CSV
+- ✅ DataGrid с пагинацией, сортировкой, поиском
 - ✅ Фильтры с Autocomplete + debounce 300ms
 - ✅ Сохранение состояния фильтров (sessionStorage, localStorage)
 - ✅ CRUD промо: создание, редактирование, удаление (soft delete)
-- ✅ **Optimistic Locking: WHERE updated_at = ?, при конфликте → HTTP 409**
-- ✅ Автообновление UI после редактирования/удаления
-- ✅ **agreement1/agreement2 — только read-only чипы в диалоге, защита на бэкенде**
-- ✅ **PromoEditDialog: кнопки Закрыть/Сохранить, форма остаётся после сохранения**
-- ✅ **PromoEditDialog: Confirm Dialog для согласующих (agreement1/agreement2) при сохранении**
+- ✅ **agreement1/2 — редактируемые поля в диалоге (agreementN_status/_comment — только через согласование)**
+- ✅ PromoEditDialog: кнопки Закрыть/Сохранить, Confirm Dialog для согласующих
+- ✅ **Экспорт CSV + Excel (ExcelJS + file-saver), предупреждение при >10000 строк**
+- ✅ Серверный поиск в DataTable (debounce 400ms, LIKE в SQL)
 
 ### Согласование
-- ✅ Карточки промо в CSS Grid (React.memo для производительности)
+- ✅ Карточки промо в CSS Grid (React.memo)
 - ✅ Три действия: Комментарий / Согласовано / Отклонено
 - ✅ **Перекрёстная фильтрация: 4 горутины errgroup, buildApprovalWhere(excludeCol)**
-- ✅ **GetApprovals фильтрует network_name/brand/mechanics в SQL (не на клиенте)**
-- ✅ **Фронтенд передаёт все applied-фильтры в API, без клиентского .filter()**
 - ✅ Фильтр «Состояние согласования» (5 состояний)
+- ✅ **Фильтр «Есть комментарии» (has_comments)**
 - ✅ Кнопка «Применить» (контроль момента загрузки)
-- ✅ Защита от загрузки без фильтров
-- ✅ Отображение комментариев обоих согласующих в карточке
-- ✅ **Индикация загрузки: LinearProgress + CircularProgress overlay при отправке**
+- ✅ **ApprovePromoWithStatus: комментарий согласующего → comments с пометкой `[дата автор]: текст`**
+- ✅ **История comments отображается в карточке (💬 Комментарии)**
+- ✅ **Динамические поля карточек: настройка через Drawer с группировкой**
+- ✅ **brand_as, kam, conditions, agreement1/2 — всегда видимы на карточке**
+- ✅ **Лимит 50 карточек + информирование об остатке**
+- ✅ **Переключатель Карточки/Таблица через startTransition (быстрое переключение)**
+- ✅ **Sticky-панель фильтров + переключатель вида**
+- ✅ **Массовое согласование (только в табличном виде)**
 - ✅ **Ролевая фильтрация: только свой статус (agreement1_status/agreement2_status)**
-- ✅ **Новые поля: agreementN_status + agreementN_comment (вместо CHARINDEX-парсинга)**
-- ✅ Год по умолчанию = текущий
+- ✅ Цветовая индикация ROI (зелёный/красный), цветная левая рамка по ROI
 
 ### Архитектура
 - ✅ **Четырёхслойная архитектура: handlers → services → repository → DB**
-- ✅ **PromoRowDB — типизированная структура (0 map[string]interface{} в Save/Update)**
-- ✅ **services/promo_service.go: DTOToDBRow, DBRowToDTO, MergeCalculatedIntoDBRow, MapToDTO, DBRowToMap**
-- ✅ **config/cache.go: InMemoryCache (RWMutex, TTL 5 мин) для GetPromoFilters**
-- ✅ repository/promo_repo.go — все SQL-запросы (FetchExistingRow/UpdatePromo/InsertPromo на структурах)
-- ✅ repository/user_repo.go — запросы к tbl_Users + bcrypt
+- ✅ InMemoryCache (RWMutex, TTL 5 мин) для GetPromoFilters
 - ✅ GetPromoFilters: 7 параллельных запросов через errgroup
 - ✅ GetApprovalFilters: 4 параллельных запроса через errgroup + excludeCol
-- ✅ Среднее время загрузки страницы ~2.5 сек (без учёта MSSQL-планов)
-- ✅ Модели: NetworkGeo, LastSKUData, ApprovalRow, PromoRowDB
-
-### Фронтенд-архитектура
-- ✅ **TanStack Query (React Query) в usePromoData.ts**
-- ✅ **TypeScript-типы в types/promo.ts**
-- ✅ **tsconfig.json: strict-режим, allowJs для постепенной миграции**
-- ✅ **Хуки usePromoData.ts, usePromoForm.ts и usePromoCalculations.ts типизированы**
-- ✅ **QueryClientProvider в main.jsx**
+- ✅ TanStack Query (React Query) в usePromoData.ts с AbortController signal
+- ✅ TypeScript-типы в types/promo.ts, хуки типизированы
 
 ### Удалённый код
 - ✅ `promo_utils.go` удалён (safeFloat/safeInt/safeString не нужны)
@@ -374,21 +389,21 @@ frontend/src/
 |---|--------|--------|
 | 1 | Счётчик обработанных промо в согласовании | 15 мин |
 | 2 | Сортировка карточек по ROI / дате / сети | 20 мин |
-| 3 | Цветовая индикация убыточных промо | 10 мин |
-| 4 | Экспорт в CSV из согласования | 15 мин |
+| 3 | Полная миграция на TypeScript (.jsx → .tsx) | 1-2 дня |
 
 ### Технический долг
 | # | Задача | Оценка |
 |---|--------|--------|
-| 5 | Тесты на фронтенд (Jest + React Testing Library) | 3-4 дня |
-| 6 | Миграция оставшихся JSX-файлов на TypeScript | 1-2 дня |
+| 4 | Тесты на фронтенд (Vitest + React Testing Library) | 3-4 дня |
+| 5 | Починить запись комментариев согласующего в comments БД | 1-2 часа |
 
 ### Будущий функционал
 | # | Задача | Оценка |
 |---|--------|--------|
-| 7 | Дашборд с графиками (ROI, uplift, план/факт) | TBD |
-| 8 | Мобильная версия | TBD |
-| 9 | Нормализация словарей (ID вместо строк) | TBD |
+| 6 | Дашбордизация InternetSales (KPI-карточки + графики) | 1 неделя |
+| 7 | Мобильная версия | TBD |
+| 8 | Нормализация словарей (ID вместо строк) | TBD |
+| 9 | E2E-тесты (Playwright) | 3-4 дня |
 
 ---
 

@@ -217,6 +217,7 @@ type ApprovalRow struct {
 	PlanROI               *float64 `json:"plan_roi"`
 	ActualROI             *float64 `json:"actual_roi"`
 	Conditions            *string  `json:"conditions"`
+	Comments              *string  `json:"comments"`           // история переписки КАМ + согласующих
 	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
 	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
 	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария

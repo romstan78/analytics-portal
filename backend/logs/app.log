@@ -490,3 +490,23 @@
 {"time":"2026-08-05T01:42:50.215118+07:00","level":"INFO","msg":"promo_updated","id":79343,"sku":"КЕЛО-КОТ 15 ГР","network":"LVitaPharm АС","user":"admin","timestamp":"2026-08-05T01:42:50+07:00"}
 {"time":"2026-08-05T01:43:09.743971+07:00","level":"INFO","msg":"promo_updated","id":79345,"sku":"А-ЦЕРУМЕН ПЛЮС КАПЛИ 2МЛ №10","network":"OZON","user":"admin","timestamp":"2026-08-05T01:43:09+07:00"}
 {"time":"2026-08-05T01:43:53.094623+07:00","level":"INFO","msg":"promo_approved","id":79348,"field":"agreement1","status":"approved","comment":"попробуй ","user":"admin","timestamp":"2026-08-05T01:43:53+07:00"}
+{"time":"2026-08-05T02:00:35.202582+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T02:00:35.204145+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T10:43:45.964059+07:00","level":"INFO","msg":"db_connected","host":"localhost","database":"local_project_db"}
+{"time":"2026-08-05T10:43:45.965939+07:00","level":"INFO","msg":"server_starting","port":"8080"}
+{"time":"2026-08-05T10:47:07.162335+07:00","level":"INFO","msg":"promo_created","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","year":2027,"month":2,"plan_units":700,"plan_rub":683200,"user":"admin","timestamp":"2026-08-05T10:47:07+07:00"}
+{"time":"2026-08-05T10:47:20.075876+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T10:47:20+07:00"}
+{"time":"2026-08-05T10:49:54.631844+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"низкий РОИ, переделать","user":"admin","timestamp":"2026-08-05T10:49:54+07:00"}
+{"time":"2026-08-05T11:34:16.448501+07:00","level":"INFO","msg":"promo_updated","id":77029,"sku":"ЭНТЕРОЛ КАПС 250МГ №30","network":"Вита плюс АС","user":"admin","timestamp":"2026-08-05T11:34:16+07:00"}
+{"time":"2026-08-05T11:37:55.444859+07:00","level":"INFO","msg":"batch_approved","count":2,"affected":2,"status":"approved","user":"admin","timestamp":"2026-08-05T11:37:55+07:00"}
+{"time":"2026-08-05T12:06:33.635659+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T12:06:33+07:00"}
+{"time":"2026-08-05T12:11:43.423275+07:00","level":"INFO","msg":"batch_approved","count":1,"affected":1,"status":"approved","user":"admin","timestamp":"2026-08-05T12:11:43+07:00"}
+{"time":"2026-08-05T12:18:10.066598+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T12:18:10+07:00"}
+{"time":"2026-08-05T12:19:00.696628+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"не согласен пока, убеди меня","user":"admin","timestamp":"2026-08-05T12:19:00+07:00"}
+{"time":"2026-08-05T12:19:52.295444+07:00","level":"INFO","msg":"batch_approved","count":3,"affected":3,"status":"approved","user":"admin","timestamp":"2026-08-05T12:19:52+07:00"}
+{"time":"2026-08-05T13:05:54.805574+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T13:05:54+07:00"}
+{"time":"2026-08-05T13:06:34.512902+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"думай дальше","user":"admin","timestamp":"2026-08-05T13:06:34+07:00"}
+{"time":"2026-08-05T13:19:18.070254+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T13:19:18+07:00"}
+{"time":"2026-08-05T13:20:31.586887+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"ну-ну","user":"admin","timestamp":"2026-08-05T13:20:31+07:00"}
+{"time":"2026-08-05T13:31:21.17957+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T13:31:21+07:00"}
+{"time":"2026-08-05T13:33:01.899732+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"пробуем, но не сейчас","user":"admin","timestamp":"2026-08-05T13:33:01+07:00"}

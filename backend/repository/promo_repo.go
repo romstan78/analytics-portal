@@ -838,6 +838,7 @@ type ApprovalParams struct {
 	Network           string
 	Brand             string
 	Mechanics         string
+	HasComments       bool
 }
 
 func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
@@ -849,7 +850,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
-			p.conditions, p.agreement1, p.agreement2, p.status,
+			p.conditions, p.comments,
+			p.agreement1, p.agreement2, p.status,
 			p.agreement1_status, p.agreement1_comment,
 			p.agreement2_status, p.agreement2_comment,
 			0 as historical_count,
@@ -898,6 +900,10 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		args = append(args, params.Mechanics)
 	}
 
+	if params.HasComments {
+		query += " AND p.comments IS NOT NULL AND p.comments != ''"
+	}
+
 	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
 	statusField := "p.agreement1_status"
 	if params.Role == "agreement2" {
@@ -930,7 +936,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			&r.ID, &r.NetworkName, &r.BrandAS, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
 			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
 			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
-			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Conditions, &r.Comments,
+			&r.Agreement1, &r.Agreement2, &r.Status,
 			&r.Agreement1Status, &r.Agreement1Comment,
 			&r.Agreement2Status, &r.Agreement2Comment,
 			&r.HistoricalCount, &r.AvgHistoricalROI,
@@ -945,17 +952,34 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	return results, nil
 }
 
-// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
-func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
+// ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
+// и добавляет комментарий в поле comments с пометкой автора (не затирает историю).
+func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string, username string) error {
 	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
 	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
 	agreementField := fmt.Sprintf("agreement%d", agreementNum)
 
+	// Читаем текущее значение comments
+	var currentComments sql.NullString
+	if err := config.DB.QueryRow(
+		"SELECT comments FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id,
+	).Scan(&currentComments); err != nil {
+		return err
+	}
+
+	// Добавляем новый комментарий с пометкой автора и времени
+	newComments := currentComments.String
+	if comment != "" {
+		timestamp := time.Now().Format("02.01.2006 15:04")
+		commentLine := fmt.Sprintf("[%s %s]: %s\n", timestamp, username, comment)
+		newComments += commentLine
+	}
+
 	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
 		agreementField, statusField, commentField,
 	)
-	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
+	_, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
 	return err
 }
 

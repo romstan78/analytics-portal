@@ -257,7 +257,9 @@ func GetLastSKUData(c *gin.Context) {
 
 func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
-		if k == "id" || k == "deleted_at" || k == "updated_at" || strings.HasPrefix(k, "agreement") {
+		if k == "id" || k == "deleted_at" || k == "updated_at" ||
+			k == "agreement1_status" || k == "agreement1_comment" ||
+			k == "agreement2_status" || k == "agreement2_comment" {
 			continue
 		}
 
@@ -525,6 +527,7 @@ func GetApprovals(c *gin.Context) {
 		Network:        c.Query("network_name"),
 		Brand:          c.Query("brand"),
 		Mechanics:      c.Query("mechanics"),
+		HasComments:    c.Query("has_comments") == "1",
 	}
 
 	results, err := repository.GetApprovals(params)
@@ -590,13 +593,13 @@ func ApprovePromo(c *gin.Context) {
 		agreementNum = 2
 	}
 
-	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue); err != nil {
+	usernameVal, _ := c.Get("username")
+	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue, fmt.Sprint(usernameVal)); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
 	}
 
-	usernameVal, _ := c.Get("username")
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import {
   Box, Typography, CircularProgress, Alert, Snackbar,
   TextField, MenuItem, Dialog,
@@ -6,13 +6,19 @@ import {
   Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
   Checkbox, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow,
+  Drawer, Accordion, AccordionSummary, AccordionDetails,
+  FormControlLabel, InputAdornment, IconButton,
 } from '@mui/material';
 import {
   ViewModule as CardIcon,
   TableRows as TableIcon,
+  Settings as SettingsIcon,
+  ExpandMore,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import ApprovalCard from '../components/ApprovalCard';
 import { promoAPI } from '../api/promo';
+import { FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS } from '../utils/cardFields';
 
 const MONTHS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
@@ -33,6 +39,24 @@ export default function PromoApproval({ role, onDataChanged }) {
   // Вид: cards | table
   const [viewMode, setViewMode] = useState('cards');
 
+  // Настройка карточек (Drawer)
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchField, setSearchField] = useState('');
+  const [visibleFields, setVisibleFields] = useState(() => {
+    try {
+      const saved = localStorage.getItem('promo_card_fields_v2');
+      return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_FIELDS;
+    } catch { return DEFAULT_VISIBLE_FIELDS; }
+  });
+
+  const toggleField = (id) => {
+    setVisibleFields(prev => {
+      const next = prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id];
+      localStorage.setItem('promo_card_fields_v2', JSON.stringify(next));
+      return next;
+    });
+  };
+
   // Черновики фильтров (меняются сразу)
   const [draftKam, setDraftKam] = useState('');
   const [draftNetwork, setDraftNetwork] = useState('');
@@ -41,6 +65,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [draftStatus, setDraftStatus] = useState('pending');
   const [draftYear, setDraftYear] = useState(String(new Date().getFullYear()));
   const [draftMonth, setDraftMonth] = useState('');
+  const [draftHasComments, setDraftHasComments] = useState(false);
 
   // Флаг: была ли нажата кнопка «Применить»
   const [hasApplied, setHasApplied] = useState(false);
@@ -53,6 +78,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [appliedStatus, setAppliedStatus] = useState('pending');
   const [appliedYear, setAppliedYear] = useState(String(new Date().getFullYear()));
   const [appliedMonth, setAppliedMonth] = useState('');
+  const [appliedHasComments, setAppliedHasComments] = useState(false);
 
   // Справочники
   const [kams, setKams] = useState([]);
@@ -112,6 +138,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         network_name: appliedNetwork || undefined,
         brand: appliedBrand || undefined,
         mechanics: appliedMechanics || undefined,
+        has_comments: appliedHasComments || undefined,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
@@ -124,7 +151,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
+  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments]);
 
   useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
@@ -139,6 +166,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedStatus(draftStatus);
     setAppliedYear(draftYear);
     setAppliedMonth(draftMonth);
+    setAppliedHasComments(draftHasComments);
   };
 
   const handleReset = () => {
@@ -146,6 +174,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setDraftStatus('pending'); setDraftYear(String(new Date().getFullYear())); setDraftMonth('');
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
     setAppliedStatus('pending'); setAppliedYear(String(new Date().getFullYear())); setAppliedMonth('');
+    setDraftHasComments(false); setAppliedHasComments(false);
     setApprovals([]);
     setSelectedIds(new Set());
     setHasApplied(false);
@@ -247,7 +276,9 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
-      <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 3 }}>
+      {/* Sticky: фильтры + переключатель вида — закреплены при скролле */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: '#f5f7fa', pb: 2, pt: 2 }}>
+      <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>🔍 Фильтры</Typography>
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center">
           <TextField select size="small" label="KAM" value={draftKam}
@@ -288,8 +319,20 @@ export default function PromoApproval({ role, onDataChanged }) {
           <Button variant="outlined" size="small" onClick={handleReset} sx={{ alignSelf: 'center' }}>
             Сброс
           </Button>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={draftHasComments}
+                onChange={(e) => setDraftHasComments(e.target.checked)}
+              />
+            }
+            label={<Typography variant="body2">Есть комментарии</Typography>}
+            sx={{ ml: 1 }}
+          />
         </Stack>
       </Paper>
+      </Box>
 
       {/* Переключатель вида и массовые действия */}
       {approvals.length > 0 && (
@@ -297,27 +340,50 @@ export default function PromoApproval({ role, onDataChanged }) {
           <ToggleButtonGroup
             value={viewMode}
             exclusive
-            onChange={(_, v) => v && setViewMode(v)}
+            onChange={(_, v) => {
+              if (v) {
+                startTransition(() => {
+                  setViewMode(v);
+                  setSelectedIds(new Set());
+                });
+              }
+            }}
             size="small"
           >
             <ToggleButton value="cards"><CardIcon sx={{ mr: 0.5, fontSize: 18 }} />Карточки</ToggleButton>
             <ToggleButton value="table"><TableIcon sx={{ mr: 0.5, fontSize: 18 }} />Таблица</ToggleButton>
           </ToggleButtonGroup>
+          {/* Кнопка настроек карточек — только в режиме карточек */}
+          {viewMode === 'cards' && (
+            <Button
+              size="small"
+              startIcon={<SettingsIcon />}
+              onClick={() => setSettingsOpen(true)}
+              sx={{ color: '#475569', fontWeight: 500, ml: 1 }}
+            >
+              Поля
+            </Button>
+          )}
           <Box sx={{ flex: 1 }} />
-          <Button
-            variant="contained" color="success" size="small"
-            disabled={selectedIds.size === 0}
-            onClick={() => openBatchDialog('согласовано')}
-          >
-            Согласовать ({selectedIds.size})
-          </Button>
-          <Button
-            variant="contained" color="error" size="small"
-            disabled={selectedIds.size === 0}
-            onClick={() => openBatchDialog('отклонено')}
-          >
-            Отклонить ({selectedIds.size})
-          </Button>
+          {/* Кнопки массовых действий — только в режиме таблицы */}
+          {viewMode === 'table' && (
+            <>
+              <Button
+                variant="contained" color="success" size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => openBatchDialog('согласовано')}
+              >
+                Согласовать ({selectedIds.size})
+              </Button>
+              <Button
+                variant="contained" color="error" size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => openBatchDialog('отклонено')}
+              >
+                Отклонить ({selectedIds.size})
+              </Button>
+            </>
+          )}
         </Box>
       )}
 
@@ -333,20 +399,33 @@ export default function PromoApproval({ role, onDataChanged }) {
       )}
 
       {/* Вид: Карточки */}
-      {!loading && approvals.length > 0 && viewMode === 'cards' && (
-        <>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Найдено: {approvals.length} промо</Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
-            {approvals.map(a => (
-              <ApprovalCard key={a.id} item={a}
-                expanded={expandedCards[a.id] || false} submitting={submitting}
-                selected={selectedIds.has(a.id)} onToggleSelect={() => toggleSelect(a.id)}
-                onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
-                onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
-            ))}
-          </Box>
-        </>
-      )}
+      {!loading && approvals.length > 0 && viewMode === 'cards' && (() => {
+        const MAX_CARDS = 50;
+        const cardsToShow = approvals.slice(0, MAX_CARDS);
+        const remaining = approvals.length - MAX_CARDS;
+        return (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Найдено: {approvals.length} промо{remaining > 0 ? ` • Показаны первые ${MAX_CARDS}` : ''}
+            </Typography>
+            {remaining > 0 && (
+              <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+                Показаны первые {MAX_CARDS} из {approvals.length} промо. Осталось ещё {remaining}.<br />
+                Для массовых действий переключитесь в табличный вид.
+              </Alert>
+            )}
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
+              {cardsToShow.map(a => (
+                <ApprovalCard key={a.id} item={a}
+                  expanded={expandedCards[a.id] || false} submitting={submitting}
+                  visibleFields={visibleFields}
+                  onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
+                  onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
+              ))}
+            </Box>
+          </>
+        );
+      })()}
 
       {/* Вид: Таблица */}
       {!loading && approvals.length > 0 && viewMode === 'table' && (
@@ -451,6 +530,60 @@ export default function PromoApproval({ role, onDataChanged }) {
       <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>{snackbar.message}</Alert>
       </Snackbar>
+
+      {/* Drawer настройки полей карточки */}
+      <Drawer anchor="right" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <Box sx={{ width: 350, p: 3 }}>
+          <Typography variant="h6" mb={2}>Настройка карточки</Typography>
+
+          <TextField
+            fullWidth size="small" placeholder="Поиск поля..."
+            value={searchField}
+            onChange={e => setSearchField(e.target.value)}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: 'gray' }} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+            sx={{ mb: 2 }}
+          />
+
+          {FIELD_GROUPS.map((group, idx) => {
+            const filteredFields = group.fields.filter(f =>
+              f.label.toLowerCase().includes(searchField.toLowerCase())
+            );
+            if (filteredFields.length === 0) return null;
+
+            return (
+              <Accordion key={idx} defaultExpanded disableGutters elevation={0}
+                sx={{ borderBottom: '1px solid #eee' }}>
+                <AccordionSummary expandIcon={<ExpandMore />}>
+                  <Typography fontWeight={600}>{group.group}</Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {filteredFields.map(field => (
+                    <FormControlLabel
+                      key={field.id}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={visibleFields.includes(field.id)}
+                          onChange={() => toggleField(field.id)}
+                        />
+                      }
+                      label={<Typography variant="body2">{field.label}</Typography>}
+                    />
+                  ))}
+                </AccordionDetails>
+              </Accordion>
+            );
+          })}
+        </Box>
+      </Drawer>
     </Box>
   );
 }

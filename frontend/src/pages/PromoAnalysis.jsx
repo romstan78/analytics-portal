@@ -12,6 +12,9 @@ import {
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import FilterPanel from '../components/FilterPanel';
 import PromoForm from './PromoForm';
@@ -122,6 +125,7 @@ export default function PromoAnalysis({ role }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [exportDialog, setExportDialog] = useState({ open: false });
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
@@ -228,7 +232,7 @@ export default function PromoAnalysis({ role }) {
   const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
 
   // ─── Экспорт CSV (клиентский — выгружаем отфильтрованные строки) ─────
-  const handleExport = () => {
+  const handleExportCSV = () => {
     try {
       const data = filteredRows;
       const headers = visibleCols.map(c => c.headerName || c.field);
@@ -243,12 +247,42 @@ export default function PromoAnalysis({ role }) {
         }).join(';') + '\n';
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'promo-analysis.csv';
-      link.click();
-      URL.revokeObjectURL(link.href);
+      saveAs(blob, `promo-analysis_${new Date().toISOString().split('T')[0]}.csv`);
     } catch (e) { console.error('Export error:', e); }
+  };
+
+  const confirmedExportXLSX = async () => {
+    try {
+      const data = filteredRows;
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Promo Data');
+
+      worksheet.columns = visibleCols.map(c => ({
+        header: c.headerName || c.field,
+        key: c.field,
+        width: c.width ? c.width / 7 : 20,
+      }));
+
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      data.forEach(row => worksheet.addRow(row));
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `promo-analysis_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) { console.error('Export error:', e); } finally {
+      setExportDialog({ open: false });
+    }
+  };
+
+  const handleExportXLSX = () => {
+    if (filteredRows.length > 10000) {
+      setExportDialog({ open: true });
+    } else {
+      confirmedExportXLSX();
+    }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────
@@ -320,8 +354,12 @@ export default function PromoAnalysis({ role }) {
                 {rows.length.toLocaleString('ru-RU')} строк
               </Typography>
             )}
-            <Button size="small" startIcon={<ExportIcon />} onClick={handleExport}
-              sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+            <ButtonGroup size="small" variant="text">
+              <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+                sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+              <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+                sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+            </ButtonGroup>
           </Box>
 
           <DataGrid 
@@ -370,6 +408,24 @@ export default function PromoAnalysis({ role }) {
           </DialogActions>
         </Dialog>
       </>)}
+
+      {/* Диалог подтверждения большого экспорта */}
+      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false })}>
+        <DialogTitle>Подтверждение экспорта</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Количество строк для экспорта: {filteredRows.length.toLocaleString('ru-RU')}.<br />
+            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
+            Продолжить?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportDialog({ open: false })}>Отмена</Button>
+          <Button variant="contained" onClick={confirmedExportXLSX}>
+            Экспортировать
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}

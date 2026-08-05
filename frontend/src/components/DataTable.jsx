@@ -2,13 +2,16 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DataGrid } from '@mui/x-data-grid';
 import { 
   Box, Alert, TextField, Button, Menu, MenuItem, 
-  Checkbox, ListItemText, Typography, Divider 
+  Checkbox, ListItemText, Typography, Divider, ButtonGroup,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import { 
   ViewColumn as ColumnsIcon,
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 export default function DataTable({ 
   columns, apiUrl, filters = {}, defaultPageSize = 100, 
@@ -31,6 +34,7 @@ export default function DataTable({
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
+  const [exportDialog, setExportDialog] = useState({ open: false, data: null });
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const map = {};
     columns.forEach(c => { map[c.field] = true; });
@@ -80,31 +84,34 @@ export default function DataTable({
     setVisibleColumns(map);
   };
 
-  const handleExport = async () => {
+  const fetchExportData = async () => {
+    const params = new URLSearchParams();
+    params.set('all', 'true');
+    if (debouncedSearch) {
+      params.set('search', debouncedSearch);
+    }
+    Object.entries(filters).forEach(([key, value]) => { 
+      if (Array.isArray(value)) { 
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
+      } else if (value !== '' && value != null) { 
+        params.set(key, String(value)); 
+      } 
+    });
+    const url = `${apiUrl}?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  };
+
+  const handleExportCSV = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      params.set('all', 'true');
-      if (debouncedSearch) {
-        params.set('search', debouncedSearch);
-      }
-      Object.entries(filters).forEach(([key, value]) => { 
-        if (Array.isArray(value)) { 
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-        } else if (value !== '' && value != null) { 
-          params.set(key, String(value)); 
-        } 
-      });
-      const url = `${apiUrl}?${params.toString()}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      const data = json.data || [];
-
+      const data = await fetchExportData();
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
 
@@ -123,15 +130,49 @@ export default function DataTable({
       });
 
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `${exportFileName}.csv`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
     } catch (err) {
-      console.error('Ошибка экспорта:', err);
+      console.error('Ошибка экспорта CSV:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const confirmedExportXLSX = async (data) => {
+    setLoading(true);
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Export Data');
+
+      worksheet.columns = visibleCols.map(c => ({
+        header: c.headerName || c.field,
+        key: c.field,
+        width: c.width ? c.width / 7 : 20,
+      }));
+
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      data.forEach(row => worksheet.addRow(row));
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error('Ошибка экспорта Excel:', err);
+    } finally {
+      setLoading(false);
+      setExportDialog({ open: false, data: null });
+    }
+  };
+
+  const handleExportXLSX = async () => {
+    const data = await fetchExportData();
+    if (data.length > 10000) {
+      setExportDialog({ open: true, data });
+    } else {
+      confirmedExportXLSX(data);
     }
   };
 
@@ -220,9 +261,31 @@ export default function DataTable({
           </Typography>
         )}
 
-        <Button size="small" startIcon={<ExportIcon />} onClick={handleExport}
-          sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+        <ButtonGroup size="small" variant="text">
+          <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+            sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+          <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+            sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+        </ButtonGroup>
       </Box>
+
+      {/* Диалог подтверждения большого экспорта */}
+      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false, data: null })}>
+        <DialogTitle>Подтверждение экспорта</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Количество строк для экспорта: {(exportDialog.data?.length || 0).toLocaleString('ru-RU')}.<br />
+            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
+            Продолжить?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportDialog({ open: false, data: null })}>Отмена</Button>
+          <Button variant="contained" onClick={() => confirmedExportXLSX(exportDialog.data)}>
+            Экспортировать
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Таблица */}
       <DataGrid 

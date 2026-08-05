@@ -92,6 +92,8 @@ frontend/
       PromoForm.jsx
     types/
       promo.ts
+    utils/
+      cardFields.js
     App.css
     App.jsx
     index.css
@@ -106,6 +108,62 @@ docker-compose.yml
 ```
 
 # Files
+
+## File: frontend/src/utils/cardFields.js
+```javascript
+export const FIELD_GROUPS = [
+  {
+    group: 'Основные',
+    fields: [
+      { id: 'network_name', label: 'Сеть' },
+      { id: 'sku', label: 'SKU' },
+      { id: 'mechanics', label: 'Механика' },
+      { id: 'brand_as', label: 'Бренд' },
+      { id: 'kam', label: 'KAM' },
+    ],
+  },
+  {
+    group: 'Плановые показатели',
+    fields: [
+      { id: 'baseline_units', label: 'Baseline (уп)' },
+      { id: 'plan_promo_units', label: 'План (уп)' },
+      { id: 'plan_investments_rub', label: 'Инвестиции (руб)', isMoney: true },
+      { id: 'plan_roi', label: 'ROI План (%)', isRoi: true },
+      { id: 'plan_uplift_percent', label: 'Uplift План (%)', isPercent: true },
+      { id: 'plan_total_spb_sales_rub', label: 'Продажи SPB план (руб)', isMoney: true },
+    ],
+  },
+  {
+    group: 'Фактические показатели',
+    fields: [
+      { id: 'actual_promo_sales_units', label: 'Факт продаж (уп)' },
+      { id: 'actual_roi', label: 'ROI Факт (%)', isRoi: true },
+      { id: 'actual_uplift_percent', label: 'Uplift Факт (%)', isPercent: true },
+      { id: 'actual_total_spb_sales_rub', label: 'Продажи SPB факт (руб)', isMoney: true },
+      { id: 'actual_investments_rub', label: 'Инвестиции факт (руб)', isMoney: true },
+    ],
+  },
+  {
+    group: 'Исторические данные',
+    fields: [
+      { id: 'historical_count', label: 'Кол-во ист. промо' },
+      { id: 'avg_historical_roi', label: 'Средний ист. ROI (%)', isRoi: true },
+      { id: 'avg_historical_uplift', label: 'Средний ист. Uplift (%)', isPercent: true },
+    ],
+  },
+];
+
+export const ALL_FIELDS_FLAT = FIELD_GROUPS.flatMap(g => g.fields);
+
+export const DEFAULT_VISIBLE_FIELDS = [
+  'network_name', 'sku', 'mechanics', 'brand_as', 'kam',
+  'baseline_units', 'plan_promo_units', 'plan_roi', 'plan_investments_rub',
+  'actual_promo_sales_units', 'actual_roi',
+];
+
+export const FIELDS_MAP = {};
+ALL_FIELDS_FLAT.forEach(f => { FIELDS_MAP[f.id] = f; });
+```
 
 ## File: backend/cmd/hash_password.go
 ```go
@@ -549,106 +607,6 @@ export function usePromoCalculations(form: PromoFormValues) {
   }, [form]);
 
   return { recalcPlan, recalcActual };
-}
-```
-
-## File: frontend/src/hooks/usePromoData.ts
-```typescript
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useCallback } from 'react';
-import type { PromoRow } from '../types/promo';
-
-// ─── Типы ────────────────────────────────────────────────────────────────────
-
-export interface PromoFilters {
-  yearFrom?: string;
-  yearTo?: string;
-  months?: string[];
-  kam?: string[];
-  brand?: string[];
-  sku?: string[];
-  network_name?: string[];
-  mechanics?: string[];
-  status?: string[];
-  channel?: string[];
-  [key: string]: string | string[] | undefined;
-}
-
-export interface UsePromoDataReturn {
-  rows: PromoRow[];
-  setRows: (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => void;
-  loading: boolean;
-  error: string | null;
-  refetch: () => void;
-}
-
-// ─── Хук ─────────────────────────────────────────────────────────────────────
-
-/**
- * Хук для получения данных промо с использованием React Query.
- */
-export function usePromoData(
-  filters: PromoFilters,
-  refreshTrigger: number
-): UsePromoDataReturn {
-  const queryClient = useQueryClient();
-  const filtersRef = useRef<PromoFilters>(filters);
-  filtersRef.current = filters;
-
-  const queryKey = ['promoData', filters, refreshTrigger] as const;
-
-  const fetchPromoData = useCallback(async (): Promise<PromoRow[]> => {
-    const currentFilters = filtersRef.current;
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-      } else if (value !== '' && value != null) {
-        params.set(key, String(value));
-      }
-    });
-
-    const qs = params.toString();
-    const response = await fetch(
-      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      }
-    );
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-  }, []);
-
-  const { data: rows = [], isLoading, error, refetch } = useQuery<PromoRow[]>({
-    queryKey: queryKey as unknown as readonly unknown[],
-    queryFn: fetchPromoData,
-  });
-
-  // Обновление кэша React Query (для обратной совместимости)
-  const setRows = useCallback(
-    (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => {
-      queryClient.setQueryData(queryKey as unknown as readonly unknown[], (old: unknown) => {
-        const currentRows = (old as PromoRow[]) || [];
-        if (typeof newRowsOrUpdater === 'function') {
-          return newRowsOrUpdater(currentRows);
-        }
-        return newRowsOrUpdater;
-      });
-    },
-    [queryClient, queryKey]
-  );
-
-  return {
-    rows,
-    setRows,
-    loading: isLoading,
-    error: error?.message || null,
-    refetch,
-  };
 }
 ```
 
@@ -1223,303 +1181,6 @@ func ValidateRefreshToken(tokenStr string) (*Claims, error) {
 }
 ```
 
-## File: backend/handlers/sales.go
-```go
-package handlers
-
-import (
-	"database/sql"
-	"net/http"
-	"strconv"
-	"strings"
-
-	"backend/config"
-	"backend/models"
-
-	"github.com/gin-gonic/gin"
-)
-
-func GetFilterOptions(c *gin.Context) {
-	getDistinct := func(query string) []string {
-		rows, e := config.DB.Query(query)
-		if e != nil {
-			return []string{}
-		}
-		defer rows.Close()
-		var vals []string
-		for rows.Next() {
-			var v sql.NullString
-			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
-				vals = append(vals, v.String)
-			}
-		}
-		return vals
-	}
-
-	result := gin.H{
-		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
-		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
-		"un_rub":      getDistinct("SELECT DISTINCT un_rub FROM dbo.tbl_EcomSalesNormalized WHERE un_rub IS NOT NULL ORDER BY un_rub"),
-		"segment":     getDistinct("SELECT DISTINCT segment FROM dbo.tbl_EcomSalesNormalized WHERE segment IS NOT NULL ORDER BY segment"),
-		"channel":     getDistinct("SELECT DISTINCT channel FROM dbo.tbl_EcomSalesNormalized WHERE channel IS NOT NULL ORDER BY channel"),
-	}
-
-	mappingQuery := `SELECT segment, channel FROM dbo.tbl_ChannelSegmentMapping WHERE segment IS NOT NULL AND channel IS NOT NULL GROUP BY segment, channel ORDER BY segment, channel`
-	rows, e := config.DB.Query(mappingQuery)
-	if e != nil {
-		result["segmentChannelMap"] = make(map[string][]string)
-		result["channelSegmentMap"] = make(map[string][]string)
-	} else {
-		defer rows.Close()
-		segChanMap := make(map[string][]string)
-		chanSegMap := make(map[string][]string)
-		for rows.Next() {
-			var seg, chanVal sql.NullString
-			if err := rows.Scan(&seg, &chanVal); err == nil {
-				if seg.Valid && chanVal.Valid && seg.String != "" && chanVal.String != "" {
-					segChanMap[seg.String] = append(segChanMap[seg.String], chanVal.String)
-					chanSegMap[chanVal.String] = append(chanSegMap[chanVal.String], seg.String)
-				}
-			}
-		}
-		result["segmentChannelMap"] = segChanMap
-		result["channelSegmentMap"] = chanSegMap
-	}
-	c.JSON(http.StatusOK, result)
-}
-
-func GetData(c *gin.Context) {
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	brandNames := c.QueryArray("brandName")
-	networkNames := c.QueryArray("networkName")
-	unRubs := c.QueryArray("un_rub")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-
-	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
-	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
-	args := []interface{}{}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			baseWhere += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			baseWhere += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-	if len(brandNames) > 0 {
-		conds := make([]string, 0, len(brandNames))
-		for _, v := range brandNames {
-			if v != "" {
-				conds = append(conds, "n.brandName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
-	}
-	if len(networkNames) > 0 {
-		conds := make([]string, 0, len(networkNames))
-		for _, v := range networkNames {
-			if v != "" {
-				conds = append(conds, "n.networkName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				baseWhere += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.un_rub", unRubs)
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	all := c.Query("all")
-
-	if all == "true" {
-		// Экспорт — возвращаем всё
-		query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
-		rows, err := config.DB.Query(query, args...)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
-			return
-		}
-		defer rows.Close()
-
-		var results []models.Row
-		for rows.Next() {
-			var r models.Row
-			if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
-				continue
-			}
-			results = append(results, r)
-		}
-		if results == nil {
-			results = []models.Row{}
-		}
-		c.JSON(http.StatusOK, gin.H{"data": results})
-		return
-	}
-
-	// Пагинация
-	countQuery := "SELECT COUNT(*) FROM dbo.tbl_EcomSalesNormalized n" + baseWhere
-	countArgs := make([]interface{}, len(args))
-	copy(countArgs, args)
-
-	var totalRows int
-	if err := config.DB.QueryRow(countQuery, countArgs...).Scan(&totalRows); err != nil {
-		totalRows = 0
-	}
-
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-	if pageSize > 1000 {
-		pageSize = 1000
-	}
-	offset := page * pageSize
-
-	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-	args = append(args, offset, pageSize)
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
-		return
-	}
-	defer rows.Close()
-
-	var results []models.Row
-	for rows.Next() {
-		var r models.Row
-		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	if results == nil {
-		results = []models.Row{}
-	}
-	c.JSON(http.StatusOK, gin.H{"data": results, "totalRows": totalRows})
-}
-
-func GetDrilldown(c *gin.Context) {
-	brandName := c.Query("brandName")
-	networkName := c.Query("networkName")
-	if brandName == "" || networkName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "brandName и networkName обязательны"})
-		return
-	}
-
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-
-	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
-	args := []interface{}{brandName, networkName}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			query += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			query += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
-		return
-	}
-	defer rows.Close()
-
-	var results []models.DrilldownRow
-	for rows.Next() {
-		var r models.DrilldownRow
-		if err := rows.Scan(&r.Year, &r.Month, &r.MetricType, &r.TotalValue, &r.UnRub, &r.Segment, &r.Channel); err != nil {
-			continue
-		}
-		results = append(results, r)
-	}
-	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
-}
-```
-
 ## File: backend/.env.example
 ```
 DB_SERVER=localhost
@@ -1565,167 +1226,6 @@ export const refreshToken = async () => {
     return false;
   }
 };
-```
-
-## File: frontend/src/components/ApprovalCard.jsx
-```javascript
-import { memo } from 'react';
-import {
-  Box, Typography, Card, CardContent, CardActions,
-  Button, Chip, Collapse, Grid, TextField,
-  LinearProgress, CircularProgress,
-} from '@mui/material';
-import {
-  ExpandMore as ExpandMoreIcon,
-  CheckCircle as ApproveIcon,
-  Cancel as RejectIcon,
-  Comment as CommentIcon,
-} from '@mui/icons-material';
-
-const fmtNum = (v, decimals = 0) => {
-  if (v == null) return '—';
-  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-};
-
-const roiColor = (roi) => {
-  if (roi == null) return '#94a3b8';
-  return roi >= 0 ? '#16a34a' : '#dc2626';
-};
-
-const MONTHS = [
-  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
-  { label: 'Апрель', value: 4 }, { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 },
-  { label: 'Июль', value: 7 }, { label: 'Август', value: 8 }, { label: 'Сентябрь', value: 9 },
-  { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
-];
-
-const ApprovalCard = memo(function ApprovalCard({
-  item, expanded, submitting, onCommentRef,
-  onToggleExpand, onOpenConfirm, onCommentOnly,
-}) {
-  const id = item.id;
-  const isSubmitting = submitting[id] || false;
-
-  return (
-    <Box sx={{ position: 'relative' }}>
-      {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
-      <Card elevation={2} sx={{ borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 }, height: '100%', display: 'flex', flexDirection: 'column', opacity: isSubmitting ? 0.7 : 1 }}>
-        {isSubmitting && (
-          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
-            <CircularProgress size={32} />
-          </Box>
-        )}
-        <CardContent sx={{ flex: 1, pb: 1 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-            {item.network_name || '—'}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
-            <Chip label={item.sku || '—'} size="small" variant="outlined" />
-            <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
-          </Box>
-          {item.year && item.month && (
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-              Период: {MONTHS.find(m => m.value === item.month)?.label || item.month} {item.year}
-            </Typography>
-          )}
-          <Grid container spacing={1} sx={{ mb: 1 }}>
-            <Grid item xs={6}>
-              <Typography variant="caption" color="text.secondary">Baseline</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmtNum(item.baseline_units)} уп</Typography>
-            </Grid>
-            <Grid item xs={6}>
-              <Typography variant="caption" color="text.secondary">План</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmtNum(item.plan_promo_units)} уп</Typography>
-            </Grid>
-            <Grid item xs={6}>
-              <Typography variant="caption" color="text.secondary">Факт продаж</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmtNum(item.actual_promo_sales_units)} уп</Typography>
-            </Grid>
-            <Grid item xs={6}>
-              <Typography variant="caption" color="text.secondary">Инвестиции</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{fmtNum(item.plan_investments_rub, 2)} ₽</Typography>
-            </Grid>
-          </Grid>
-          <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
-            <Box>
-              <Typography variant="caption" color="text.secondary">ROI план</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 700, color: roiColor(item.plan_roi) }}>
-                {item.plan_roi != null ? `${Number(item.plan_roi).toFixed(1)}%` : '—'}
-              </Typography>
-            </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary">ROI факт</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 700, color: roiColor(item.actual_roi) }}>
-                {item.actual_roi != null ? `${Number(item.actual_roi).toFixed(1)}%` : '—'}
-              </Typography>
-            </Box>
-          </Box>
-          <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
-            <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
-            <Typography variant="caption" color="text.secondary">
-              Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
-            </Typography>
-          </Box>
-          {(item.agreement1 || item.agreement2) && (
-            <Box sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-              {item.agreement1 && (
-                <Typography variant="caption" sx={{ 
-                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
-                  bgcolor: String(item.agreement1).startsWith('согласовано') ? '#f0fdf4' : 
-                           String(item.agreement1).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
-                  color: String(item.agreement1).startsWith('согласовано') ? '#16a34a' : 
-                         String(item.agreement1).startsWith('отклонено') ? '#dc2626' : '#6366f1',
-                }}>
-                  <b>Согл. 1:</b> {item.agreement1}
-                </Typography>
-              )}
-              {item.agreement2 && (
-                <Typography variant="caption" sx={{ 
-                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
-                  bgcolor: String(item.agreement2).startsWith('согласовано') ? '#f0fdf4' : 
-                           String(item.agreement2).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
-                  color: String(item.agreement2).startsWith('согласовано') ? '#16a34a' : 
-                         String(item.agreement2).startsWith('отклонено') ? '#dc2626' : '#6366f1',
-                }}>
-                  <b>Согл. 2:</b> {item.agreement2}
-                </Typography>
-              )}
-            </Box>
-          )}
-          {item.conditions && (
-            <Box sx={{ mb: 1 }}>
-              <Button size="small" onClick={() => onToggleExpand(id)}
-                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
-                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>Условия</Button>
-              <Collapse in={expanded}>
-                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.8rem', color: '#475569' }}>
-                  {item.conditions}
-                </Typography>
-              </Collapse>
-            </Box>
-          )}
-          <TextField size="small" fullWidth multiline minRows={1} maxRows={3}
-            placeholder="Комментарий (необязательно)"
-            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
-            sx={{ mb: 1 }} />
-        </CardContent>
-        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
-          <Button size="small" variant="outlined" startIcon={<CommentIcon />}
-            onClick={() => onCommentOnly(id)} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
-          <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
-            onClick={() => onOpenConfirm(id, 'согласовано')} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
-          <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
-            onClick={() => onOpenConfirm(id, 'отклонено')} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
-        </CardActions>
-      </Card>
-    </Box>
-  );
-});
-
-export default ApprovalCard;
 ```
 
 ## File: frontend/src/components/DrilldownModal.jsx
@@ -1918,6 +1418,107 @@ function getUniqueKeys(data, type) {
   const keys = new Set();
   data.forEach(item => { Object.keys(item[type] || {}).forEach(key => keys.add(key)); });
   return Array.from(keys).sort();
+}
+```
+
+## File: frontend/src/hooks/usePromoData.ts
+```typescript
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useCallback } from 'react';
+import type { PromoRow } from '../types/promo';
+
+// ─── Типы ────────────────────────────────────────────────────────────────────
+
+export interface PromoFilters {
+  yearFrom?: string;
+  yearTo?: string;
+  months?: string[];
+  kam?: string[];
+  brand?: string[];
+  sku?: string[];
+  network_name?: string[];
+  mechanics?: string[];
+  status?: string[];
+  channel?: string[];
+  [key: string]: string | string[] | undefined;
+}
+
+export interface UsePromoDataReturn {
+  rows: PromoRow[];
+  setRows: (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => void;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+// ─── Хук ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Хук для получения данных промо с использованием React Query.
+ */
+export function usePromoData(
+  filters: PromoFilters,
+  refreshTrigger: number
+): UsePromoDataReturn {
+  const queryClient = useQueryClient();
+  const filtersRef = useRef<PromoFilters>(filters);
+  filtersRef.current = filters;
+
+  const queryKey = ['promoData', filters, refreshTrigger] as const;
+
+  const fetchPromoData = useCallback(async ({ signal }: { signal?: AbortSignal }): Promise<PromoRow[]> => {
+    const currentFilters = filtersRef.current;
+    const params = new URLSearchParams();
+    Object.entries(currentFilters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
+    });
+
+    const qs = params.toString();
+    const response = await fetch(
+      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+      {
+        signal,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      }
+    );
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  }, []);
+
+  const { data: rows = [], isLoading, error, refetch } = useQuery<PromoRow[]>({
+    queryKey: queryKey as unknown as readonly unknown[],
+    queryFn: fetchPromoData,
+  });
+
+  // Обновление кэша React Query (для обратной совместимости)
+  const setRows = useCallback(
+    (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => {
+      queryClient.setQueryData(queryKey as unknown as readonly unknown[], (old: unknown) => {
+        const currentRows = (old as PromoRow[]) || [];
+        if (typeof newRowsOrUpdater === 'function') {
+          return newRowsOrUpdater(currentRows);
+        }
+        return newRowsOrUpdater;
+      });
+    },
+    [queryClient, queryKey]
+  );
+
+  return {
+    rows,
+    setRows,
+    loading: isLoading,
+    error: error?.message || null,
+    refetch,
+  };
 }
 ```
 
@@ -2622,6 +2223,8 @@ createRoot(document.getElementById('root')).render(
     "@mui/material": "^9.2.0",
     "@mui/x-data-grid": "^9.10.1",
     "@tanstack/react-query": "^5.101.4",
+    "exceljs": "^4.4.0",
+    "file-saver": "^2.0.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.11.0",
@@ -2638,6 +2241,310 @@ createRoot(document.getElementById('root')).render(
     "globals": "^17.7.0",
     "vite": "^8.1.1"
   }
+}
+```
+
+## File: backend/handlers/sales.go
+```go
+package handlers
+
+import (
+	"database/sql"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"backend/config"
+	"backend/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+func GetFilterOptions(c *gin.Context) {
+	getDistinct := func(query string) []string {
+		rows, e := config.DB.Query(query)
+		if e != nil {
+			return []string{}
+		}
+		defer rows.Close()
+		var vals []string
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err == nil && v.Valid && v.String != "" {
+				vals = append(vals, v.String)
+			}
+		}
+		return vals
+	}
+
+	result := gin.H{
+		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
+		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
+		"un_rub":      getDistinct("SELECT DISTINCT un_rub FROM dbo.tbl_EcomSalesNormalized WHERE un_rub IS NOT NULL ORDER BY un_rub"),
+		"segment":     getDistinct("SELECT DISTINCT segment FROM dbo.tbl_EcomSalesNormalized WHERE segment IS NOT NULL ORDER BY segment"),
+		"channel":     getDistinct("SELECT DISTINCT channel FROM dbo.tbl_EcomSalesNormalized WHERE channel IS NOT NULL ORDER BY channel"),
+	}
+
+	mappingQuery := `SELECT segment, channel FROM dbo.tbl_ChannelSegmentMapping WHERE segment IS NOT NULL AND channel IS NOT NULL GROUP BY segment, channel ORDER BY segment, channel`
+	rows, e := config.DB.Query(mappingQuery)
+	if e != nil {
+		result["segmentChannelMap"] = make(map[string][]string)
+		result["channelSegmentMap"] = make(map[string][]string)
+	} else {
+		defer rows.Close()
+		segChanMap := make(map[string][]string)
+		chanSegMap := make(map[string][]string)
+		for rows.Next() {
+			var seg, chanVal sql.NullString
+			if err := rows.Scan(&seg, &chanVal); err == nil {
+				if seg.Valid && chanVal.Valid && seg.String != "" && chanVal.String != "" {
+					segChanMap[seg.String] = append(segChanMap[seg.String], chanVal.String)
+					chanSegMap[chanVal.String] = append(chanSegMap[chanVal.String], seg.String)
+				}
+			}
+		}
+		result["segmentChannelMap"] = segChanMap
+		result["channelSegmentMap"] = chanSegMap
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func GetData(c *gin.Context) {
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	brandNames := c.QueryArray("brandName")
+	networkNames := c.QueryArray("networkName")
+	unRubs := c.QueryArray("un_rub")
+	segments := c.QueryArray("segment")
+	channels := c.QueryArray("channel")
+	search := c.Query("search")
+
+	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
+	args := []interface{}{}
+
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			baseWhere += " AND n.[year] >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			baseWhere += " AND n.[year] <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+	if len(brandNames) > 0 {
+		conds := make([]string, 0, len(brandNames))
+		for _, v := range brandNames {
+			if v != "" {
+				conds = append(conds, "n.brandName LIKE ?")
+				args = append(args, "%"+v+"%")
+			}
+		}
+		if len(conds) > 0 {
+			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
+		}
+	}
+	if len(networkNames) > 0 {
+		conds := make([]string, 0, len(networkNames))
+		for _, v := range networkNames {
+			if v != "" {
+				conds = append(conds, "n.networkName LIKE ?")
+				args = append(args, "%"+v+"%")
+			}
+		}
+		if len(conds) > 0 {
+			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
+		}
+	}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				baseWhere += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+	appendFilter("n.un_rub", unRubs)
+	appendFilter("n.segment", segments)
+	appendFilter("n.channel", channels)
+
+	if search != "" {
+		likeArg := "%" + search + "%"
+		baseWhere += " AND (n.brandName LIKE ? OR n.productName LIKE ? OR n.networkName LIKE ? OR n.metric_type LIKE ?)"
+		args = append(args, likeArg, likeArg, likeArg, likeArg)
+	}
+
+	all := c.Query("all")
+
+	if all == "true" {
+		// Экспорт — возвращаем всё
+		query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+		rows, err := config.DB.Query(query, args...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+			return
+		}
+		defer rows.Close()
+
+		var results []models.Row
+		for rows.Next() {
+			var r models.Row
+			if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+				continue
+			}
+			results = append(results, r)
+		}
+		if results == nil {
+			results = []models.Row{}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": results})
+		return
+	}
+
+	// Пагинация
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_EcomSalesNormalized n" + baseWhere
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+
+	var totalRows int
+	if err := config.DB.QueryRow(countQuery, countArgs...).Scan(&totalRows); err != nil {
+		totalRows = 0
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+	offset := page * pageSize
+
+	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+	args = append(args, offset, pageSize)
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.Row
+	for rows.Next() {
+		var r models.Row
+		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.Row{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": results, "totalRows": totalRows})
+}
+
+func GetDrilldown(c *gin.Context) {
+	brandName := c.Query("brandName")
+	networkName := c.Query("networkName")
+	if brandName == "" || networkName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "brandName и networkName обязательны"})
+		return
+	}
+
+	yearFromStr := c.Query("yearFrom")
+	yearToStr := c.Query("yearTo")
+	months := c.QueryArray("months")
+	segments := c.QueryArray("segment")
+	channels := c.QueryArray("channel")
+
+	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
+	args := []interface{}{brandName, networkName}
+
+	if yearFromStr != "" {
+		if y, _ := strconv.Atoi(yearFromStr); true {
+			query += " AND n.[year] >= ?"
+			args = append(args, y)
+		}
+	}
+	if yearToStr != "" {
+		if y, _ := strconv.Atoi(yearToStr); true {
+			query += " AND n.[year] <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(months) > 0 {
+		placeholders := make([]string, 0, len(months))
+		for _, m := range months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+	appendFilter("n.segment", segments)
+	appendFilter("n.channel", channels)
+
+	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
+		return
+	}
+	defer rows.Close()
+
+	var results []models.DrilldownRow
+	for rows.Next() {
+		var r models.DrilldownRow
+		if err := rows.Scan(&r.Year, &r.Month, &r.MetricType, &r.TotalValue, &r.UnRub, &r.Segment, &r.Channel); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
 }
 ```
 
@@ -3357,6 +3264,203 @@ func TestSavePromo_OptimisticLocking(t *testing.T) {
 		t.Logf("✅ Optimistic locking работает: первый OK с новым updated_at=%v, второй 409 со старым=%v", newUpdatedAt, updatedAt)
 	}
 }
+```
+
+## File: frontend/src/components/ApprovalCard.jsx
+```javascript
+import { memo, useMemo } from 'react';
+import {
+  Box, Typography, Card, CardContent, CardActions,
+  Button, Chip, Collapse, Grid, TextField,
+  LinearProgress, CircularProgress,
+} from '@mui/material';
+import {
+  ExpandMore as ExpandMoreIcon,
+  CheckCircle as ApproveIcon,
+  Cancel as RejectIcon,
+  Comment as CommentIcon,
+} from '@mui/icons-material';
+import { ALL_FIELDS_FLAT } from '../utils/cardFields';
+
+const fmtNum = (v, decimals = 0) => {
+  if (v == null) return '—';
+  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+};
+
+const roiColor = (roi) => {
+  if (roi == null) return '#94a3b8';
+  return roi >= 0 ? '#16a34a' : '#dc2626';
+};
+
+const MONTHS = [
+  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
+  { label: 'Апрель', value: 4 }, { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 },
+  { label: 'Июль', value: 7 }, { label: 'Август', value: 8 }, { label: 'Сентябрь', value: 9 },
+  { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
+];
+
+// Эти поля всегда показываются на карточке, не выбираются в настройках
+const SIDEBAR_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as', 'kam']);
+
+const ApprovalCard = memo(function ApprovalCard({
+  item, expanded, submitting,
+  onCommentRef, onToggleExpand, onOpenConfirm, onCommentOnly,
+  visibleFields,
+}) {
+  const id = item.id;
+  const isSubmitting = submitting[id] || false;
+
+  // Динамические поля из настроек, исключая sidebar
+  const visibleData = useMemo(() => {
+    if (!visibleFields || visibleFields.length === 0) return [];
+    return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !SIDEBAR_FIELDS.has(f.id));
+  }, [visibleFields]);
+
+  // Цвет левой рамки по ROI
+  const leftBorderColor = item.plan_roi != null
+    ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
+    : '#94a3b8';
+
+  return (
+    <Box sx={{ position: 'relative' }}>
+      {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
+      <Card elevation={2} sx={{
+        borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 },
+        height: '100%', display: 'flex', flexDirection: 'column',
+        opacity: isSubmitting ? 0.7 : 1,
+        borderLeft: `4px solid ${leftBorderColor}`,
+      }}>
+        {isSubmitting && (
+          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
+            <CircularProgress size={32} />
+          </Box>
+        )}
+        <CardContent sx={{ flex: 1, pb: 1, pt: 2 }}>
+          {/* Заголовок и чипсы (фиксированные) */}
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+            {item.network_name || '—'}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
+            <Chip label={item.sku || '—'} size="small" variant="outlined" />
+            <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
+          </Box>
+          {item.year && item.month && (
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+              Период: {MONTHS.find(m => m.value === item.month)?.label || item.month} {item.year}
+            </Typography>
+          )}
+
+          {/* Динамические поля из настроек */}
+          {visibleData.length > 0 && (
+            <Grid container spacing={1.5} sx={{ mb: 1 }}>
+              {visibleData.map(fieldConfig => (
+                <Grid item xs={6} key={fieldConfig.id}>
+                  <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
+                  <Typography variant="body2" sx={{
+                    fontWeight: 600,
+                    color: fieldConfig.isRoi ? roiColor(item[fieldConfig.id]) : 'inherit',
+                  }}>
+                    {fieldConfig.isRoi || fieldConfig.isPercent
+                      ? (item[fieldConfig.id] != null ? `${Number(item[fieldConfig.id]).toFixed(1)}%` : '—')
+                      : (item[fieldConfig.id] != null ? fmtNum(item[fieldConfig.id], fieldConfig.isMoney ? 2 : 0) : '—')}
+                  </Typography>
+                </Grid>
+              ))}
+            </Grid>
+          )}
+
+          {/* Блок исторических данных — показываем, если поля включены */}
+          {(visibleFields?.includes('historical_count') || visibleFields?.includes('avg_historical_roi') || visibleFields?.includes('avg_historical_uplift')) && (
+            <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
+              {visibleFields.includes('historical_count') && (
+                <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
+              )}
+              {visibleFields.includes('avg_historical_roi') && (
+                <Typography variant="caption" color="text.secondary">
+                  Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {/* Согласования — всегда показываем, если есть */}
+          {(item.agreement1 || item.agreement2) && (
+            <Box sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {item.agreement1 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement1).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement1).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement1).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement1).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 1:</b> {item.agreement1}
+                </Typography>
+              )}
+              {item.agreement2 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement2).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement2).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement2).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement2).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 2:</b> {item.agreement2}
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {/* Условия — всегда показываем, если есть */}
+          {item.conditions && (
+            <Box sx={{ mb: 1 }}>
+              <Button size="small" onClick={() => onToggleExpand(id)}
+                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
+                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>Условия</Button>
+              <Collapse in={expanded}>
+                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.8rem', color: '#475569' }}>
+                  {item.conditions}
+                </Typography>
+              </Collapse>
+            </Box>
+          )}
+
+          {/* История переписки (поле comments из БД) */}
+          {item.comments && (
+            <Box sx={{ mb: 1 }}>
+              <Button size="small" onClick={() => onToggleExpand(id)}
+                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
+                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>💬 Комментарии</Button>
+              <Collapse in={expanded}>
+                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.75rem', color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
+                  {item.comments}
+                </Typography>
+              </Collapse>
+            </Box>
+          )}
+
+          <TextField size="small" fullWidth multiline minRows={1} maxRows={3}
+            placeholder="Комментарий (необязательно)"
+            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
+            sx={{ mb: 1 }} />
+        </CardContent>
+        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
+          <Button size="small" variant="outlined" startIcon={<CommentIcon />}
+            onClick={() => onCommentOnly(id)} disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
+          <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
+            onClick={() => onOpenConfirm(id, 'согласовано')} disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
+          <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
+            onClick={() => onOpenConfirm(id, 'отклонено')} disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
+        </CardActions>
+      </Card>
+    </Box>
+  );
+});
+
+export default ApprovalCard;
 ```
 
 ## File: frontend/src/components/FilterPanel.jsx
@@ -4769,376 +4873,6 @@ func DBRowToMap(r *models.PromoRowDB) map[string]interface{} {
 }
 ```
 
-## File: backend/go.mod
-```
-module backend
-
-go 1.25.0
-
-require (
-	github.com/denisenkom/go-mssqldb v0.12.3
-	github.com/gin-contrib/cors v1.7.7
-	github.com/gin-gonic/gin v1.12.0
-	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/joho/godotenv v1.5.1
-	golang.org/x/crypto v0.54.0
-	golang.org/x/sync v0.22.0
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-)
-
-require (
-	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic v1.15.0 // indirect
-	github.com/bytedance/sonic/loader v0.5.0 // indirect
-	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
-	github.com/gin-contrib/sse v1.1.0 // indirect
-	github.com/go-playground/locales v0.14.1 // indirect
-	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.30.1 // indirect
-	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/goccy/go-yaml v1.19.2 // indirect
-	github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe // indirect
-	github.com/golang-sql/sqlexp v0.1.0 // indirect
-	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/leodido/go-urn v1.4.0 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
-	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/ugorji/go/codec v1.3.1 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
-	golang.org/x/arch v0.23.0 // indirect
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
-)
-```
-
-## File: frontend/src/components/DataTable.jsx
-```javascript
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { 
-  Box, Alert, TextField, Button, Menu, MenuItem, 
-  Checkbox, ListItemText, Typography, Divider 
-} from '@mui/material';
-import { 
-  ViewColumn as ColumnsIcon,
-  FileDownload as ExportIcon,
-  Search as SearchIcon,
-} from '@mui/icons-material';
-
-export default function DataTable({ 
-  columns, apiUrl, filters = {}, defaultPageSize = 100, 
-  exportFileName = 'export', onDataLoaded = null, 
-  onRowClick = null, refreshKey 
-}) {
-  const [rawRows, setRawRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
-
-  // Серверная пагинация
-  const [paginationModel, setPaginationModel] = useState({
-    page: 0,
-    pageSize: defaultPageSize,
-  });
-  const [totalRows, setTotalRows] = useState(0);
-
-  // Тулбар
-  const [searchText, setSearchText] = useState('');
-  const [columnsAnchor, setColumnsAnchor] = useState(null);
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = true; });
-    return map;
-  });
-  const apiRef = useRef(null);
-
-  // Уникальные ключи
-  const rows = useMemo(() => {
-    return rawRows.map((row, idx) => ({
-      ...row,
-      _rowId: `${row.id ?? 'row'}_${paginationModel.page}_${idx}`,
-    }));
-  }, [rawRows, paginationModel.page]);
-
-  // Клиентский поиск (по текущей странице)
-  const filteredRows = useMemo(() => {
-    if (!searchText.trim()) return rows;
-    const lower = searchText.toLowerCase();
-    return rows.filter(row =>
-      Object.values(row).some(val =>
-        val != null && String(val).toLowerCase().includes(lower)
-      )
-    );
-  }, [rows, searchText]);
-
-  const visibleCols = useMemo(
-    () => columns.filter(c => visibleColumns[c.field] !== false),
-    [columns, visibleColumns]
-  );
-
-  const toggleColumn = (field) => {
-    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
-  };
-
-  const showAllColumns = () => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = true; });
-    setVisibleColumns(map);
-  };
-
-  const hideAllColumns = () => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = false; });
-    setVisibleColumns(map);
-  };
-
-  const handleExport = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.set('all', 'true');
-      Object.entries(filters).forEach(([key, value]) => { 
-        if (Array.isArray(value)) { 
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-        } else if (value !== '' && value != null) { 
-          params.set(key, String(value)); 
-        } 
-      });
-      const url = `${apiUrl}?${params.toString()}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      const data = json.data || [];
-
-      const headers = visibleCols.map(c => c.headerName || c.field);
-      const fields = visibleCols.map(c => c.field);
-
-      let csv = '\uFEFF' + headers.join(';') + '\n';
-      data.forEach(row => {
-        const line = fields.map(f => {
-          let val = row[f];
-          if (val == null) return '';
-          val = String(val);
-          if (val.includes(';') || val.includes('"') || val.includes('\n')) {
-            val = '"' + val.replace(/"/g, '""') + '"';
-          }
-          return val;
-        }).join(';');
-        csv += line + '\n';
-      });
-
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `${exportFileName}.csv`;
-      link.click();
-      URL.revokeObjectURL(link.href);
-    } catch (err) {
-      console.error('Ошибка экспорта:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Загрузка данных с пагинацией
-  const fetchData = useCallback(async () => {
-    setLoading(true); setError(null);
-    try {
-      const params = new URLSearchParams();
-      params.set('page', String(paginationModel.page));
-      params.set('pageSize', String(paginationModel.pageSize));
-      
-      Object.entries(filters).forEach(([key, value]) => { 
-        if (Array.isArray(value)) { 
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-        } else if (value !== '' && value != null) { 
-          params.set(key, String(value)); 
-        } 
-      });
-      const qs = params.toString();
-      const url = `${apiUrl}?${qs}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      const data = json.data || [];
-      setRawRows(data);
-      setTotalRows(json.totalRows || data.length);
-      if (onDataLoaded) onDataLoaded(data);
-    } catch (err) { setError(err.message); } finally { setLoading(false); }
-  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize]);
-
-  // Сброс страницы при смене фильтров
-  useEffect(() => {
-    setPaginationModel(prev => ({ ...prev, page: 0 }));
-  }, [filtersKey]);
-
-  useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
-
-  if (error) return <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>Ошибка загрузки: {error}</Alert>;
-
-  return (
-    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-      
-      {/* Тулбар */}
-      <Box sx={{ 
-        display: 'flex', alignItems: 'center', gap: 1, 
-        px: 2, py: 1, bgcolor: '#f1f5f9', 
-        borderRadius: '12px 12px 0 0',
-        border: '1px solid #e2e8f0', borderBottom: 'none',
-      }}>
-        <Button size="small" startIcon={<ColumnsIcon />}
-          onClick={(e) => setColumnsAnchor(e.currentTarget)}
-          sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
-        <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
-          onClose={() => setColumnsAnchor(null)}
-          slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
-          <MenuItem dense onClick={showAllColumns}>
-            <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
-          <MenuItem dense onClick={hideAllColumns}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
-          <Divider />
-          {columns.map(col => (
-            <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
-              <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
-              <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
-            </MenuItem>
-          ))}
-        </Menu>
-
-        <TextField size="small" placeholder="Поиск по странице..." value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
-          sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
-
-        <Box sx={{ flex: 1 }} />
-
-        {totalRows > 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-            {totalRows.toLocaleString('ru-RU')} строк
-          </Typography>
-        )}
-
-        <Button size="small" startIcon={<ExportIcon />} onClick={handleExport}
-          sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
-      </Box>
-
-      {/* Таблица */}
-      <DataGrid 
-        apiRef={apiRef}
-        rows={filteredRows} 
-        columns={visibleCols}
-        getRowId={(row) => row._rowId}
-        loading={loading} 
-        sortingMode="server"
-        paginationMode="server"
-        rowCount={totalRows}
-        paginationModel={paginationModel}
-        onPaginationModelChange={setPaginationModel}
-        disableColumnFilter
-        onRowClick={onRowClick}
-        pageSizeOptions={[25, 50, 100]} 
-        disableRowSelectionOnClick
-        sx={{ 
-          flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
-          borderRadius: '0 0 12px 12px',
-          '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
-          '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
-        }} 
-      />
-    </Box>
-  );
-}
-```
-
-## File: frontend/src/hooks/usePromoData.js
-```javascript
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useCallback } from 'react';
-
-/**
- * Хук для получения данных промо с использованием React Query.
- * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
- * и state-машину loading/error.
- *
- * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
- * чтобы не ломать PromoAnalysis.jsx.
- */
-export function usePromoData(filters, refreshTrigger) {
-  const queryClient = useQueryClient();
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
-
-  // Стабильный queryKey на основе фильтров и refreshTrigger
-  const queryKey = ['promoData', filters, refreshTrigger];
-
-  const fetchPromoData = useCallback(async () => {
-    const currentFilters = filtersRef.current;
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-      } else if (value !== '' && value != null) {
-        params.set(key, String(value));
-      }
-    });
-
-    const qs = params.toString();
-    const response = await fetch(
-      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      }
-    );
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-  }, []);
-
-  const { data: rows = [], isLoading, error, refetch } = useQuery({
-    queryKey,
-    queryFn: fetchPromoData,
-  });
-
-  // setRows — для обратной совместимости: обновляет кеш React Query
-  const setRows = useCallback((newRowsOrUpdater) => {
-    queryClient.setQueryData(queryKey, (old) => {
-      if (typeof newRowsOrUpdater === 'function') {
-        return newRowsOrUpdater(old || []);
-      }
-      return newRowsOrUpdater;
-    });
-  }, [queryClient, queryKey]);
-
-  return {
-    rows,
-    setRows,
-    loading: isLoading,
-    error: error?.message || null,
-    refetch,
-  };
-}
-```
-
 ## File: frontend/src/hooks/usePromoForm.js
 ```javascript
 import { useState, useCallback } from 'react';
@@ -5480,6 +5214,683 @@ export default function App() {
       </Box>
     </ThemeProvider>
   );
+}
+```
+
+## File: backend/go.mod
+```
+module backend
+
+go 1.25.0
+
+require (
+	github.com/denisenkom/go-mssqldb v0.12.3
+	github.com/gin-contrib/cors v1.7.7
+	github.com/gin-gonic/gin v1.12.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/joho/godotenv v1.5.1
+	golang.org/x/crypto v0.54.0
+	golang.org/x/sync v0.22.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+)
+
+require (
+	github.com/bytedance/gopkg v0.1.3 // indirect
+	github.com/bytedance/sonic v1.15.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/cloudwego/base64x v0.1.6 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/gin-contrib/sse v1.1.0 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/golang-sql/civil v0.0.0-20190719163853-cb61b32ac6fe // indirect
+	github.com/golang-sql/sqlexp v0.1.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/ugorji/go/codec v1.3.1 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
+	golang.org/x/arch v0.23.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
+)
+```
+
+## File: frontend/src/components/DataTable.jsx
+```javascript
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { DataGrid } from '@mui/x-data-grid';
+import { 
+  Box, Alert, TextField, Button, Menu, MenuItem, 
+  Checkbox, ListItemText, Typography, Divider, ButtonGroup,
+  Dialog, DialogTitle, DialogContent, DialogActions,
+} from '@mui/material';
+import { 
+  ViewColumn as ColumnsIcon,
+  FileDownload as ExportIcon,
+  Search as SearchIcon,
+} from '@mui/icons-material';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+
+export default function DataTable({ 
+  columns, apiUrl, filters = {}, defaultPageSize = 100, 
+  exportFileName = 'export', onDataLoaded = null, 
+  onRowClick = null, refreshKey 
+}) {
+  const [rawRows, setRawRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+
+  // Серверная пагинация
+  const [paginationModel, setPaginationModel] = useState({
+    page: 0,
+    pageSize: defaultPageSize,
+  });
+  const [totalRows, setTotalRows] = useState(0);
+
+  // Тулбар
+  const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [columnsAnchor, setColumnsAnchor] = useState(null);
+  const [exportDialog, setExportDialog] = useState({ open: false, data: null });
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = true; });
+    return map;
+  });
+  const apiRef = useRef(null);
+
+  // Уникальные ключи
+  const rows = useMemo(() => {
+    return rawRows.map((row, idx) => ({
+      ...row,
+      _rowId: `${row.id ?? 'row'}_${paginationModel.page}_${idx}`,
+    }));
+  }, [rawRows, paginationModel.page]);
+
+  // Debounce поиска (400ms) — чтобы не дёргать API на каждый символ
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  // Сброс страницы при изменении поиска
+  useEffect(() => {
+    setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }, [debouncedSearch]);
+
+  const visibleCols = useMemo(
+    () => columns.filter(c => visibleColumns[c.field] !== false),
+    [columns, visibleColumns]
+  );
+
+  const toggleColumn = (field) => {
+    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const showAllColumns = () => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = true; });
+    setVisibleColumns(map);
+  };
+
+  const hideAllColumns = () => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = false; });
+    setVisibleColumns(map);
+  };
+
+  const fetchExportData = async () => {
+    const params = new URLSearchParams();
+    params.set('all', 'true');
+    if (debouncedSearch) {
+      params.set('search', debouncedSearch);
+    }
+    Object.entries(filters).forEach(([key, value]) => { 
+      if (Array.isArray(value)) { 
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
+      } else if (value !== '' && value != null) { 
+        params.set(key, String(value)); 
+      } 
+    });
+    const url = `${apiUrl}?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  };
+
+  const handleExportCSV = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchExportData();
+      const headers = visibleCols.map(c => c.headerName || c.field);
+      const fields = visibleCols.map(c => c.field);
+
+      let csv = '\uFEFF' + headers.join(';') + '\n';
+      data.forEach(row => {
+        const line = fields.map(f => {
+          let val = row[f];
+          if (val == null) return '';
+          val = String(val);
+          if (val.includes(';') || val.includes('"') || val.includes('\n')) {
+            val = '"' + val.replace(/"/g, '""') + '"';
+          }
+          return val;
+        }).join(';');
+        csv += line + '\n';
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
+    } catch (err) {
+      console.error('Ошибка экспорта CSV:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirmedExportXLSX = async (data) => {
+    setLoading(true);
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Export Data');
+
+      worksheet.columns = visibleCols.map(c => ({
+        header: c.headerName || c.field,
+        key: c.field,
+        width: c.width ? c.width / 7 : 20,
+      }));
+
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      data.forEach(row => worksheet.addRow(row));
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error('Ошибка экспорта Excel:', err);
+    } finally {
+      setLoading(false);
+      setExportDialog({ open: false, data: null });
+    }
+  };
+
+  const handleExportXLSX = async () => {
+    const data = await fetchExportData();
+    if (data.length > 10000) {
+      setExportDialog({ open: true, data });
+    } else {
+      confirmedExportXLSX(data);
+    }
+  };
+
+  // Загрузка данных с пагинацией
+  const fetchData = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('page', String(paginationModel.page));
+      params.set('pageSize', String(paginationModel.pageSize));
+      if (debouncedSearch) {
+        params.set('search', debouncedSearch);
+      }
+      
+      Object.entries(filters).forEach(([key, value]) => { 
+        if (Array.isArray(value)) { 
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
+        } else if (value !== '' && value != null) { 
+          params.set(key, String(value)); 
+        } 
+      });
+      const qs = params.toString();
+      const url = `${apiUrl}?${qs}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const json = await response.json();
+      const data = json.data || [];
+      setRawRows(data);
+      setTotalRows(json.totalRows || data.length);
+      if (onDataLoaded) onDataLoaded(data);
+    } catch (err) { setError(err.message); } finally { setLoading(false); }
+  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
+
+  // Сброс страницы при смене фильтров
+  useEffect(() => {
+    setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }, [filtersKey]);
+
+  useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
+
+  if (error) return <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>Ошибка загрузки: {error}</Alert>;
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+      
+      {/* Тулбар */}
+      <Box sx={{ 
+        display: 'flex', alignItems: 'center', gap: 1, 
+        px: 2, py: 1, bgcolor: '#f1f5f9', 
+        borderRadius: '12px 12px 0 0',
+        border: '1px solid #e2e8f0', borderBottom: 'none',
+      }}>
+        <Button size="small" startIcon={<ColumnsIcon />}
+          onClick={(e) => setColumnsAnchor(e.currentTarget)}
+          sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
+        <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
+          onClose={() => setColumnsAnchor(null)}
+          slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
+          <MenuItem dense onClick={showAllColumns}>
+            <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
+          <MenuItem dense onClick={hideAllColumns}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
+          <Divider />
+          {columns.map(col => (
+            <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
+              <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
+              <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
+            </MenuItem>
+          ))}
+        </Menu>
+
+        <TextField size="small" placeholder="Поиск..." value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
+          sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
+
+        <Box sx={{ flex: 1 }} />
+
+        {totalRows > 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+            {totalRows.toLocaleString('ru-RU')} строк
+          </Typography>
+        )}
+
+        <ButtonGroup size="small" variant="text">
+          <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+            sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+          <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+            sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+        </ButtonGroup>
+      </Box>
+
+      {/* Диалог подтверждения большого экспорта */}
+      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false, data: null })}>
+        <DialogTitle>Подтверждение экспорта</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Количество строк для экспорта: {(exportDialog.data?.length || 0).toLocaleString('ru-RU')}.<br />
+            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
+            Продолжить?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportDialog({ open: false, data: null })}>Отмена</Button>
+          <Button variant="contained" onClick={() => confirmedExportXLSX(exportDialog.data)}>
+            Экспортировать
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Таблица */}
+      <DataGrid 
+        apiRef={apiRef}
+        rows={rows} 
+        columns={visibleCols}
+        getRowId={(row) => row._rowId}
+        loading={loading} 
+        sortingMode="server"
+        paginationMode="server"
+        rowCount={totalRows}
+        paginationModel={paginationModel}
+        onPaginationModelChange={setPaginationModel}
+        disableColumnFilter
+        onRowClick={onRowClick}
+        pageSizeOptions={[25, 50, 100]} 
+        disableRowSelectionOnClick
+        sx={{ 
+          flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
+          borderRadius: '0 0 12px 12px',
+          '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
+          '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
+        }} 
+      />
+    </Box>
+  );
+}
+```
+
+## File: frontend/src/hooks/usePromoData.js
+```javascript
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useCallback } from 'react';
+
+/**
+ * Хук для получения данных промо с использованием React Query.
+ * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
+ * и state-машину loading/error.
+ *
+ * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
+ * чтобы не ломать PromoAnalysis.jsx.
+ */
+export function usePromoData(filters, refreshTrigger) {
+  const queryClient = useQueryClient();
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  // Стабильный queryKey на основе фильтров и refreshTrigger
+  const queryKey = ['promoData', filters, refreshTrigger];
+
+  const fetchPromoData = useCallback(async ({ signal }) => {
+    const currentFilters = filtersRef.current;
+    const params = new URLSearchParams();
+    Object.entries(currentFilters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
+    });
+
+    const qs = params.toString();
+    const response = await fetch(
+      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+      {
+        signal,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      }
+    );
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  }, []);
+
+  const { data: rows = [], isLoading, error, refetch } = useQuery({
+    queryKey,
+    queryFn: fetchPromoData,
+  });
+
+  // setRows — для обратной совместимости: обновляет кеш React Query
+  const setRows = useCallback((newRowsOrUpdater) => {
+    queryClient.setQueryData(queryKey, (old) => {
+      if (typeof newRowsOrUpdater === 'function') {
+        return newRowsOrUpdater(old || []);
+      }
+      return newRowsOrUpdater;
+    });
+  }, [queryClient, queryKey]);
+
+  return {
+    rows,
+    setRows,
+    loading: isLoading,
+    error: error?.message || null,
+    refetch,
+  };
+}
+```
+
+## File: backend/models/types.go
+```go
+package models
+
+// PtrFloat возвращает указатель на float64.
+func PtrFloat(v float64) *float64 { return &v }
+
+// PtrInt возвращает указатель на int.
+func PtrInt(v int) *int { return &v }
+
+// ValFloat возвращает значение по указателю или 0.
+func ValFloat(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// ValInt возвращает значение по указателю или 0.
+func ValInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+type Row struct {
+	ID          int     `json:"id"`
+	Year        int     `json:"year"`
+	Month       int     `json:"month"`
+	BrandName   string  `json:"brandName"`
+	ProductName string  `json:"productName"`
+	NetworkName string  `json:"networkName"`
+	MetricType  string  `json:"metricType"`
+	MetricValue float64 `json:"metricValue"`
+	UnRub       *string `json:"un_rub"`
+	Segment     *string `json:"segment"`
+	Channel     *string `json:"channel"`
+	UpdatedAt   *string `json:"updated_at"`
+}
+
+type PromoRow struct {
+	ID                      int      `json:"id"`
+	NetworkName             *string  `json:"network_name"`
+	KAM                     *string  `json:"kam"`
+	IDDirectum              *string  `json:"id_directum"`
+	DSNumber                *string  `json:"ds_number"`
+	Year                    int      `json:"year"`
+	Month                   *int     `json:"month"`
+	Quarter                 *int     `json:"quarter"`
+	SKU                     *string  `json:"sku"`
+	Brand                   *string  `json:"brand"`
+	BrandAS                 *string  `json:"brand_as"`
+	Mechanics               *string  `json:"mechanics"`
+	DiscountAmount          *float64 `json:"discount_amount"`
+	GTNOpex                 *string  `json:"gtn_opex"`
+	Conditions              *string  `json:"conditions"`
+	Comments                *string  `json:"comments"`
+	BaselineUnits           *float64 `json:"baseline_units"`
+	BaselineRub             *float64 `json:"baseline_rub"`
+	PlanPromoUnits          *float64 `json:"plan_promo_units"`
+	PlanPromoRub            *float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub      *float64 `json:"plan_investments_rub"`
+	PlanPromoUpliftUnits    *float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub      *float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits *float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub   *float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct      *float64 `json:"plan_investments_pct"`
+	PlanROI                 *float64 `json:"plan_roi"`
+	ContractPrice           *float64 `json:"contract_price"`
+	GM                      *float64 `json:"gm"`
+	TotalPharmacies         *int     `json:"total_pharmacies"`
+	PromoPharmacies         *int     `json:"promo_pharmacies"`
+	ActualPromoSalesUnits   *float64 `json:"actual_promo_sales_units"`
+	ActualInvestments       *float64 `json:"actual_investments"`
+	Status                  *string  `json:"status"`
+	ActualPromoRub          *float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits  *float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub    *float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits *float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline *float64 `json:"actual_corrected_baseline"`
+	ActualROI               *float64 `json:"actual_roi"`
+	PlanVsFactRub           *float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments   *float64 `json:"plan_vs_fact_investments"`
+	PromoChannel            *string  `json:"channel"`
+	Agreement1              *string  `json:"agreement1"`
+	Agreement2              *string  `json:"agreement2"`
+	Date                    *string  `json:"date"`
+	CreatedAt               *string  `json:"created_at"`
+	UpdatedAt               *string  `json:"updated_at"`
+}
+
+type HistoryRow struct {
+	ID                     int      `json:"id"`
+	NetworkName            *string  `json:"network_name"`
+	Year                   int      `json:"year"`
+	Month                  int      `json:"month"`
+	Mechanics              *string  `json:"mechanics"`
+	SKU                    *string  `json:"sku"`
+	BaselineUnits          *float64 `json:"baseline_units"`
+	PlanPromoUnits         *float64 `json:"plan_promo_units"`
+	ActualPromoSalesUnits  *float64 `json:"actual_promo_sales_units"`
+	PlanPromoUpliftUnits   *float64 `json:"plan_promo_uplift_units"`
+	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
+	PlanROI                *float64 `json:"plan_roi"`
+	ActualROI              *float64 `json:"actual_roi"`
+}
+
+type DrilldownRow struct {
+	Year       int     `json:"year"`
+	Month      int     `json:"month"`
+	MetricType string  `json:"metricType"`
+	TotalValue float64 `json:"totalValue"`
+	UnRub      *string `json:"un_rub"`
+	Segment    *string `json:"segment"`
+	Channel    *string `json:"channel"`
+}
+
+type NetworkGeo struct {
+	KAM          string `json:"kam"`
+	NetworkType  string `json:"network_type"`
+	Top20Segment string `json:"top20_segment"`
+	KeyRegion    string `json:"key_region"`
+}
+
+type LastSKUData struct {
+	ContractPrice   float64 `json:"contract_price"`
+	GM              float64 `json:"gm"`
+	TotalPharmacies int64   `json:"total_pharmacies"`
+	KeyRegion       string  `json:"key_region"`
+	Top20Segment    string  `json:"top20_segment"`
+	OlapPrice       float64 `json:"olap_price"`
+}
+
+// PromoRowDB — полная структура для записи/чтения строки в БД.
+// Числовые поля — указатели, чтобы отличать NULL от 0.
+// Строковые поля — value-типы (пустая строка = NULL/отсутствует).
+type PromoRowDB struct {
+	ID                           int      `json:"id"`
+	NetworkName                  string   `json:"network_name"`
+	KAM                          string   `json:"kam"`
+	Brand                        string   `json:"brand"`
+	BrandAS                      string   `json:"brand_as"`
+	SKU                          string   `json:"sku"`
+	Year                         int      `json:"year"`
+	Month                        int      `json:"month"`
+	Quarter                      *int     `json:"quarter"`
+	Mechanics                    string   `json:"mechanics"`
+	GTNOpex                      string   `json:"gtn_opex"`
+	BaselineUnits                *float64 `json:"baseline_units"`
+	BaselineRub                  *float64 `json:"baseline_rub"`
+	PlanPromoUnits               *float64 `json:"plan_promo_units"`
+	PlanPromoRub                 *float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub           *float64 `json:"plan_investments_rub"`
+	PlanPromoUpliftUnits         *float64 `json:"plan_promo_uplift_units"`
+	PlanPromoUpliftRub           *float64 `json:"plan_promo_uplift_rub"`
+	PlanPromoUpliftPctUnits      *float64 `json:"plan_promo_uplift_pct_units"`
+	PlanPromoUpliftPctRub        *float64 `json:"plan_promo_uplift_pct_rub"`
+	PlanInvestmentsPct           *float64 `json:"plan_investments_pct"`
+	PlanROI                      *float64 `json:"plan_roi"`
+	ContractPrice                *float64 `json:"contract_price"`
+	GM                           *float64 `json:"gm"`
+	IDDirectum                   string   `json:"id_directum"`
+	DSNumber                     string   `json:"ds_number"`
+	DiscountAmount               *float64 `json:"discount_amount"`
+	Conditions                   string   `json:"conditions"`
+	Comments                     string   `json:"comments"`
+	EcomSegment                  string   `json:"ecom_segment"`
+	TotalPharmacies              *int     `json:"total_pharmacies"`
+	PromoPharmacies              *int     `json:"promo_pharmacies"`
+	Status                       string   `json:"status"`
+	Date                         string   `json:"date"`
+	KeyRegion                    string   `json:"key_region"`
+	Top20Segment                 string   `json:"top20_segment"`
+	OlapPrice                    *float64 `json:"olap_price"`
+	PlanPromoCipOlap             *float64 `json:"plan_promo_cip_olap"`
+	FactPromoCipOlap             *float64 `json:"fact_promo_cip_olap"`
+	PlanPromoUpliftCipOlap       *float64 `json:"plan_promo_uplift_cip_olap"`
+	FactPromoUpliftCipOlap       *float64 `json:"fact_promo_uplift_cip_olap"`
+	ActualPromoSalesUnits        *float64 `json:"actual_promo_sales_units"`
+	ActualInvestments            *float64 `json:"actual_investments"`
+	ActualPromoRub               *float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits       *float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub         *float64 `json:"actual_promo_uplift_rub"`
+	ActualExternalEcomUnits      *float64 `json:"actual_external_ecom_units"`
+	ActualCorrectedBaseline      *float64 `json:"actual_corrected_baseline"`
+	Agreement1                   string   `json:"agreement1"`
+	Agreement2                   string   `json:"agreement2"`
+	NetPromoUpliftRub            *float64 `json:"net_promo_uplift_rub"`
+	NetPromoUpliftPct            *float64 `json:"net_promo_uplift_pct"`
+	ActualInvestmentsPct         *float64 `json:"actual_investments_pct"`
+	ActualROI                    *float64 `json:"actual_roi"`
+	ActualPromoRubWoEcom         *float64 `json:"actual_promo_rub_wo_ecom"`
+	ActualPromoUpliftUnitsWoEcom *float64 `json:"actual_promo_uplift_units_wo_ecom"`
+	ActualPromoUpliftRubWoEcom   *float64 `json:"actual_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftRubWoEcom      *float64 `json:"net_promo_uplift_rub_wo_ecom"`
+	NetPromoUpliftPctWoEcom      *float64 `json:"net_promo_uplift_pct_wo_ecom"`
+	ActualInvestmentsPctWoEcom   *float64 `json:"actual_investments_pct_wo_ecom"`
+	ActualROIWoEcom              *float64 `json:"actual_roi_wo_ecom"`
+	PlanVsFactRub                *float64 `json:"plan_vs_fact_rub"`
+	PlanVsFactInvestments        *float64 `json:"plan_vs_fact_investments"`
+	TurnoverPerPoint             *float64 `json:"turnover_per_point"`
+	TurnoverPerPointPromo        *float64 `json:"turnover_per_point_promo"`
+	UpdatedAt                    string   `json:"updated_at"`
+}
+
+type ApprovalRow struct {
+	ID                    int      `json:"id"`
+	NetworkName           *string  `json:"network_name"`
+	BrandAS               *string  `json:"brand_as"`
+	SKU                   *string  `json:"sku"`
+	Mechanics             *string  `json:"mechanics"`
+	Year                  int      `json:"year"`
+	Month                 *int     `json:"month"`
+	BaselineUnits         *float64 `json:"baseline_units"`
+	PlanPromoUnits        *float64 `json:"plan_promo_units"`
+	ActualPromoSalesUnits *float64 `json:"actual_promo_sales_units"`
+	PlanInvestmentsRub    *float64 `json:"plan_investments_rub"`
+	PlanROI               *float64 `json:"plan_roi"`
+	ActualROI             *float64 `json:"actual_roi"`
+	Conditions            *string  `json:"conditions"`
+	Comments              *string  `json:"comments"`           // история переписки КАМ + согласующих
+	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
+	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
+	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
+	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
+	Agreement2Status      *string  `json:"agreement2_status"`
+	Agreement2Comment     *string  `json:"agreement2_comment"`
+	Status                *string  `json:"status"`
+	HistoricalCount       int      `json:"historical_count"`
+	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
 }
 ```
 
@@ -6325,6 +6736,7 @@ type ApprovalParams struct {
 	Network           string
 	Brand             string
 	Mechanics         string
+	HasComments       bool
 }
 
 func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
@@ -6336,7 +6748,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
-			p.conditions, p.agreement1, p.agreement2, p.status,
+			p.conditions, p.comments,
+			p.agreement1, p.agreement2, p.status,
 			p.agreement1_status, p.agreement1_comment,
 			p.agreement2_status, p.agreement2_comment,
 			0 as historical_count,
@@ -6385,6 +6798,10 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		args = append(args, params.Mechanics)
 	}
 
+	if params.HasComments {
+		query += " AND p.comments IS NOT NULL AND p.comments != ''"
+	}
+
 	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
 	statusField := "p.agreement1_status"
 	if params.Role == "agreement2" {
@@ -6417,7 +6834,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 			&r.ID, &r.NetworkName, &r.BrandAS, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
 			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
 			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
-			&r.Conditions, &r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Conditions, &r.Comments,
+			&r.Agreement1, &r.Agreement2, &r.Status,
 			&r.Agreement1Status, &r.Agreement1Comment,
 			&r.Agreement2Status, &r.Agreement2Comment,
 			&r.HistoricalCount, &r.AvgHistoricalROI,
@@ -6432,18 +6850,64 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	return results, nil
 }
 
-// ApprovePromoWithStatus — обновляет agreement1/agreement2 и новые поля _status/_comment
-func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string) error {
+// ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
+// и добавляет комментарий в поле comments с пометкой автора (не затирает историю).
+func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string, username string) error {
 	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
 	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
 	agreementField := fmt.Sprintf("agreement%d", agreementNum)
 
+	// Читаем текущее значение comments
+	var currentComments sql.NullString
+	if err := config.DB.QueryRow(
+		"SELECT comments FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id,
+	).Scan(&currentComments); err != nil {
+		return err
+	}
+
+	// Добавляем новый комментарий с пометкой автора и времени
+	newComments := currentComments.String
+	if comment != "" {
+		timestamp := time.Now().Format("02.01.2006 15:04")
+		commentLine := fmt.Sprintf("[%s %s]: %s\n", timestamp, username, comment)
+		newComments += commentLine
+	}
+
 	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
 		agreementField, statusField, commentField,
 	)
-	_, err := config.DB.Exec(query, legacyValue, status, comment, id)
+	_, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
 	return err
+}
+
+// BatchApprove — массовое согласование массива ID
+func BatchApprove(agreementNum int, ids []int, status string, comment string, legacyValue string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
+	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
+	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+
+	placeholders := make([]string, 0, len(ids))
+	args := []interface{}{legacyValue, status, comment}
+	for _, id := range ids {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(
+		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id IN (%s) AND deleted_at IS NULL",
+		agreementField, statusField, commentField, strings.Join(placeholders, ","),
+	)
+
+	result, err := config.DB.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // ─── Approval Filters ───────────────────────────────────────────────────────
@@ -6645,239 +7109,6 @@ func GetApprovalBrands(field, kam, network string) ([]string, error) {
 		brands = []string{}
 	}
 	return brands, nil
-}
-```
-
-## File: backend/models/types.go
-```go
-package models
-
-// PtrFloat возвращает указатель на float64.
-func PtrFloat(v float64) *float64 { return &v }
-
-// PtrInt возвращает указатель на int.
-func PtrInt(v int) *int { return &v }
-
-// ValFloat возвращает значение по указателю или 0.
-func ValFloat(p *float64) float64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
-// ValInt возвращает значение по указателю или 0.
-func ValInt(p *int) int {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
-type Row struct {
-	ID          int     `json:"id"`
-	Year        int     `json:"year"`
-	Month       int     `json:"month"`
-	BrandName   string  `json:"brandName"`
-	ProductName string  `json:"productName"`
-	NetworkName string  `json:"networkName"`
-	MetricType  string  `json:"metricType"`
-	MetricValue float64 `json:"metricValue"`
-	UnRub       *string `json:"un_rub"`
-	Segment     *string `json:"segment"`
-	Channel     *string `json:"channel"`
-	UpdatedAt   *string `json:"updated_at"`
-}
-
-type PromoRow struct {
-	ID                      int      `json:"id"`
-	NetworkName             *string  `json:"network_name"`
-	KAM                     *string  `json:"kam"`
-	IDDirectum              *string  `json:"id_directum"`
-	DSNumber                *string  `json:"ds_number"`
-	Year                    int      `json:"year"`
-	Month                   *int     `json:"month"`
-	Quarter                 *int     `json:"quarter"`
-	SKU                     *string  `json:"sku"`
-	Brand                   *string  `json:"brand"`
-	BrandAS                 *string  `json:"brand_as"`
-	Mechanics               *string  `json:"mechanics"`
-	DiscountAmount          *float64 `json:"discount_amount"`
-	GTNOpex                 *string  `json:"gtn_opex"`
-	Conditions              *string  `json:"conditions"`
-	Comments                *string  `json:"comments"`
-	BaselineUnits           *float64 `json:"baseline_units"`
-	BaselineRub             *float64 `json:"baseline_rub"`
-	PlanPromoUnits          *float64 `json:"plan_promo_units"`
-	PlanPromoRub            *float64 `json:"plan_promo_rub"`
-	PlanInvestmentsRub      *float64 `json:"plan_investments_rub"`
-	PlanPromoUpliftUnits    *float64 `json:"plan_promo_uplift_units"`
-	PlanPromoUpliftRub      *float64 `json:"plan_promo_uplift_rub"`
-	PlanPromoUpliftPctUnits *float64 `json:"plan_promo_uplift_pct_units"`
-	PlanPromoUpliftPctRub   *float64 `json:"plan_promo_uplift_pct_rub"`
-	PlanInvestmentsPct      *float64 `json:"plan_investments_pct"`
-	PlanROI                 *float64 `json:"plan_roi"`
-	ContractPrice           *float64 `json:"contract_price"`
-	GM                      *float64 `json:"gm"`
-	TotalPharmacies         *int     `json:"total_pharmacies"`
-	PromoPharmacies         *int     `json:"promo_pharmacies"`
-	ActualPromoSalesUnits   *float64 `json:"actual_promo_sales_units"`
-	ActualInvestments       *float64 `json:"actual_investments"`
-	Status                  *string  `json:"status"`
-	ActualPromoRub          *float64 `json:"actual_promo_rub"`
-	ActualPromoUpliftUnits  *float64 `json:"actual_promo_uplift_units"`
-	ActualPromoUpliftRub    *float64 `json:"actual_promo_uplift_rub"`
-	ActualExternalEcomUnits *float64 `json:"actual_external_ecom_units"`
-	ActualCorrectedBaseline *float64 `json:"actual_corrected_baseline"`
-	ActualROI               *float64 `json:"actual_roi"`
-	PlanVsFactRub           *float64 `json:"plan_vs_fact_rub"`
-	PlanVsFactInvestments   *float64 `json:"plan_vs_fact_investments"`
-	PromoChannel            *string  `json:"channel"`
-	Agreement1              *string  `json:"agreement1"`
-	Agreement2              *string  `json:"agreement2"`
-	Date                    *string  `json:"date"`
-	CreatedAt               *string  `json:"created_at"`
-	UpdatedAt               *string  `json:"updated_at"`
-}
-
-type HistoryRow struct {
-	ID                     int      `json:"id"`
-	NetworkName            *string  `json:"network_name"`
-	Year                   int      `json:"year"`
-	Month                  int      `json:"month"`
-	Mechanics              *string  `json:"mechanics"`
-	SKU                    *string  `json:"sku"`
-	BaselineUnits          *float64 `json:"baseline_units"`
-	PlanPromoUnits         *float64 `json:"plan_promo_units"`
-	ActualPromoSalesUnits  *float64 `json:"actual_promo_sales_units"`
-	PlanPromoUpliftUnits   *float64 `json:"plan_promo_uplift_units"`
-	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
-	PlanROI                *float64 `json:"plan_roi"`
-	ActualROI              *float64 `json:"actual_roi"`
-}
-
-type DrilldownRow struct {
-	Year       int     `json:"year"`
-	Month      int     `json:"month"`
-	MetricType string  `json:"metricType"`
-	TotalValue float64 `json:"totalValue"`
-	UnRub      *string `json:"un_rub"`
-	Segment    *string `json:"segment"`
-	Channel    *string `json:"channel"`
-}
-
-type NetworkGeo struct {
-	KAM          string `json:"kam"`
-	NetworkType  string `json:"network_type"`
-	Top20Segment string `json:"top20_segment"`
-	KeyRegion    string `json:"key_region"`
-}
-
-type LastSKUData struct {
-	ContractPrice   float64 `json:"contract_price"`
-	GM              float64 `json:"gm"`
-	TotalPharmacies int64   `json:"total_pharmacies"`
-	KeyRegion       string  `json:"key_region"`
-	Top20Segment    string  `json:"top20_segment"`
-	OlapPrice       float64 `json:"olap_price"`
-}
-
-// PromoRowDB — полная структура для записи/чтения строки в БД.
-// Числовые поля — указатели, чтобы отличать NULL от 0.
-// Строковые поля — value-типы (пустая строка = NULL/отсутствует).
-type PromoRowDB struct {
-	ID                           int      `json:"id"`
-	NetworkName                  string   `json:"network_name"`
-	KAM                          string   `json:"kam"`
-	Brand                        string   `json:"brand"`
-	BrandAS                      string   `json:"brand_as"`
-	SKU                          string   `json:"sku"`
-	Year                         int      `json:"year"`
-	Month                        int      `json:"month"`
-	Quarter                      *int     `json:"quarter"`
-	Mechanics                    string   `json:"mechanics"`
-	GTNOpex                      string   `json:"gtn_opex"`
-	BaselineUnits                *float64 `json:"baseline_units"`
-	BaselineRub                  *float64 `json:"baseline_rub"`
-	PlanPromoUnits               *float64 `json:"plan_promo_units"`
-	PlanPromoRub                 *float64 `json:"plan_promo_rub"`
-	PlanInvestmentsRub           *float64 `json:"plan_investments_rub"`
-	PlanPromoUpliftUnits         *float64 `json:"plan_promo_uplift_units"`
-	PlanPromoUpliftRub           *float64 `json:"plan_promo_uplift_rub"`
-	PlanPromoUpliftPctUnits      *float64 `json:"plan_promo_uplift_pct_units"`
-	PlanPromoUpliftPctRub        *float64 `json:"plan_promo_uplift_pct_rub"`
-	PlanInvestmentsPct           *float64 `json:"plan_investments_pct"`
-	PlanROI                      *float64 `json:"plan_roi"`
-	ContractPrice                *float64 `json:"contract_price"`
-	GM                           *float64 `json:"gm"`
-	IDDirectum                   string   `json:"id_directum"`
-	DSNumber                     string   `json:"ds_number"`
-	DiscountAmount               *float64 `json:"discount_amount"`
-	Conditions                   string   `json:"conditions"`
-	Comments                     string   `json:"comments"`
-	EcomSegment                  string   `json:"ecom_segment"`
-	TotalPharmacies              *int     `json:"total_pharmacies"`
-	PromoPharmacies              *int     `json:"promo_pharmacies"`
-	Status                       string   `json:"status"`
-	Date                         string   `json:"date"`
-	KeyRegion                    string   `json:"key_region"`
-	Top20Segment                 string   `json:"top20_segment"`
-	OlapPrice                    *float64 `json:"olap_price"`
-	PlanPromoCipOlap             *float64 `json:"plan_promo_cip_olap"`
-	FactPromoCipOlap             *float64 `json:"fact_promo_cip_olap"`
-	PlanPromoUpliftCipOlap       *float64 `json:"plan_promo_uplift_cip_olap"`
-	FactPromoUpliftCipOlap       *float64 `json:"fact_promo_uplift_cip_olap"`
-	ActualPromoSalesUnits        *float64 `json:"actual_promo_sales_units"`
-	ActualInvestments            *float64 `json:"actual_investments"`
-	ActualPromoRub               *float64 `json:"actual_promo_rub"`
-	ActualPromoUpliftUnits       *float64 `json:"actual_promo_uplift_units"`
-	ActualPromoUpliftRub         *float64 `json:"actual_promo_uplift_rub"`
-	ActualExternalEcomUnits      *float64 `json:"actual_external_ecom_units"`
-	ActualCorrectedBaseline      *float64 `json:"actual_corrected_baseline"`
-	Agreement1                   string   `json:"agreement1"`
-	Agreement2                   string   `json:"agreement2"`
-	NetPromoUpliftRub            *float64 `json:"net_promo_uplift_rub"`
-	NetPromoUpliftPct            *float64 `json:"net_promo_uplift_pct"`
-	ActualInvestmentsPct         *float64 `json:"actual_investments_pct"`
-	ActualROI                    *float64 `json:"actual_roi"`
-	ActualPromoRubWoEcom         *float64 `json:"actual_promo_rub_wo_ecom"`
-	ActualPromoUpliftUnitsWoEcom *float64 `json:"actual_promo_uplift_units_wo_ecom"`
-	ActualPromoUpliftRubWoEcom   *float64 `json:"actual_promo_uplift_rub_wo_ecom"`
-	NetPromoUpliftRubWoEcom      *float64 `json:"net_promo_uplift_rub_wo_ecom"`
-	NetPromoUpliftPctWoEcom      *float64 `json:"net_promo_uplift_pct_wo_ecom"`
-	ActualInvestmentsPctWoEcom   *float64 `json:"actual_investments_pct_wo_ecom"`
-	ActualROIWoEcom              *float64 `json:"actual_roi_wo_ecom"`
-	PlanVsFactRub                *float64 `json:"plan_vs_fact_rub"`
-	PlanVsFactInvestments        *float64 `json:"plan_vs_fact_investments"`
-	TurnoverPerPoint             *float64 `json:"turnover_per_point"`
-	TurnoverPerPointPromo        *float64 `json:"turnover_per_point_promo"`
-	UpdatedAt                    string   `json:"updated_at"`
-}
-
-type ApprovalRow struct {
-	ID                    int      `json:"id"`
-	NetworkName           *string  `json:"network_name"`
-	BrandAS               *string  `json:"brand_as"`
-	SKU                   *string  `json:"sku"`
-	Mechanics             *string  `json:"mechanics"`
-	Year                  int      `json:"year"`
-	Month                 *int     `json:"month"`
-	BaselineUnits         *float64 `json:"baseline_units"`
-	PlanPromoUnits        *float64 `json:"plan_promo_units"`
-	ActualPromoSalesUnits *float64 `json:"actual_promo_sales_units"`
-	PlanInvestmentsRub    *float64 `json:"plan_investments_rub"`
-	PlanROI               *float64 `json:"plan_roi"`
-	ActualROI             *float64 `json:"actual_roi"`
-	Conditions            *string  `json:"conditions"`
-	Agreement1            *string  `json:"agreement1"`         // обратная совместимость
-	Agreement1Status      *string  `json:"agreement1_status"`  // pending/approved/rejected/commented
-	Agreement1Comment     *string  `json:"agreement1_comment"` // текст комментария
-	Agreement2            *string  `json:"agreement2"`         // обратная совместимость
-	Agreement2Status      *string  `json:"agreement2_status"`
-	Agreement2Comment     *string  `json:"agreement2_comment"`
-	Status                *string  `json:"status"`
-	HistoricalCount       int      `json:"historical_count"`
-	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
 }
 ```
 
@@ -7352,6 +7583,7 @@ func main() {
 		api.GET("/promo/approval-networks", handlers.GetApprovalNetworks)
 		api.GET("/promo/approval-brands", handlers.GetApprovalBrands)
 		api.POST("/promo/approve", handlers.ApprovePromo)
+		api.POST("/promo/approve/batch", handlers.BatchApprovePromo)
 
 		// Промо — удаление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)
@@ -7381,6 +7613,9 @@ import {
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import FilterPanel from '../components/FilterPanel';
 import PromoForm from './PromoForm';
@@ -7491,9 +7726,11 @@ export default function PromoAnalysis({ role }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [exportDialog, setExportDialog] = useState({ open: false });
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const map = {};
@@ -7530,6 +7767,11 @@ export default function PromoAnalysis({ role }) {
     usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
+  // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
+  useEffect(() => {
+    if (tab === 0) refetch();
+  }, [tab]);
+
   // ─── Загрузка справочников ────────────────────────────────────────────
   useEffect(() => { promoAPI.getInvestmentTypes().then(data => setInvestmentTypes(data.data || [])); }, []);
   useEffect(() => { 
@@ -7564,16 +7806,24 @@ export default function PromoAnalysis({ role }) {
     setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
   };
 
-  // ─── Поиск по таблице (клиентский) ────────────────────────────────────
+  // Debounce поиска (300ms) — чтобы не тормозить при вводе
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  // ─── Поиск по таблице (клиентский, с debounce) ────────────────────────
   const filteredRows = useMemo(() => {
-    if (!searchText.trim()) return rows;
-    const lower = searchText.toLowerCase();
+    if (!debouncedSearch) return rows;
+    const lower = debouncedSearch.toLowerCase();
     return rows.filter(row =>
       Object.values(row).some(val =>
         val != null && String(val).toLowerCase().includes(lower)
       )
     );
-  }, [rows, searchText]);
+  }, [rows, debouncedSearch]);
 
   const visibleCols = useMemo(
     () => COLUMNS.filter(c => visibleColumns[c.field] !== false),
@@ -7582,20 +7832,10 @@ export default function PromoAnalysis({ role }) {
 
   const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
 
-  // ─── Экспорт CSV ──────────────────────────────────────────────────────
-  const handleExport = async () => {
+  // ─── Экспорт CSV (клиентский — выгружаем отфильтрованные строки) ─────
+  const handleExportCSV = () => {
     try {
-      const params = new URLSearchParams();
-      params.set('all', 'true');
-      Object.entries(appliedFilters).forEach(([k, v]) => {
-        if (Array.isArray(v)) v.forEach(x => { if (x) params.append(k, String(x)); });
-        else if (v) params.set(k, String(v));
-      });
-      const res = await fetch(`http://localhost:8080/api/promo/data?${params}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      });
-      const json = await res.json();
-      const data = json.data || [];
+      const data = filteredRows;
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';
@@ -7608,12 +7848,42 @@ export default function PromoAnalysis({ role }) {
         }).join(';') + '\n';
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'promo-analysis.csv';
-      link.click();
-      URL.revokeObjectURL(link.href);
+      saveAs(blob, `promo-analysis_${new Date().toISOString().split('T')[0]}.csv`);
     } catch (e) { console.error('Export error:', e); }
+  };
+
+  const confirmedExportXLSX = async () => {
+    try {
+      const data = filteredRows;
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Promo Data');
+
+      worksheet.columns = visibleCols.map(c => ({
+        header: c.headerName || c.field,
+        key: c.field,
+        width: c.width ? c.width / 7 : 20,
+      }));
+
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+      data.forEach(row => worksheet.addRow(row));
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `promo-analysis_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) { console.error('Export error:', e); } finally {
+      setExportDialog({ open: false });
+    }
+  };
+
+  const handleExportXLSX = () => {
+    if (filteredRows.length > 10000) {
+      setExportDialog({ open: true });
+    } else {
+      confirmedExportXLSX();
+    }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────
@@ -7685,8 +7955,12 @@ export default function PromoAnalysis({ role }) {
                 {rows.length.toLocaleString('ru-RU')} строк
               </Typography>
             )}
-            <Button size="small" startIcon={<ExportIcon />} onClick={handleExport}
-              sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+            <ButtonGroup size="small" variant="text">
+              <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+                sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+              <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+                sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+            </ButtonGroup>
           </Box>
 
           <DataGrid 
@@ -7735,6 +8009,24 @@ export default function PromoAnalysis({ role }) {
           </DialogActions>
         </Dialog>
       </>)}
+
+      {/* Диалог подтверждения большого экспорта */}
+      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false })}>
+        <DialogTitle>Подтверждение экспорта</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Количество строк для экспорта: {filteredRows.length.toLocaleString('ru-RU')}.<br />
+            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
+            Продолжить?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportDialog({ open: false })}>Отмена</Button>
+          <Button variant="contained" onClick={confirmedExportXLSX}>
+            Экспортировать
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
@@ -7896,6 +8188,7 @@ export const promoAPI = {
     if (params.network_name) qs.set('network_name', params.network_name);
     if (params.brand) qs.set('brand', params.brand);
     if (params.mechanics) qs.set('mechanics', params.mechanics);
+    if (params.has_comments) qs.set('has_comments', '1');
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
   },
 
@@ -7917,6 +8210,17 @@ export const promoAPI = {
     fetchWithAuth(`${API_BASE}/api/promo/approve`, {
       method: 'POST',
       body: JSON.stringify({ id, status, comment }),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
+      return json;
+    }),
+
+  // Массовое согласование
+  batchApprove: (ids, status, comment = '') =>
+    fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ ids, status, comment }),
     }).then(async r => {
       const json = await r.json();
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
@@ -8198,9 +8502,22 @@ func GetLastSKUData(c *gin.Context) {
 
 func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
-		if k == "id" || k == "deleted_at" || k == "updated_at" || k == "status" || strings.HasPrefix(k, "agreement") {
+		if k == "id" || k == "deleted_at" || k == "updated_at" ||
+			k == "agreement1_status" || k == "agreement1_comment" ||
+			k == "agreement2_status" || k == "agreement2_comment" {
 			continue
 		}
+
+		// Если значение nil или строка "<nil>" — пропускаем, чтобы не затирать поле мусором.
+		// Пустую строку обрабатываем ниже — она должна очищать строковые поля.
+		if v == nil {
+			continue
+		}
+		strVal := fmt.Sprint(v)
+		if strVal == "<nil>" {
+			continue
+		}
+
 		switch k {
 		case "network_name":
 			r.NetworkName = fmt.Sprint(v)
@@ -8266,6 +8583,8 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 			r.Comments = fmt.Sprint(v)
 		case "ecom_segment":
 			r.EcomSegment = fmt.Sprint(v)
+		case "status":
+			r.Status = fmt.Sprint(v)
 		case "total_pharmacies":
 			if val, err := strconv.Atoi(fmt.Sprint(v)); err == nil {
 				r.TotalPharmacies = &val
@@ -8357,7 +8676,14 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			row.UpdatedAt = time.Now().Format("2006-01-02T15:04:05.9999999-07:00")
+			// Перечитываем строку из БД, чтобы получить точный updated_at из GETDATE()
+			refetched, fetchErr := repository.FetchExistingRow(idInt)
+			if fetchErr != nil {
+				config.Logger.Error("promo_update_refetch_failed", "error", fetchErr.Error(), "id", idInt)
+				// Возвращаем как есть, без обновлённого updated_at
+				c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
+				return
+			}
 
 			usernameVal, _ := c.Get("username")
 			config.Logger.Info("promo_updated",
@@ -8367,7 +8693,7 @@ func SavePromo(c *gin.Context) {
 				"user", fmt.Sprint(usernameVal),
 				"timestamp", time.Now().Format(time.RFC3339),
 			)
-			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(row)})
+			c.JSON(http.StatusOK, gin.H{"message": "Updated", "id": idInt, "data": services.DBRowToMap(refetched)})
 			return
 		}
 	}
@@ -8446,6 +8772,7 @@ func GetApprovals(c *gin.Context) {
 		Network:        c.Query("network_name"),
 		Brand:          c.Query("brand"),
 		Mechanics:      c.Query("mechanics"),
+		HasComments:    c.Query("has_comments") == "1",
 	}
 
 	results, err := repository.GetApprovals(params)
@@ -8511,13 +8838,13 @@ func ApprovePromo(c *gin.Context) {
 		agreementNum = 2
 	}
 
-	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue); err != nil {
+	usernameVal, _ := c.Get("username")
+	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue, fmt.Sprint(usernameVal)); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
 	}
 
-	usernameVal, _ := c.Get("username")
 	config.Logger.Info("promo_approved",
 		"id", req.ID,
 		"field", field,
@@ -8615,6 +8942,80 @@ func GetApprovalBrands(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": brands})
 }
 
+// ─── Batch Approve ─────────────────────────────────────────────────────────
+
+func BatchApprovePromo(c *gin.Context) {
+	role, _ := c.Get("role")
+	roleStr := fmt.Sprint(role)
+
+	agreementNum := 1
+	if roleStr == "agreement2" {
+		agreementNum = 2
+	}
+
+	var req struct {
+		IDs     []int  `json:"ids"`
+		Status  string `json:"status"`
+		Comment string `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+	if len(req.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids не может быть пустым"})
+		return
+	}
+
+	var status string
+	var comment string
+	var legacyValue string
+	switch req.Status {
+	case "comment":
+		if req.Comment == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "комментарий не может быть пустым"})
+			return
+		}
+		status = "commented"
+		comment = req.Comment
+		legacyValue = req.Comment
+	case "согласовано":
+		status = "approved"
+		comment = req.Comment
+		legacyValue = "согласовано"
+		if req.Comment != "" {
+			legacyValue = "согласовано: " + req.Comment
+		}
+	case "отклонено":
+		status = "rejected"
+		comment = req.Comment
+		legacyValue = "отклонено"
+		if req.Comment != "" {
+			legacyValue = "отклонено: " + req.Comment
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "допустимые status: comment, согласовано, отклонено"})
+		return
+	}
+
+	rowsAffected, err := repository.BatchApprove(agreementNum, req.IDs, status, comment, legacyValue)
+	if err != nil {
+		config.Logger.Error("batch_approve_failed", "error", err.Error(), "count", len(req.IDs))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
+		return
+	}
+
+	usernameVal, _ := c.Get("username")
+	config.Logger.Info("batch_approved",
+		"count", len(req.IDs),
+		"affected", rowsAffected,
+		"status", status,
+		"user", fmt.Sprint(usernameVal),
+		"timestamp", time.Now().Format(time.RFC3339),
+	)
+	c.JSON(http.StatusOK, gin.H{"message": "Обновлено", "affected": rowsAffected})
+}
+
 // ─── Log helpers (используются для логирования, оставлены для совместимости) ─
 
 func init() {
@@ -8626,15 +9027,27 @@ func init() {
 
 ## File: frontend/src/pages/PromoApproval.jsx
 ```javascript
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import {
   Box, Typography, CircularProgress, Alert, Snackbar,
   TextField, MenuItem, Dialog,
   DialogTitle, DialogContent, DialogActions,
-  Paper, Stack, Button,
+  Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
+  Checkbox, Table, TableBody, TableCell, TableContainer,
+  TableHead, TableRow,
+  Drawer, Accordion, AccordionSummary, AccordionDetails,
+  FormControlLabel, InputAdornment, IconButton,
 } from '@mui/material';
+import {
+  ViewModule as CardIcon,
+  TableRows as TableIcon,
+  Settings as SettingsIcon,
+  ExpandMore,
+  Search as SearchIcon,
+} from '@mui/icons-material';
 import ApprovalCard from '../components/ApprovalCard';
 import { promoAPI } from '../api/promo';
+import { FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS } from '../utils/cardFields';
 
 const MONTHS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
@@ -8652,6 +9065,27 @@ const APPROVAL_STATUSES = [
 ];
 
 export default function PromoApproval({ role, onDataChanged }) {
+  // Вид: cards | table
+  const [viewMode, setViewMode] = useState('cards');
+
+  // Настройка карточек (Drawer)
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchField, setSearchField] = useState('');
+  const [visibleFields, setVisibleFields] = useState(() => {
+    try {
+      const saved = localStorage.getItem('promo_card_fields_v2');
+      return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_FIELDS;
+    } catch { return DEFAULT_VISIBLE_FIELDS; }
+  });
+
+  const toggleField = (id) => {
+    setVisibleFields(prev => {
+      const next = prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id];
+      localStorage.setItem('promo_card_fields_v2', JSON.stringify(next));
+      return next;
+    });
+  };
+
   // Черновики фильтров (меняются сразу)
   const [draftKam, setDraftKam] = useState('');
   const [draftNetwork, setDraftNetwork] = useState('');
@@ -8660,11 +9094,12 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [draftStatus, setDraftStatus] = useState('pending');
   const [draftYear, setDraftYear] = useState(String(new Date().getFullYear()));
   const [draftMonth, setDraftMonth] = useState('');
+  const [draftHasComments, setDraftHasComments] = useState(false);
 
   // Флаг: была ли нажата кнопка «Применить»
   const [hasApplied, setHasApplied] = useState(false);
 
-  // Применённые фильтры (по кнопке «Применить»)
+  // Применённые фильтры
   const [appliedKam, setAppliedKam] = useState('');
   const [appliedNetwork, setAppliedNetwork] = useState('');
   const [appliedBrand, setAppliedBrand] = useState('');
@@ -8672,8 +9107,9 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [appliedStatus, setAppliedStatus] = useState('pending');
   const [appliedYear, setAppliedYear] = useState(String(new Date().getFullYear()));
   const [appliedMonth, setAppliedMonth] = useState('');
+  const [appliedHasComments, setAppliedHasComments] = useState(false);
 
-  // Справочники (зависят от appliedStatus)
+  // Справочники
   const [kams, setKams] = useState([]);
   const [networks, setNetworks] = useState([]);
   const [brands, setBrands] = useState([]);
@@ -8685,13 +9121,17 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [expandedCards, setExpandedCards] = useState({});
   const [submitting, setSubmitting] = useState({});
 
+  // Массовое согласование
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
+
   const commentRefs = useRef({});
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
 
-  // Загрузка справочников при смене фильтров (включая KAM из того же запроса)
+  // Загрузка справочников
   useEffect(() => {
     promoAPI.getApprovalFilters({
       approval_status: appliedStatus,
@@ -8711,7 +9151,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       .catch(err => console.error('Ошибка справочников:', err));
   }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
-  // Загрузка данных при изменении применённых фильтров (только после «Применить»)
+  // Загрузка данных
   const fetchApprovals = useCallback(async () => {
     if (!hasApplied || (!appliedKam && !appliedNetwork && !appliedBrand && !appliedMechanics && !appliedYear && !appliedMonth)) return;
     const currentFetchId = ++fetchIdRef.current;
@@ -8727,25 +9167,23 @@ export default function PromoApproval({ role, onDataChanged }) {
         network_name: appliedNetwork || undefined,
         brand: appliedBrand || undefined,
         mechanics: appliedMechanics || undefined,
+        has_comments: appliedHasComments || undefined,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      // Очищаем старые DOM-рефы перед установкой новых данных
       commentRefs.current = {};
       setApprovals(data.data || []);
+      setSelectedIds(new Set()); // сбрасываем выделение при новой загрузке
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;
       setError(err.message || 'Ошибка загрузки');
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth]);
+  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments]);
 
-  useEffect(() => {
-    fetchApprovals();
-  }, [fetchApprovals]);
+  useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
-  // Кнопка «Применить» — только если выбран хоть один фильтр
   const handleApply = () => {
     const hasAnyFilter = draftKam || draftNetwork || draftBrand || draftMechanics || draftYear || draftMonth;
     if (!hasAnyFilter) return;
@@ -8757,6 +9195,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedStatus(draftStatus);
     setAppliedYear(draftYear);
     setAppliedMonth(draftMonth);
+    setAppliedHasComments(draftHasComments);
   };
 
   const handleReset = () => {
@@ -8764,7 +9203,9 @@ export default function PromoApproval({ role, onDataChanged }) {
     setDraftStatus('pending'); setDraftYear(String(new Date().getFullYear())); setDraftMonth('');
     setAppliedKam(''); setAppliedNetwork(''); setAppliedBrand(''); setAppliedMechanics('');
     setAppliedStatus('pending'); setAppliedYear(String(new Date().getFullYear())); setAppliedMonth('');
+    setDraftHasComments(false); setAppliedHasComments(false);
     setApprovals([]);
+    setSelectedIds(new Set());
     setHasApplied(false);
   };
 
@@ -8782,7 +9223,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
       delete commentRefs.current[id];
-      setSnackbar({ open: true, message: status === 'согласовано' ? '✅ Согласовано' : status === 'отклонено' ? '❌ Отклонено' : '💬 Комментарий сохранён', severity: 'success' });
+      setSnackbar({ open: true, message: '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
     } catch (err) {
@@ -8799,9 +9240,74 @@ export default function PromoApproval({ role, onDataChanged }) {
   };
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
 
+  // Чекбоксы
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    const allIds = approvals.map(a => a.id);
+    if (selectedIds.size === allIds.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allIds));
+    }
+  };
+
+  // Массовое согласование
+  const openBatchDialog = (status) => {
+    if (selectedIds.size === 0) return;
+    setBatchDialog({ open: true, status });
+  };
+  const handleBatchAction = async () => {
+    const ids = Array.from(selectedIds);
+    const status = batchDialog.status;
+    setBatchDialog({ open: false, status: '' });
+    setSubmitting(prev => {
+      const next = { ...prev };
+      ids.forEach(id => { next[id] = true; });
+      return next;
+    });
+    try {
+      await promoAPI.batchApprove(ids, status, '');
+      setApprovals(prev => prev.filter(a => !selectedIds.has(a.id)));
+      setSelectedIds(new Set());
+      setSnackbar({ open: true, message: `✅ ${ids.length} промо обновлено`, severity: 'success' });
+      setRefreshFilters(prev => prev + 1);
+      if (onDataChanged) onDataChanged();
+    } catch (err) {
+      setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+    } finally {
+      setSubmitting(prev => {
+        const next = { ...prev };
+        ids.forEach(id => { delete next[id]; });
+        return next;
+      });
+    }
+  };
+
+  // Форматирование ROI с цветом (всегда 1 десятичный знак)
+  const formatROI = (value) => {
+    if (value == null) return '';
+    const num = Number(value);
+    return num.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  };
+  const getROIColor = (value) => {
+    if (value == null) return undefined;
+    const num = Number(value);
+    if (num > 0) return '#16a34a';
+    if (num < 0) return '#dc2626';
+    return undefined;
+  };
+
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
-      <Paper variant="outlined" sx={{ p: 2, mb: 3, borderRadius: 3 }}>
+      {/* Sticky: фильтры + переключатель вида — закреплены при скролле */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: '#f5f7fa', pb: 2, pt: 2 }}>
+      <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>🔍 Фильтры</Typography>
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center">
           <TextField select size="small" label="KAM" value={draftKam}
@@ -8842,8 +9348,73 @@ export default function PromoApproval({ role, onDataChanged }) {
           <Button variant="outlined" size="small" onClick={handleReset} sx={{ alignSelf: 'center' }}>
             Сброс
           </Button>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={draftHasComments}
+                onChange={(e) => setDraftHasComments(e.target.checked)}
+              />
+            }
+            label={<Typography variant="body2">Есть комментарии</Typography>}
+            sx={{ ml: 1 }}
+          />
         </Stack>
       </Paper>
+      </Box>
+
+      {/* Переключатель вида и массовые действия */}
+      {approvals.length > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          <ToggleButtonGroup
+            value={viewMode}
+            exclusive
+            onChange={(_, v) => {
+              if (v) {
+                startTransition(() => {
+                  setViewMode(v);
+                  setSelectedIds(new Set());
+                });
+              }
+            }}
+            size="small"
+          >
+            <ToggleButton value="cards"><CardIcon sx={{ mr: 0.5, fontSize: 18 }} />Карточки</ToggleButton>
+            <ToggleButton value="table"><TableIcon sx={{ mr: 0.5, fontSize: 18 }} />Таблица</ToggleButton>
+          </ToggleButtonGroup>
+          {/* Кнопка настроек карточек — только в режиме карточек */}
+          {viewMode === 'cards' && (
+            <Button
+              size="small"
+              startIcon={<SettingsIcon />}
+              onClick={() => setSettingsOpen(true)}
+              sx={{ color: '#475569', fontWeight: 500, ml: 1 }}
+            >
+              Поля
+            </Button>
+          )}
+          <Box sx={{ flex: 1 }} />
+          {/* Кнопки массовых действий — только в режиме таблицы */}
+          {viewMode === 'table' && (
+            <>
+              <Button
+                variant="contained" color="success" size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => openBatchDialog('согласовано')}
+              >
+                Согласовать ({selectedIds.size})
+              </Button>
+              <Button
+                variant="contained" color="error" size="small"
+                disabled={selectedIds.size === 0}
+                onClick={() => openBatchDialog('отклонено')}
+              >
+                Отклонить ({selectedIds.size})
+              </Button>
+            </>
+          )}
+        </Box>
+      )}
 
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
@@ -8856,20 +9427,97 @@ export default function PromoApproval({ role, onDataChanged }) {
         </Box>
       )}
 
-      {!loading && approvals.length > 0 && (
-        <>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Найдено: {approvals.length} промо</Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
-            {approvals.map(a => (
-              <ApprovalCard key={a.id} item={a}
-                expanded={expandedCards[a.id] || false} submitting={submitting}
-                onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
-                onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
-            ))}
-          </Box>
-        </>
+      {/* Вид: Карточки */}
+      {!loading && approvals.length > 0 && viewMode === 'cards' && (() => {
+        const MAX_CARDS = 50;
+        const cardsToShow = approvals.slice(0, MAX_CARDS);
+        const remaining = approvals.length - MAX_CARDS;
+        return (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Найдено: {approvals.length} промо{remaining > 0 ? ` • Показаны первые ${MAX_CARDS}` : ''}
+            </Typography>
+            {remaining > 0 && (
+              <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+                Показаны первые {MAX_CARDS} из {approvals.length} промо. Осталось ещё {remaining}.<br />
+                Для массовых действий переключитесь в табличный вид.
+              </Alert>
+            )}
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
+              {cardsToShow.map(a => (
+                <ApprovalCard key={a.id} item={a}
+                  expanded={expandedCards[a.id] || false} submitting={submitting}
+                  visibleFields={visibleFields}
+                  onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
+                  onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
+              ))}
+            </Box>
+          </>
+        );
+      })()}
+
+      {/* Вид: Таблица */}
+      {!loading && approvals.length > 0 && viewMode === 'table' && (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow sx={{ bgcolor: '#f1f5f9' }}>
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    size="small"
+                    indeterminate={selectedIds.size > 0 && selectedIds.size < approvals.length}
+                    checked={selectedIds.size === approvals.length}
+                    onChange={toggleSelectAll}
+                  />
+                </TableCell>
+                <TableCell>Период</TableCell>
+                <TableCell>Сеть</TableCell>
+                <TableCell>Бренд</TableCell>
+                <TableCell>SKU</TableCell>
+                <TableCell>Механика</TableCell>
+                <TableCell align="right">План (уп)</TableCell>
+                <TableCell align="right">Факт (уп)</TableCell>
+                <TableCell align="right">Инвестиции</TableCell>
+                <TableCell align="right">ROI</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {approvals.map(a => (
+                <TableRow key={a.id} hover selected={selectedIds.has(a.id)}>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={selectedIds.has(a.id)}
+                      onChange={() => toggleSelect(a.id)}
+                    />
+                  </TableCell>
+                  <TableCell>{a.year}.{String(a.month).padStart(2, '0')}</TableCell>
+                  <TableCell>{a.network_name}</TableCell>
+                  <TableCell>{a.brand_as}</TableCell>
+                  <TableCell>{a.sku}</TableCell>
+                  <TableCell>{a.mechanics}</TableCell>
+                  <TableCell align="right">
+                    {a.plan_promo_units != null ? Number(a.plan_promo_units).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    {a.actual_promo_sales_units != null ? Number(a.actual_promo_sales_units).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    {a.plan_investments_rub != null ? Number(a.plan_investments_rub).toLocaleString('ru-RU') : ''}
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography fontWeight={600} color={getROIColor(a.plan_roi)}>
+                      {formatROI(a.plan_roi)}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
 
+      {/* Диалог подтверждения (единичное действие) */}
       <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '' })}>
         <DialogTitle>{confirmDialog.status === 'comment' ? 'Сохранить комментарий?' : 'Подтвердите действие'}</DialogTitle>
         <DialogContent>
@@ -8889,9 +9537,82 @@ export default function PromoApproval({ role, onDataChanged }) {
         </DialogActions>
       </Dialog>
 
+      {/* Диалог массового согласования */}
+      <Dialog open={batchDialog.open} onClose={() => setBatchDialog({ open: false, status: '' })}>
+        <DialogTitle>Массовое действие</DialogTitle>
+        <DialogContent>
+          <Typography>
+            {batchDialog.status === 'согласовано' && `Согласовать ${selectedIds.size} промо?`}
+            {batchDialog.status === 'отклонено' && `Отклонить ${selectedIds.size} промо?`}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBatchDialog({ open: false, status: '' })}>Отмена</Button>
+          <Button variant="contained"
+            color={batchDialog.status === 'отклонено' ? 'error' : 'success'}
+            onClick={handleBatchAction}>
+            {batchDialog.status === 'согласовано' ? 'Согласовать все' : 'Отклонить все'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Snackbar open={snackbar.open} autoHideDuration={3000} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>
         <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>{snackbar.message}</Alert>
       </Snackbar>
+
+      {/* Drawer настройки полей карточки */}
+      <Drawer anchor="right" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <Box sx={{ width: 350, p: 3 }}>
+          <Typography variant="h6" mb={2}>Настройка карточки</Typography>
+
+          <TextField
+            fullWidth size="small" placeholder="Поиск поля..."
+            value={searchField}
+            onChange={e => setSearchField(e.target.value)}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ fontSize: 18, color: 'gray' }} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+            sx={{ mb: 2 }}
+          />
+
+          {FIELD_GROUPS.map((group, idx) => {
+            const filteredFields = group.fields.filter(f =>
+              f.label.toLowerCase().includes(searchField.toLowerCase())
+            );
+            if (filteredFields.length === 0) return null;
+
+            return (
+              <Accordion key={idx} defaultExpanded disableGutters elevation={0}
+                sx={{ borderBottom: '1px solid #eee' }}>
+                <AccordionSummary expandIcon={<ExpandMore />}>
+                  <Typography fontWeight={600}>{group.group}</Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ pt: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {filteredFields.map(field => (
+                    <FormControlLabel
+                      key={field.id}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={visibleFields.includes(field.id)}
+                          onChange={() => toggleField(field.id)}
+                        />
+                      }
+                      label={<Typography variant="body2">{field.label}</Typography>}
+                    />
+                  ))}
+                </AccordionDetails>
+              </Accordion>
+            );
+          })}
+        </Box>
+      </Drawer>
     </Box>
   );
 }

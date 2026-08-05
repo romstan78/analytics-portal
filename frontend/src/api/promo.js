@@ -138,6 +138,7 @@ export const promoAPI = {
     if (params.network_name) qs.set('network_name', params.network_name);
     if (params.brand) qs.set('brand', params.brand);
     if (params.mechanics) qs.set('mechanics', params.mechanics);
+    if (params.has_comments) qs.set('has_comments', '1');
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
   },
 
