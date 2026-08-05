@@ -1,47 +1,34 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useCallback } from 'react';
-import type { PromoRow } from '../types/promo';
 
-// ─── Типы ────────────────────────────────────────────────────────────────────
-
-export interface PromoFilters {
-  yearFrom?: string;
-  yearTo?: string;
-  months?: string[];
-  kam?: string[];
-  brand?: string[];
-  sku?: string[];
-  network_name?: string[];
-  mechanics?: string[];
-  status?: string[];
-  channel?: string[];
-  [key: string]: string | string[] | undefined;
-}
-
-export interface UsePromoDataReturn {
-  rows: PromoRow[];
-  setRows: (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => void;
+export interface PromoDataResult {
+  rows: unknown[];
+  setRows: (updater: unknown[] | ((prev: unknown[]) => unknown[])) => void;
   loading: boolean;
   error: string | null;
   refetch: () => void;
 }
 
-// ─── Хук ─────────────────────────────────────────────────────────────────────
-
 /**
  * Хук для получения данных промо с использованием React Query.
+ * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
+ * и state-машину loading/error.
+ *
+ * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
+ * чтобы не ломать PromoAnalysis.jsx.
  */
 export function usePromoData(
-  filters: PromoFilters,
-  refreshTrigger: number
-): UsePromoDataReturn {
+  filters: Record<string, unknown>,
+  refreshTrigger: number,
+): PromoDataResult {
   const queryClient = useQueryClient();
-  const filtersRef = useRef<PromoFilters>(filters);
+  const filtersRef = useRef(filters);
   filtersRef.current = filters;
 
-  const queryKey = ['promoData', filters, refreshTrigger] as const;
+  // Стабильный queryKey на основе фильтров и refreshTrigger
+  const queryKey: [string, Record<string, unknown>, number] = ['promoData', filters, refreshTrigger];
 
-  const fetchPromoData = useCallback(async ({ signal }: { signal?: AbortSignal }): Promise<PromoRow[]> => {
+  const fetchPromoData = useCallback(async ({ signal }: { signal: AbortSignal }) => {
     const currentFilters = filtersRef.current;
     const params = new URLSearchParams();
     Object.entries(currentFilters).forEach(([key, value]) => {
@@ -60,38 +47,37 @@ export function usePromoData(
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
-      }
+      },
     );
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const json = await response.json();
-    return json.data || [];
+    return (json.data || []) as unknown[];
   }, []);
 
-  const { data: rows = [], isLoading, error, refetch } = useQuery<PromoRow[]>({
-    queryKey: queryKey as unknown as readonly unknown[],
+  const { data: rows = [], isLoading, error, refetch } = useQuery({
+    queryKey,
     queryFn: fetchPromoData,
   });
 
-  // Обновление кэша React Query (для обратной совместимости)
+  // setRows — для обратной совместимости: обновляет кеш React Query
   const setRows = useCallback(
-    (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => {
-      queryClient.setQueryData(queryKey as unknown as readonly unknown[], (old: unknown) => {
-        const currentRows = (old as PromoRow[]) || [];
+    (newRowsOrUpdater: unknown[] | ((prev: unknown[]) => unknown[])) => {
+      queryClient.setQueryData(queryKey, (old: unknown[] | undefined) => {
         if (typeof newRowsOrUpdater === 'function') {
-          return newRowsOrUpdater(currentRows);
+          return newRowsOrUpdater(old || []);
         }
         return newRowsOrUpdater;
       });
     },
-    [queryClient, queryKey]
+    [queryClient, queryKey],
   );
 
   return {
     rows,
     setRows,
     loading: isLoading,
-    error: error?.message || null,
+    error: error ? (error as Error).message || String(error) : null,
     refetch,
   };
 }

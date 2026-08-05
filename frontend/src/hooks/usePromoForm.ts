@@ -1,10 +1,6 @@
 import { useState, useCallback } from 'react';
 import { promoAPI } from '../api/promo';
-import type { PromoRow } from '../types/promo';
 
-// ─── Типы ────────────────────────────────────────────────────────────────────
-
-/** Данные формы промо (могут быть строками из инпутов). */
 export interface PromoFormValues {
   id: number | null;
   network_name: string;
@@ -43,22 +39,12 @@ export interface PromoFormValues {
   total_pharmacies: string;
   promo_pharmacies: string;
   status: string;
+  ecom_segment?: string;
   updated_at: string | null;
 }
 
-interface UsePromoFormCallbacks {
-  onEditSuccess?: (id: number, data: Record<string, unknown>) => void;
-  onDeleteSuccess?: (id: number) => void;
-  onCreateSuccess?: () => void;
-}
-
-interface SaveResult {
-  success: boolean;
-  message: string;
-}
-
-// ─── Пустая форма ────────────────────────────────────────────────────────────
-const EMPTY_FORM: PromoFormValues = {
+// ─── Пустая форма ──────────────────────────────────────────────────────────
+export const EMPTY_FORM: PromoFormValues = {
   id: null, network_name: '', kam: '', brand: '', sku: '',
   year: new Date().getFullYear(), month: new Date().getMonth() + 1,
   mechanics: '', gtn_opex: '', baseline_units: '', baseline_rub: '',
@@ -73,38 +59,39 @@ const EMPTY_FORM: PromoFormValues = {
   id_directum: '', ds_number: '',
   total_pharmacies: '', promo_pharmacies: '',
   status: '',
-  updated_at: null,
+  updated_at: null, // ← для optimistic locking
 };
 
-// ─── Хук ─────────────────────────────────────────────────────────────────────
-/**
- * Хук управления формой промо-акции.
- *
- * Колбэки:
- *   onEditSuccess(id, data) — после успешного редактирования
- *   onDeleteSuccess(id)     — после успешного удаления
- *   onCreateSuccess()       — после создания нового промо
- */
-export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
-  const { onEditSuccess, onDeleteSuccess, onCreateSuccess } = callbacks;
+interface SaveResult {
+  success: boolean;
+  message: string;
+}
 
+interface UsePromoFormCallbacks {
+  onEditSuccess?: (id: number, data: Record<string, unknown>) => void;
+  onDeleteSuccess?: (id: number) => void;
+  onCreateSuccess?: () => void;
+}
+
+// ─── Хук ────────────────────────────────────────────────────────────────────
+export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }: UsePromoFormCallbacks) {
   const [form, setForm] = useState<PromoFormValues>({ ...EMPTY_FORM });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
-  const handleRowClick = useCallback((row: PromoRow) => {
+  const handleRowClick = useCallback((row: Record<string, unknown>) => {
     setForm({
-      id: row.id,
-      network_name: row.network_name ?? '',
-      kam: row.kam ?? '',
-      brand: row.brand_as ?? row.brand ?? '',
-      sku: row.sku ?? '',
-      year: row.year,
-      month: row.month ?? 0,
-      mechanics: row.mechanics ?? '',
-      gtn_opex: row.gtn_opex ?? '',
+      id: row.id as number,
+      network_name: (row.network_name as string) ?? '',
+      kam: (row.kam as string) ?? '',
+      brand: ((row.brand_as || row.brand) as string) ?? '',
+      sku: (row.sku as string) ?? '',
+      year: row.year as number,
+      month: row.month as number,
+      mechanics: (row.mechanics as string) ?? '',
+      gtn_opex: (row.gtn_opex as string) ?? '',
       baseline_units: String(row.baseline_units ?? ''),
       baseline_rub: String(row.baseline_rub ?? ''),
       plan_promo_units: String(row.plan_promo_units ?? ''),
@@ -126,14 +113,14 @@ export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
       actual_roi: String(row.actual_roi ?? ''),
       actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
       actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
-      agreement1: row.agreement1 ?? '',
-      agreement2: row.agreement2 ?? '',
-      conditions: row.conditions ?? '',
-      comments: row.comments ?? '',
-      id_directum: row.id_directum ?? '',
-      ds_number: row.ds_number ?? '',
-      status: row.status ?? '',
-      updated_at: row.updated_at ?? null,
+      agreement1: (row.agreement1 as string) ?? '',
+      agreement2: (row.agreement2 as string) ?? '',
+      conditions: (row.conditions as string) ?? '',
+      comments: (row.comments as string) ?? '',
+      id_directum: (row.id_directum as string) ?? '',
+      ds_number: (row.ds_number as string) ?? '',
+      status: (row.status as string) ?? '',
+      updated_at: (row.updated_at as string) ?? null,
     });
     setEditMode(true);
   }, []);
@@ -150,33 +137,33 @@ export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
         network_name: form.network_name, kam: form.kam, brand: form.brand, brand_as: form.brand,
         sku: form.sku, year: parseInt(String(form.year)), month: parseInt(String(form.month)),
         mechanics: form.mechanics, gtn_opex: form.gtn_opex,
-        baseline_units: form.baseline_units !== '' ? parseFloat(form.baseline_units) : null,
-        plan_promo_units: form.plan_promo_units !== '' ? parseFloat(form.plan_promo_units) : null,
-        plan_investments_rub: form.plan_investments_rub !== '' ? parseFloat(form.plan_investments_rub) : null,
-        contract_price: form.contract_price !== '' ? parseFloat(form.contract_price) : null,
-        gm: form.gm !== '' ? parseFloat(form.gm) : null,
-        id_directum: form.id_directum || null,
-        ds_number: form.ds_number || null,
-        discount_amount: form.discount_amount !== '' ? parseFloat(form.discount_amount) : null,
-        conditions: form.conditions || null,
-        comments: form.comments || null,
-        ecom_segment: (form as unknown as Record<string, unknown>).ecom_segment,
+        baseline_units: parseFloat(form.baseline_units) || null,
+        plan_promo_units: parseFloat(form.plan_promo_units) || null,
+        plan_investments_rub: parseFloat(form.plan_investments_rub) || null,
+        contract_price: parseFloat(form.contract_price) || null,
+        gm: parseFloat(form.gm) || null,
+        id_directum: form.id_directum ?? null,
+        ds_number: form.ds_number ?? null,
+        discount_amount: parseFloat(form.discount_amount) || null,
+        conditions: form.conditions ?? null,
+        comments: form.comments ?? null,
+        ecom_segment: form.ecom_segment,
         total_pharmacies: form.total_pharmacies !== '' ? parseInt(form.total_pharmacies) : null,
         promo_pharmacies: form.promo_pharmacies !== '' ? parseInt(form.promo_pharmacies) : null,
-        actual_promo_sales_units: form.actual_promo_sales_units !== '' ? parseFloat(form.actual_promo_sales_units) : null,
-        actual_investments: form.actual_investments !== '' ? parseFloat(form.actual_investments) : null,
-        actual_promo_rub: form.actual_promo_rub !== '' ? parseFloat(form.actual_promo_rub) : null,
-        actual_promo_uplift_units: form.actual_promo_uplift_units !== '' ? parseFloat(form.actual_promo_uplift_units) : null,
-        actual_promo_uplift_rub: form.actual_promo_uplift_rub !== '' ? parseFloat(form.actual_promo_uplift_rub) : null,
+        actual_promo_sales_units: parseFloat(form.actual_promo_sales_units) || null,
+        actual_investments: parseFloat(form.actual_investments) || null,
+        actual_promo_rub: parseFloat(form.actual_promo_rub) || null,
+        actual_promo_uplift_units: parseFloat(form.actual_promo_uplift_units) || null,
+        actual_promo_uplift_rub: parseFloat(form.actual_promo_uplift_rub) || null,
         actual_external_ecom_units: form.actual_external_ecom_units !== '' ? parseFloat(form.actual_external_ecom_units) : null,
         actual_corrected_baseline: form.actual_corrected_baseline !== '' ? parseFloat(form.actual_corrected_baseline) : null,
-        agreement1: form.agreement1 || null,
-        agreement2: form.agreement2 || null,
+        agreement1: form.agreement1 ?? null,
+        agreement2: form.agreement2 ?? null,
         status: form.status,
         updated_at: form.updated_at,
       };
 
-      const result = await promoAPI.save(payload);
+      const result = await promoAPI.save(payload) as { data?: Record<string, unknown>; id: number; message: string };
 
       if (result.data) {
         setForm(prev => ({ ...prev, ...result.data, id: result.id }));
@@ -190,11 +177,11 @@ export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
 
       return { success: true, message: '✅ Сохранено' };
     } catch (err: unknown) {
-      if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 409) {
+      const apiErr = err as { status?: number; message?: string };
+      if (apiErr.status === 409) {
         return { success: false, message: '⚠️ Запись изменена другим пользователем. Обновите страницу.' };
       }
-      const message = err instanceof Error ? err.message : 'Ошибка сохранения';
-      return { success: false, message: '❌ ' + message };
+      return { success: false, message: '❌ ' + (apiErr.message || 'Ошибка сохранения') };
     } finally {
       setSaving(false);
     }
@@ -209,8 +196,8 @@ export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
       if (onDeleteSuccess) onDeleteSuccess(form.id);
       return { success: true, message: '🗑️ Удалено' };
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Ошибка удаления';
-      return { success: false, message: '❌ ' + message };
+      const apiErr = err as { message?: string };
+      return { success: false, message: '❌ ' + (apiErr.message || 'Ошибка удаления') };
     } finally {
       setDeleting(false);
     }
@@ -227,5 +214,3 @@ export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
     handleRowClick, handleSave, handleDelete, resetForm,
   };
 }
-
-export { EMPTY_FORM };

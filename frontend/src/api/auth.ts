@@ -1,15 +1,21 @@
-export const getToken = () => localStorage.getItem('token');
-export const getUsername = () => localStorage.getItem('username');
-export const getRole = () => localStorage.getItem('role');
+export interface SessionData {
+  token?: string;
+  username?: string;
+  role?: string;
+}
 
-export const logout = () => {
+export const getToken = (): string | null => localStorage.getItem('token');
+export const getUsername = (): string | null => localStorage.getItem('username');
+export const getRole = (): string | null => localStorage.getItem('role');
+
+export const logout = (): void => {
   localStorage.removeItem('token');
   localStorage.removeItem('username');
   localStorage.removeItem('role');
 };
 
 // Сохраняет данные сессии из ответа логина/рефреша
-export const saveSession = (data) => {
+export const saveSession = (data: SessionData): void => {
   if (data.token) localStorage.setItem('token', data.token);
   if (data.username) localStorage.setItem('username', data.username);
   if (data.role) localStorage.setItem('role', data.role);
@@ -17,14 +23,14 @@ export const saveSession = (data) => {
 
 // Пытается обновить access token через refresh cookie
 // Возвращает true если успешно
-export const refreshToken = async () => {
+export const refreshToken = async (): Promise<boolean> => {
   try {
     const res = await fetch('/api/auth/refresh', {
       method: 'POST',
       credentials: 'include', // отправляем httpOnly cookie
     });
     if (!res.ok) return false;
-    const data = await res.json();
+    const data: SessionData = await res.json();
     saveSession(data);
     return true;
   } catch {

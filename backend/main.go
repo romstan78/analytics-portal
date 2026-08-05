@@ -139,6 +139,7 @@ func main() {
 		api.GET("/promo/history", handlers.GetPromoHistoryFiltered)
 		api.GET("/promo/sku-info", handlers.GetSKUInfo)
 		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
+		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
 
 		// Промо — запись (agreement1, agreement2, admin)
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)

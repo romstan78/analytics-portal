@@ -5,7 +5,7 @@ import {
   DialogTitle, DialogContent, DialogActions,
   Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
   Checkbox, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow,
+  TableHead, TableRow, TablePagination,
   Drawer, Accordion, AccordionSummary, AccordionDetails,
   FormControlLabel, InputAdornment, IconButton,
 } from '@mui/material';
@@ -96,11 +96,16 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
 
-  const commentRefs = useRef({});
+  const [comments, setComments] = useState({}); // контролируемый стейт комментариев
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
+
+  // Пагинация
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
 
   // Загрузка справочников
   useEffect(() => {
@@ -124,7 +129,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   // Загрузка данных
   const fetchApprovals = useCallback(async () => {
-    if (!hasApplied || (!appliedKam && !appliedNetwork && !appliedBrand && !appliedMechanics && !appliedYear && !appliedMonth)) return;
+    if (!hasApplied) return;
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
@@ -139,11 +144,14 @@ export default function PromoApproval({ role, onDataChanged }) {
         brand: appliedBrand || undefined,
         mechanics: appliedMechanics || undefined,
         has_comments: appliedHasComments || undefined,
+        page,
+        pageSize,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      commentRefs.current = {};
+      setComments({});
       setApprovals(data.data || []);
+      setTotal(data.total || 0);
       setSelectedIds(new Set()); // сбрасываем выделение при новой загрузке
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;
@@ -151,13 +159,11 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments]);
+  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments, page, pageSize]);
 
   useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
   const handleApply = () => {
-    const hasAnyFilter = draftKam || draftNetwork || draftBrand || draftMechanics || draftYear || draftMonth;
-    if (!hasAnyFilter) return;
     setHasApplied(true);
     setAppliedKam(draftKam);
     setAppliedNetwork(draftNetwork);
@@ -167,6 +173,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedYear(draftYear);
     setAppliedMonth(draftMonth);
     setAppliedHasComments(draftHasComments);
+    setPage(0); // сброс страницы при новом поиске
   };
 
   const handleReset = () => {
@@ -178,22 +185,25 @@ export default function PromoApproval({ role, onDataChanged }) {
     setApprovals([]);
     setSelectedIds(new Set());
     setHasApplied(false);
+    setPage(0);
+    setTotal(0);
   };
 
-  const handleCommentRef = useCallback((id, el) => { commentRefs.current[id] = el; }, []);
+  const handleCommentChange = useCallback((id, value) => {
+    setComments(prev => ({ ...prev, [id]: value }));
+  }, []);
   const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
 
   const handleConfirmedAction = async () => {
     const { id, status } = confirmDialog;
     setConfirmDialog({ open: false, id: null, status: '' });
     if (!id) return;
-    const inputEl = commentRefs.current[id];
-    const comment = inputEl ? inputEl.value : '';
+    const comment = comments[id] || '';
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
-      delete commentRefs.current[id];
+      setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
       setSnackbar({ open: true, message: '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
@@ -205,8 +215,8 @@ export default function PromoApproval({ role, onDataChanged }) {
   };
 
   const handleCommentOnly = (id) => {
-    const inputEl = commentRefs.current[id];
-    if (!inputEl || !inputEl.value.trim()) return;
+    const comment = (comments[id] || '').trim();
+    if (!comment) return;
     openConfirm(id, 'comment');
   };
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
@@ -390,6 +400,21 @@ export default function PromoApproval({ role, onDataChanged }) {
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
+      {/* Пагинация (сверху) */}
+      {total > 0 && (
+        <TablePagination
+          component="div"
+          count={total}
+          page={page}
+          onPageChange={(_, newPage) => setPage(newPage)}
+          rowsPerPage={pageSize}
+          onRowsPerPageChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[25, 50, 100]}
+          labelRowsPerPage="Строк:"
+          sx={{ '.MuiTablePagination-toolbar': { minHeight: 44, px: 0 } }}
+        />
+      )}
+
       {!loading && !error && approvals.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 6 }}>
           <Typography color="text.secondary" variant="h6">
@@ -419,7 +444,8 @@ export default function PromoApproval({ role, onDataChanged }) {
                 <ApprovalCard key={a.id} item={a}
                   expanded={expandedCards[a.id] || false} submitting={submitting}
                   visibleFields={visibleFields}
-                  onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
+                  onCommentChange={handleCommentChange} comments={comments}
+                  onToggleExpand={toggleExpand}
                   onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
               ))}
             </Box>

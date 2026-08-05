@@ -34,7 +34,7 @@ const SIDEBAR_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as', 
 
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting,
-  onCommentRef, onToggleExpand, onOpenConfirm, onCommentOnly,
+  onCommentChange, comments, onToggleExpand, onOpenConfirm, onCommentOnly,
   visibleFields,
 }) {
   const id = item.id;
@@ -171,7 +171,8 @@ const ApprovalCard = memo(function ApprovalCard({
 
           <TextField size="small" fullWidth multiline minRows={1} maxRows={3}
             placeholder="Комментарий (необязательно)"
-            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
+            value={comments[id] || ''}
+            onChange={(e) => onCommentChange(id, e.target.value)}
             sx={{ mb: 1 }} />
         </CardContent>
         <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>

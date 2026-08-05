@@ -839,9 +839,11 @@ type ApprovalParams struct {
 	Brand             string
 	Mechanics         string
 	HasComments       bool
+	Page              int
+	PageSize          int
 }
 
-func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
+func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
@@ -921,11 +923,29 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
 	}
 
+	// Сначала считаем общее количество (без пагинации)
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + query[strings.Index(query, "WHERE")+6:]
+	countRow := config.DB.QueryRow(countQuery, args...)
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		total = 0
+	}
+
 	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
+
+	// Пагинация
+	if params.PageSize <= 0 {
+		params.PageSize = 50
+	}
+	if params.PageSize > 500 {
+		params.PageSize = 500
+	}
+	offset := params.Page * params.PageSize
+	query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, params.PageSize)
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -949,7 +969,7 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	if results == nil {
 		results = []models.ApprovalRow{}
 	}
-	return results, nil
+	return results, total, nil
 }
 
 // ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
@@ -983,7 +1003,7 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 	return err
 }
 
-// BatchApprove — массовое согласование массива ID
+// BatchApprove — массовое согласование массива ID с дописыванием комментария в историю
 func BatchApprove(agreementNum int, ids []int, status string, comment string, legacyValue string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -993,6 +1013,8 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
 	agreementField := fmt.Sprintf("agreement%d", agreementNum)
 
+	timestamp := time.Now().Format("02.01.2006 15:04")
+
 	placeholders := make([]string, 0, len(ids))
 	args := []interface{}{legacyValue, status, comment}
 	for _, id := range ids {
@@ -1000,16 +1022,60 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 		args = append(args, id)
 	}
 
-	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id IN (%s) AND deleted_at IS NULL",
-		agreementField, statusField, commentField, strings.Join(placeholders, ","),
+	// Сначала читаем текущие comments для всех ID
+	idArgs := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		idArgs = append(idArgs, id)
+	}
+	idPlaceholders := make([]string, 0, len(ids))
+	for range ids {
+		idPlaceholders = append(idPlaceholders, "?")
+	}
+
+	readQuery := fmt.Sprintf(
+		"SELECT id, comments FROM dbo.tbl_PromoActivities WHERE id IN (%s) AND deleted_at IS NULL",
+		strings.Join(idPlaceholders, ","),
 	)
 
-	result, err := config.DB.Exec(query, args...)
+	rows, err := config.DB.Query(readQuery, idArgs...)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+
+	// Для каждого ID формируем новый comments с добавленной строкой лога
+	commentUpdates := make(map[int]string)
+	for rows.Next() {
+		var id int
+		var currentComments sql.NullString
+		if err := rows.Scan(&id, &currentComments); err != nil {
+			continue
+		}
+		newComments := currentComments.String
+		if comment != "" {
+			commentLine := fmt.Sprintf("[%s batch]: %s\n", timestamp, comment)
+			newComments += commentLine
+		}
+		commentUpdates[id] = newComments
+	}
+	rows.Close()
+
+	// Обновляем каждую запись индивидуально, чтобы проставить свой comments
+	var totalAffected int64
+	for _, id := range ids {
+		newComments := commentUpdates[id]
+		query := fmt.Sprintf(
+			"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+			agreementField, statusField, commentField,
+		)
+		result, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
+		if err != nil {
+			return totalAffected, err
+		}
+		affected, _ := result.RowsAffected()
+		totalAffected += affected
+	}
+	return totalAffected, nil
 }
 
 // ─── Approval Filters ───────────────────────────────────────────────────────
@@ -1114,7 +1180,9 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 		return nil
 	})
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	return resNetwork, resBrand, resMech, resKam, nil
 }

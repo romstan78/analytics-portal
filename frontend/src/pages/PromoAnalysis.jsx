@@ -12,7 +12,6 @@ import {
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
-import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -125,7 +124,6 @@ export default function PromoAnalysis({ role }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-  const [exportDialog, setExportDialog] = useState({ open: false });
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
@@ -143,27 +141,14 @@ export default function PromoAnalysis({ role }) {
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
   const { rows, setRows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters, refreshTrigger);
 
-  // ─── Локальные обновления UI (без перезагрузки всей таблицы) ──────────
-  // После редактирования: заменяем одну строку в массиве
-  const handleEditSuccess = useCallback((editedId, updatedData) => {
-    setRows(prev => prev.map(row => 
-      row.id === editedId ? { ...row, ...updatedData } : row
-    ));
-  }, [setRows]);
-
-  // После удаления: убираем строку из массива
-  const handleDeleteSuccess = useCallback((deletedId) => {
-    setRows(prev => prev.filter(row => row.id !== deletedId));
-  }, [setRows]);
-
-  // После создания нового промо: перезагружаем таблицу полностью
-  const handleCreateSuccess = useCallback(() => {
+  // После редактирования/удаления/создания — инвалидируем кеш React Query
+  const handleDataChanged = useCallback(() => {
     setRefreshTrigger(prev => prev + 1);
   }, []);
 
   // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete, resetForm } = 
-    usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
+    usePromoForm({ onEditSuccess: handleDataChanged, onDeleteSuccess: handleDataChanged, onCreateSuccess: handleDataChanged });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
@@ -251,38 +236,25 @@ export default function PromoAnalysis({ role }) {
     } catch (e) { console.error('Export error:', e); }
   };
 
-  const confirmedExportXLSX = async () => {
+  // Экспорт XLSX через серверный эндпоинт
+  const handleExportXLSX = async () => {
     try {
-      const data = filteredRows;
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet('Promo Data');
-
-      worksheet.columns = visibleCols.map(c => ({
-        header: c.headerName || c.field,
-        key: c.field,
-        width: c.width ? c.width / 7 : 20,
-      }));
-
-      const headerRow = worksheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
-      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      data.forEach(row => worksheet.addRow(row));
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      saveAs(new Blob([buffer]), `promo-analysis_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (e) { console.error('Export error:', e); } finally {
-      setExportDialog({ open: false });
-    }
-  };
-
-  const handleExportXLSX = () => {
-    if (filteredRows.length > 10000) {
-      setExportDialog({ open: true });
-    } else {
-      confirmedExportXLSX();
-    }
+      const token = localStorage.getItem('token');
+      const qs = new URLSearchParams();
+      Object.entries(appliedFilters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) qs.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          qs.set(key, String(value));
+        }
+      });
+      const resp = await fetch(`http://localhost:8080/api/promo/export-xlsx?${qs}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      saveAs(blob, `promo-export_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) { console.error('Export error:', e); }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────
@@ -408,24 +380,6 @@ export default function PromoAnalysis({ role }) {
           </DialogActions>
         </Dialog>
       </>)}
-
-      {/* Диалог подтверждения большого экспорта */}
-      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false })}>
-        <DialogTitle>Подтверждение экспорта</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Количество строк для экспорта: {filteredRows.length.toLocaleString('ru-RU')}.<br />
-            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
-            Продолжить?
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setExportDialog({ open: false })}>Отмена</Button>
-          <Button variant="contained" onClick={confirmedExportXLSX}>
-            Экспортировать
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}

@@ -1,4 +1,17 @@
-export const FIELD_GROUPS = [
+export interface CardField {
+  id: string;
+  label: string;
+  isMoney?: boolean;
+  isRoi?: boolean;
+  isPercent?: boolean;
+}
+
+export interface FieldGroup {
+  group: string;
+  fields: CardField[];
+}
+
+export const FIELD_GROUPS: FieldGroup[] = [
   {
     group: 'Основные',
     fields: [
@@ -40,13 +53,13 @@ export const FIELD_GROUPS = [
   },
 ];
 
-export const ALL_FIELDS_FLAT = FIELD_GROUPS.flatMap(g => g.fields);
+export const ALL_FIELDS_FLAT: CardField[] = FIELD_GROUPS.flatMap(g => g.fields);
 
-export const DEFAULT_VISIBLE_FIELDS = [
+export const DEFAULT_VISIBLE_FIELDS: string[] = [
   'network_name', 'sku', 'mechanics', 'brand_as', 'kam',
   'baseline_units', 'plan_promo_units', 'plan_roi', 'plan_investments_rub',
   'actual_promo_sales_units', 'actual_roi',
 ];
 
-export const FIELDS_MAP = {};
+export const FIELDS_MAP: Record<string, CardField> = {};
 ALL_FIELDS_FLAT.forEach(f => { FIELDS_MAP[f.id] = f; });

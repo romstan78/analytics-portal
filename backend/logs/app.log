@@ -510,3 +510,7 @@
 {"time":"2026-08-05T13:20:31.586887+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"ну-ну","user":"admin","timestamp":"2026-08-05T13:20:31+07:00"}
 {"time":"2026-08-05T13:31:21.17957+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T13:31:21+07:00"}
 {"time":"2026-08-05T13:33:01.899732+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"пробуем, но не сейчас","user":"admin","timestamp":"2026-08-05T13:33:01+07:00"}
+{"time":"2026-08-05T16:03:24.830598+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T16:03:24+07:00"}
+{"time":"2026-08-05T16:03:29.709091+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T16:03:29+07:00"}
+{"time":"2026-08-05T16:03:37.128003+07:00","level":"INFO","msg":"promo_updated","id":80348,"sku":"СТИМОЛ РАСТВОР 10МЛ №18","network":"OZON","user":"admin","timestamp":"2026-08-05T16:03:37+07:00"}
+{"time":"2026-08-05T16:04:43.733664+07:00","level":"INFO","msg":"promo_approved","id":80348,"field":"agreement1","status":"commented","comment":"даже не знаю","user":"admin","timestamp":"2026-08-05T16:04:43+07:00"}

@@ -17,6 +17,7 @@ import (
 	"backend/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -84,7 +85,11 @@ func GetPromoFilters(c *gin.Context) {
 		return nil
 	})
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		config.Logger.Error("filter_values_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка загрузки фильтров"})
+		return
+	}
 
 	result := gin.H{
 		"kam":          resKam,
@@ -259,7 +264,8 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
 		if k == "id" || k == "deleted_at" || k == "updated_at" ||
 			k == "agreement1_status" || k == "agreement1_comment" ||
-			k == "agreement2_status" || k == "agreement2_comment" {
+			k == "agreement2_status" || k == "agreement2_comment" ||
+			k == "comments" {
 			continue
 		}
 
@@ -409,7 +415,8 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			updatedAt := row.UpdatedAt
+			// Берём updated_at из запроса клиента для Optimistic Locking
+			clientUpdatedAt := fmt.Sprint(input["updated_at"])
 
 			// Применяем входящие данные поверх существующей строки
 			applyJSONToRow(row, input)
@@ -420,7 +427,7 @@ func SavePromo(c *gin.Context) {
 			calc := services.CalculateFields(&dto, calcCtx)
 			services.MergeCalculatedIntoDBRow(row, calc)
 
-			rowsAffected, err := repository.UpdatePromo(idInt, row, updatedAt)
+			rowsAffected, err := repository.UpdatePromo(idInt, row, clientUpdatedAt)
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -518,6 +525,9 @@ func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
 
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
+
 	params := repository.ApprovalParams{
 		Role:           roleStr,
 		KAM:            c.Query("kam"),
@@ -528,14 +538,16 @@ func GetApprovals(c *gin.Context) {
 		Brand:          c.Query("brand"),
 		Mechanics:      c.Query("mechanics"),
 		HasComments:    c.Query("has_comments") == "1",
+		Page:           page,
+		PageSize:       pageSize,
 	}
 
-	results, err := repository.GetApprovals(params)
+	results, total, err := repository.GetApprovals(params)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": results})
+	c.JSON(http.StatusOK, gin.H{"data": results, "total": total})
 }
 
 func ApprovePromo(c *gin.Context) {
@@ -769,6 +781,84 @@ func BatchApprovePromo(c *gin.Context) {
 		"timestamp", time.Now().Format(time.RFC3339),
 	)
 	c.JSON(http.StatusOK, gin.H{"message": "Обновлено", "affected": rowsAffected})
+}
+
+// ─── Excel Export ────────────────────────────────────────────────────────────
+
+func ExportPromoExcel(c *gin.Context) {
+	params := repository.PromoFilterParams{
+		YearFromStr: c.Query("yearFrom"),
+		YearToStr:   c.Query("yearTo"),
+		Months:      c.QueryArray("months"),
+		Kams:        c.QueryArray("kam"),
+		Brands:      c.QueryArray("brand"),
+		SKUs:        c.QueryArray("sku"),
+		Networks:    c.QueryArray("network_name"),
+		Mechanics:   c.QueryArray("mechanics"),
+		Statuses:    c.QueryArray("status"),
+	}
+	channels := c.QueryArray("channel")
+
+	results, err := repository.GetPromoRows(params, channels, 0, 0, true)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения данных"})
+		return
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	sheet := "Promo Data"
+	f.SetSheetName("Sheet1", sheet)
+
+	// Заголовки
+	headers := []string{
+		"Год", "Месяц", "Канал", "Сеть", "Бренд", "SKU", "Механика",
+		"План (уп)", "Факт (уп)", "План инвест.", "Факт инвест.",
+		"Согласование 1", "Согласование 2", "Статус",
+	}
+	for i, h := range headers {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetCellValue(sheet, fmt.Sprintf("%s1", col), h)
+	}
+
+	// Стиль заголовка
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"6366F1"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	f.SetRowStyle(sheet, 1, 1, headerStyle)
+
+	// Данные
+	for i, row := range results {
+		rowNum := i + 2
+		vals := []interface{}{
+			row.Year, row.Month, row.PromoChannel,
+			row.NetworkName, row.BrandAS, row.SKU, row.Mechanics,
+			row.PlanPromoUnits, row.ActualPromoSalesUnits,
+			row.PlanInvestmentsRub, row.ActualInvestments,
+			row.Agreement1, row.Agreement2, row.Status,
+		}
+		for j, v := range vals {
+			col, _ := excelize.ColumnNumberToName(j + 1)
+			f.SetCellValue(sheet, fmt.Sprintf("%s%d", col, rowNum), v)
+		}
+	}
+
+	// Автоширина
+	for i := 1; i <= len(headers); i++ {
+		col, _ := excelize.ColumnNumberToName(i)
+		f.SetColWidth(sheet, col, col, 18)
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=promo-export_%s.xlsx", time.Now().Format("2006-01-02")))
+	c.Header("Content-Transfer-Encoding", "binary")
+
+	if err := f.Write(c.Writer); err != nil {
+		config.Logger.Error("excel_export_failed", "error", err.Error())
+	}
 }
 
 // ─── Log helpers (используются для логирования, оставлены для совместимости) ─
