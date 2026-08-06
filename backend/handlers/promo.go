@@ -205,6 +205,21 @@ func GetNetworkGeoMapping(c *gin.Context) {
 	})
 }
 
+func GetPromoCommentsHandler(c *gin.Context) {
+	id := c.Param("id")
+	promoID, err := strconv.Atoi(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный ID"})
+		return
+	}
+	comments, err := repository.GetPromoComments(promoID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"data": []models.CommentRow{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": comments})
+}
+
 func GetPromoHistoryFiltered(c *gin.Context) {
 	sku := c.Query("sku")
 	network := c.Query("network_name")
@@ -418,6 +433,9 @@ func SavePromo(c *gin.Context) {
 			// Берём updated_at из запроса клиента для Optimistic Locking
 			clientUpdatedAt := fmt.Sprint(input["updated_at"])
 
+			// Сохраняем копию старой строки для аудит-лога
+			oldRow := *row
+
 			// Применяем входящие данные поверх существующей строки
 			applyJSONToRow(row, input)
 
@@ -444,6 +462,8 @@ func SavePromo(c *gin.Context) {
 					kamLine := fmt.Sprintf("[%s КАМ|%s]: %s", timestamp, fmt.Sprint(usernameVal), newCommentStr)
 					historyLines = append(historyLines, kamLine)
 					row.Comments = strings.Join(historyLines, "\n")
+					// Дублируем в новую таблицу комментариев
+					_ = repository.InsertComment(idInt, fmt.Sprint(usernameVal), "КАМ", newCommentStr)
 				}
 			}
 
@@ -474,6 +494,10 @@ func SavePromo(c *gin.Context) {
 			}
 
 			usernameVal, _ := c.Get("username")
+			// Запись в аудит-лог: сравниваем старую версию до изменений с новой
+			if diffJSON := repository.DiffPromoRows(&oldRow, row); diffJSON != "" {
+				_ = repository.InsertAuditLog(idInt, fmt.Sprint(usernameVal), "UPDATE", diffJSON)
+			}
 			config.Logger.Info("promo_updated",
 				"id", idInt,
 				"sku", row.SKU,
@@ -502,6 +526,10 @@ func SavePromo(c *gin.Context) {
 	}
 
 	newID, err := repository.InsertPromo(row)
+	if err == nil && insertComments != "" && insertComments != "<nil>" {
+		usernameVal, _ := c.Get("username")
+		_ = repository.InsertComment(int(newID), fmt.Sprint(usernameVal), "КАМ", insertComments)
+	}
 	if err != nil {
 		config.Logger.Error("promo_insert_failed",
 			"error", err.Error(),
@@ -550,6 +578,8 @@ func DeletePromo(c *gin.Context) {
 	}
 
 	usernameVal, _ := c.Get("username")
+	// Запись в аудит-лог
+	_ = repository.InsertAuditLog(idInt, fmt.Sprint(usernameVal), "DELETE", "")
 	config.Logger.Info("promo_deleted", "id", id, "user", fmt.Sprint(usernameVal), "timestamp", time.Now().Format(time.RFC3339))
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }
@@ -834,11 +864,12 @@ func ExportPromoExcel(c *gin.Context) {
 	}
 	channels := c.QueryArray("channel")
 
-	results, err := repository.GetPromoRows(params, channels, 0, 0, true)
+	rows, err := repository.GetPromoRowsStream(params, channels)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения данных"})
 		return
 	}
+	defer rows.Close()
 
 	f := excelize.NewFile()
 	defer f.Close()
@@ -846,15 +877,70 @@ func ExportPromoExcel(c *gin.Context) {
 	sheet := "Promo Data"
 	f.SetSheetName("Sheet1", sheet)
 
+	sw, err := f.NewStreamWriter(sheet)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "StreamWriter creation failed"})
+		return
+	}
+
 	// Заголовки
-	headers := []string{
+	headers := []interface{}{
 		"Год", "Месяц", "Канал", "Сеть", "Бренд", "SKU", "Механика",
 		"План (уп)", "Факт (уп)", "План инвест.", "Факт инвест.",
 		"Согласование 1", "Согласование 2", "Статус",
 	}
-	for i, h := range headers {
-		col, _ := excelize.ColumnNumberToName(i + 1)
-		f.SetCellValue(sheet, fmt.Sprintf("%s1", col), h)
+	if err := sw.SetRow("A1", headers); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Header write failed"})
+		return
+	}
+
+	// Данные — пишем напрямую из курсора БД
+	rowNum := 2
+	for rows.Next() {
+		var r models.PromoRow
+		if err := rows.Scan(
+			&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber,
+			&r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS,
+			&r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments,
+			&r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub,
+			&r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub,
+			&r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub,
+			&r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM,
+			&r.TotalPharmacies, &r.PromoPharmacies, &r.ActualPromoSalesUnits,
+			&r.ActualInvestments, &r.Status, &r.ActualPromoRub,
+			&r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub,
+			&r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline,
+			&r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments,
+			&r.PromoChannel, &r.Agreement1, &r.Agreement2,
+			&r.Date, &r.CreatedAt, &r.UpdatedAt,
+		); err != nil {
+			continue
+		}
+		vals := []interface{}{
+			r.Year,
+			models.ValInt(r.Month),
+			models.ValString(r.PromoChannel),
+			models.ValString(r.NetworkName),
+			models.ValString(r.BrandAS),
+			models.ValString(r.SKU),
+			models.ValString(r.Mechanics),
+			models.ValFloat(r.PlanPromoUnits),
+			models.ValFloat(r.ActualPromoSalesUnits),
+			models.ValFloat(r.PlanInvestmentsRub),
+			models.ValFloat(r.ActualInvestments),
+			models.ValString(r.Agreement1),
+			models.ValString(r.Agreement2),
+			models.ValString(r.Status),
+		}
+		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, vals); err != nil {
+			continue
+		}
+		rowNum++
+	}
+
+	if err := sw.Flush(); err != nil {
+		config.Logger.Error("promo_excel_stream_flush_failed", "error", err.Error())
 	}
 
 	// Стиль заголовка
@@ -864,22 +950,6 @@ func ExportPromoExcel(c *gin.Context) {
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
 	f.SetRowStyle(sheet, 1, 1, headerStyle)
-
-	// Данные
-	for i, row := range results {
-		rowNum := i + 2
-		vals := []interface{}{
-			row.Year, row.Month, row.PromoChannel,
-			row.NetworkName, row.BrandAS, row.SKU, row.Mechanics,
-			row.PlanPromoUnits, row.ActualPromoSalesUnits,
-			row.PlanInvestmentsRub, row.ActualInvestments,
-			row.Agreement1, row.Agreement2, row.Status,
-		}
-		for j, v := range vals {
-			col, _ := excelize.ColumnNumberToName(j + 1)
-			f.SetCellValue(sheet, fmt.Sprintf("%s%d", col, rowNum), v)
-		}
-	}
 
 	// Автоширина
 	for i := 1; i <= len(headers); i++ {

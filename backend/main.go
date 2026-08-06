@@ -124,6 +124,7 @@ func main() {
 	{
 		// Интернет-продажи
 		api.GET("/data", handlers.GetData)
+		api.GET("/data/export-xlsx", handlers.ExportSalesExcel)
 		api.GET("/filters", handlers.GetFilterOptions)
 		api.GET("/drilldown", handlers.GetDrilldown)
 
@@ -139,6 +140,7 @@ func main() {
 		api.GET("/promo/history", handlers.GetPromoHistoryFiltered)
 		api.GET("/promo/sku-info", handlers.GetSKUInfo)
 		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
+		api.GET("/promo/comments/:id", handlers.GetPromoCommentsHandler)
 		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
 
 		// Промо — запись (agreement1, agreement2, admin)

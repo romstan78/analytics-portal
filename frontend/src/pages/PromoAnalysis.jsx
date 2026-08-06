@@ -27,6 +27,8 @@ import { usePromoCalculations } from '../hooks/usePromoCalculations';
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
+const API_BASE = 'http://localhost:8080';
+const EXPORT_WARNING_THRESHOLD = 10000;
 
 const renderAgreement = (value) => {
   if (value == null || value === '' || value === '0') return '';
@@ -220,6 +222,13 @@ export default function PromoAnalysis({ role }) {
   const handleExportCSV = () => {
     try {
       const data = filteredRows;
+      if (!data.length) { window.alert('Нет данных для выгрузки.'); return; }
+      if (data.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';
@@ -240,6 +249,12 @@ export default function PromoAnalysis({ role }) {
   const handleExportXLSX = async () => {
     try {
       const token = localStorage.getItem('token');
+      if (rows.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${rows.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
       const qs = new URLSearchParams();
       Object.entries(appliedFilters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
@@ -248,13 +263,13 @@ export default function PromoAnalysis({ role }) {
           qs.set(key, String(value));
         }
       });
-      const resp = await fetch(`http://localhost:8080/api/promo/export-xlsx?${qs}`, {
+      const resp = await fetch(`${API_BASE}/api/promo/export-xlsx?${qs}`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const blob = await resp.blob();
       saveAs(blob, `promo-export_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (e) { console.error('Export error:', e); }
+    } catch (e) { console.error('Export error:', e); window.alert('Ошибка при выгрузке Excel.'); }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────

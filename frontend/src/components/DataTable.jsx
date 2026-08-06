@@ -11,9 +11,11 @@ import {
 } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
 
+const EXPORT_WARNING_THRESHOLD = 10000;
+
 export default function DataTable({ 
   columns, apiUrl, filters = {}, defaultPageSize = 100, 
-  exportFileName = 'export', onDataLoaded = null, 
+  exportFileName = 'export', exportXlsxUrl = null, onDataLoaded = null, 
   onRowClick = null, refreshKey 
 }) {
   const [rawRows, setRawRows] = useState([]);
@@ -109,6 +111,16 @@ export default function DataTable({
     setLoading(true);
     try {
       const data = await fetchExportData();
+      if (!data.length) {
+        window.alert('Нет данных для выгрузки.');
+        return;
+      }
+      if (data.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
 
@@ -130,6 +142,51 @@ export default function DataTable({
       saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
     } catch (err) {
       console.error('Ошибка экспорта CSV:', err);
+      window.alert('Ошибка при выгрузке CSV.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Выгрузка в Excel через серверный эндпоинт (отдаёт готовый .xlsx)
+  const handleExportXLSX = async () => {
+    if (!exportXlsxUrl) {
+      window.alert('Экспорт в Excel не настроен для этой страницы.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await fetchExportData();
+      const count = Array.isArray(data) ? data.length : 0;
+      if (!count) {
+        window.alert('Нет данных для выгрузки.');
+        return;
+      }
+      if (count > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${count.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
+      const params = new URLSearchParams();
+      params.set('all', 'true');
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      Object.entries(filters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          params.set(key, String(value));
+        }
+      });
+      const resp = await fetch(`${exportXlsxUrl}?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error('Ошибка экспорта Excel:', err);
+      window.alert('Ошибка при выгрузке Excel.');
     } finally {
       setLoading(false);
     }
@@ -224,6 +281,10 @@ export default function DataTable({
         <ButtonGroup size="small" variant="text">
           <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
             sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+          {exportXlsxUrl && (
+            <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+              sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+          )}
         </ButtonGroup>
       </Box>
 

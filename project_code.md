@@ -66,8 +66,8 @@ backend/
 frontend/
   src/
     api/
-      auth.js
-      promo.js
+      auth.ts
+      promo.ts
     assets/
       hero.png
     components/
@@ -78,10 +78,8 @@ frontend/
       PromoEditDialog.jsx
     hooks/
       usePromoCalculations.ts
-      usePromoData.js
       usePromoData.ts
-      usePromoFilters.js
-      usePromoForm.js
+      usePromoFilters.ts
       usePromoForm.ts
     pages/
       Home.jsx
@@ -93,7 +91,7 @@ frontend/
     types/
       promo.ts
     utils/
-      cardFields.js
+      cardFields.ts
     App.css
     App.jsx
     index.css
@@ -104,66 +102,9 @@ frontend/
   package.json
   tsconfig.json
   vite.config.js
-docker-compose.yml
 ```
 
 # Files
-
-## File: frontend/src/utils/cardFields.js
-```javascript
-export const FIELD_GROUPS = [
-  {
-    group: 'Основные',
-    fields: [
-      { id: 'network_name', label: 'Сеть' },
-      { id: 'sku', label: 'SKU' },
-      { id: 'mechanics', label: 'Механика' },
-      { id: 'brand_as', label: 'Бренд' },
-      { id: 'kam', label: 'KAM' },
-    ],
-  },
-  {
-    group: 'Плановые показатели',
-    fields: [
-      { id: 'baseline_units', label: 'Baseline (уп)' },
-      { id: 'plan_promo_units', label: 'План (уп)' },
-      { id: 'plan_investments_rub', label: 'Инвестиции (руб)', isMoney: true },
-      { id: 'plan_roi', label: 'ROI План (%)', isRoi: true },
-      { id: 'plan_uplift_percent', label: 'Uplift План (%)', isPercent: true },
-      { id: 'plan_total_spb_sales_rub', label: 'Продажи SPB план (руб)', isMoney: true },
-    ],
-  },
-  {
-    group: 'Фактические показатели',
-    fields: [
-      { id: 'actual_promo_sales_units', label: 'Факт продаж (уп)' },
-      { id: 'actual_roi', label: 'ROI Факт (%)', isRoi: true },
-      { id: 'actual_uplift_percent', label: 'Uplift Факт (%)', isPercent: true },
-      { id: 'actual_total_spb_sales_rub', label: 'Продажи SPB факт (руб)', isMoney: true },
-      { id: 'actual_investments_rub', label: 'Инвестиции факт (руб)', isMoney: true },
-    ],
-  },
-  {
-    group: 'Исторические данные',
-    fields: [
-      { id: 'historical_count', label: 'Кол-во ист. промо' },
-      { id: 'avg_historical_roi', label: 'Средний ист. ROI (%)', isRoi: true },
-      { id: 'avg_historical_uplift', label: 'Средний ист. Uplift (%)', isPercent: true },
-    ],
-  },
-];
-
-export const ALL_FIELDS_FLAT = FIELD_GROUPS.flatMap(g => g.fields);
-
-export const DEFAULT_VISIBLE_FIELDS = [
-  'network_name', 'sku', 'mechanics', 'brand_as', 'kam',
-  'baseline_units', 'plan_promo_units', 'plan_roi', 'plan_investments_rub',
-  'actual_promo_sales_units', 'actual_roi',
-];
-
-export const FIELDS_MAP = {};
-ALL_FIELDS_FLAT.forEach(f => { FIELDS_MAP[f.id] = f; });
-```
 
 ## File: backend/cmd/hash_password.go
 ```go
@@ -610,6 +551,112 @@ export function usePromoCalculations(form: PromoFormValues) {
 }
 ```
 
+## File: frontend/src/hooks/usePromoFilters.ts
+```typescript
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { promoAPI } from '../api/promo';
+
+export interface FilterMeta {
+  kam: string[];
+  brand: string[];
+  sku: string[];
+  network_name: string[];
+  mechanics: string[];
+  channel: string[];
+  status: string[];
+  loading: boolean;
+  error: string | null;
+}
+
+export function usePromoFilters(
+  initialFilters: Record<string, unknown>,
+  storageKey: string,
+  persistFlagKey: string,
+) {
+  const [meta, setMeta] = useState<FilterMeta>({
+    kam: [], brand: [], sku: [], network_name: [], mechanics: [], channel: [], status: [],
+    loading: true, error: null,
+  });
+
+  const [filters, setFilters] = useState<Record<string, unknown>>(() => {
+    try {
+      if (localStorage.getItem(persistFlagKey) === 'true') {
+        const saved = sessionStorage.getItem(storageKey);
+        if (saved) return JSON.parse(saved);
+      }
+    } catch (e) { /* ignore */ }
+    return { ...initialFilters };
+  });
+
+  const [appliedFilters, setAppliedFilters] = useState<Record<string, unknown>>(filters);
+  const [persistFilters, setPersistFilters] = useState(
+    () => localStorage.getItem(persistFlagKey) === 'true',
+  );
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Загрузка метаданных
+  const fetchMeta = useCallback(async (currentFilters: Record<string, unknown>) => {
+    setMeta(prev => ({ ...prev, loading: true }));
+    try {
+      const json = await promoAPI.getFilters(currentFilters) as Record<string, string[]>;
+      setMeta({
+        kam: json.kam || [], brand: json.brand || [], sku: json.sku || [],
+        network_name: json.network_name || [], mechanics: json.mechanics || [],
+        channel: json.channel || [], status: json.status || [],
+        loading: false, error: null,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setMeta(prev => ({ ...prev, loading: false, error: message }));
+    }
+  }, []);
+
+  // Первичная загрузка
+  useEffect(() => { fetchMeta(filters); }, []);
+
+  // Обновление с debounce при изменении фильтров
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => fetchMeta(filters), 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [filters, fetchMeta]);
+
+  const handleSearch = useCallback(() => {
+    setAppliedFilters({ ...filters });
+    // Если галочка включена — сохраняем фильтры в sessionStorage
+    if (localStorage.getItem(persistFlagKey) === 'true') {
+      sessionStorage.setItem(storageKey, JSON.stringify(filters));
+    }
+  }, [filters, persistFlagKey, storageKey]);
+
+  const handleReset = useCallback(() => {
+    const empty = { ...initialFilters };
+    setFilters(empty);
+    setAppliedFilters(empty);
+    sessionStorage.removeItem(storageKey);
+  }, [initialFilters, storageKey]);
+
+  const handlePersistChange = useCallback((checked: boolean) => {
+    setPersistFilters(checked);
+    localStorage.setItem(persistFlagKey, String(checked));
+    if (checked) {
+      // Сразу сохраняем текущие фильтры при включении
+      sessionStorage.setItem(storageKey, JSON.stringify(filters));
+    } else {
+      sessionStorage.removeItem(storageKey);
+    }
+  }, [persistFlagKey, storageKey, filters]);
+
+  return {
+    meta, filters, setFilters, appliedFilters,
+    persistFilters, handleSearch, handleReset, handlePersistChange,
+    fetchMeta,
+  };
+}
+```
+
 ## File: frontend/src/types/promo.ts
 ```typescript
 // Типы, соответствующие backend/models/types.go
@@ -735,6 +782,75 @@ export interface PromoFormData {
   actual_external_ecom_units?: number;
   actual_corrected_baseline?: number;
 }
+```
+
+## File: frontend/src/utils/cardFields.ts
+```typescript
+export interface CardField {
+  id: string;
+  label: string;
+  isMoney?: boolean;
+  isRoi?: boolean;
+  isPercent?: boolean;
+}
+
+export interface FieldGroup {
+  group: string;
+  fields: CardField[];
+}
+
+export const FIELD_GROUPS: FieldGroup[] = [
+  {
+    group: 'Основные',
+    fields: [
+      { id: 'network_name', label: 'Сеть' },
+      { id: 'sku', label: 'SKU' },
+      { id: 'mechanics', label: 'Механика' },
+      { id: 'brand_as', label: 'Бренд' },
+      { id: 'kam', label: 'KAM' },
+    ],
+  },
+  {
+    group: 'Плановые показатели',
+    fields: [
+      { id: 'baseline_units', label: 'Baseline (уп)' },
+      { id: 'plan_promo_units', label: 'План (уп)' },
+      { id: 'plan_investments_rub', label: 'Инвестиции (руб)', isMoney: true },
+      { id: 'plan_roi', label: 'ROI План (%)', isRoi: true },
+      { id: 'plan_uplift_percent', label: 'Uplift План (%)', isPercent: true },
+      { id: 'plan_total_spb_sales_rub', label: 'Продажи SPB план (руб)', isMoney: true },
+    ],
+  },
+  {
+    group: 'Фактические показатели',
+    fields: [
+      { id: 'actual_promo_sales_units', label: 'Факт продаж (уп)' },
+      { id: 'actual_roi', label: 'ROI Факт (%)', isRoi: true },
+      { id: 'actual_uplift_percent', label: 'Uplift Факт (%)', isPercent: true },
+      { id: 'actual_total_spb_sales_rub', label: 'Продажи SPB факт (руб)', isMoney: true },
+      { id: 'actual_investments_rub', label: 'Инвестиции факт (руб)', isMoney: true },
+    ],
+  },
+  {
+    group: 'Исторические данные',
+    fields: [
+      { id: 'historical_count', label: 'Кол-во ист. промо' },
+      { id: 'avg_historical_roi', label: 'Средний ист. ROI (%)', isRoi: true },
+      { id: 'avg_historical_uplift', label: 'Средний ист. Uplift (%)', isPercent: true },
+    ],
+  },
+];
+
+export const ALL_FIELDS_FLAT: CardField[] = FIELD_GROUPS.flatMap(g => g.fields);
+
+export const DEFAULT_VISIBLE_FIELDS: string[] = [
+  'network_name', 'sku', 'mechanics', 'brand_as', 'kam',
+  'baseline_units', 'plan_promo_units', 'plan_roi', 'plan_investments_rub',
+  'actual_promo_sales_units', 'actual_roi',
+];
+
+export const FIELDS_MAP: Record<string, CardField> = {};
+ALL_FIELDS_FLAT.forEach(f => { FIELDS_MAP[f.id] = f; });
 ```
 
 ## File: frontend/src/App.css
@@ -1059,38 +1175,6 @@ export default defineConfig([
 }
 ```
 
-## File: frontend/vite.config.js
-```javascript
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-})
-```
-
-## File: docker-compose.yml
-```yaml
-version: '3.9'
-
-services:
-  mssql_db:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: my_local_mssql
-    environment:
-      ACCEPT_EULA: Y
-      SA_PASSWORD: $#Pfchfytw_0378 # Очень важный пароль. Обязательно сложный!
-    ports:
-      - "1433:1433" # MSSQL стандартный порт
-    volumes:
-      - mssql_data_volume:/var/opt/mssql
-    restart: unless-stopped
-
-volumes:
-  mssql_data_volume:
-```
-
 ## File: backend/config/auth.go
 ```go
 package config
@@ -1191,20 +1275,27 @@ DB_PORT=1433
 CORS_ORIGINS=http://localhost:5173
 ```
 
-## File: frontend/src/api/auth.js
-```javascript
-export const getToken = () => localStorage.getItem('token');
-export const getUsername = () => localStorage.getItem('username');
-export const getRole = () => localStorage.getItem('role');
+## File: frontend/src/api/auth.ts
+```typescript
+export interface SessionData {
+  token?: string;
+  username?: string;
+  role?: string;
+}
 
-export const logout = () => {
+export const getToken = (): string | null => localStorage.getItem('token');
+export const getUsername = (): string | null => localStorage.getItem('username');
+export const getRole = (): string | null => localStorage.getItem('role');
+
+export const logout = (): void => {
   localStorage.removeItem('token');
   localStorage.removeItem('username');
   localStorage.removeItem('role');
+  window.dispatchEvent(new CustomEvent('auth:logout'));
 };
 
 // Сохраняет данные сессии из ответа логина/рефреша
-export const saveSession = (data) => {
+export const saveSession = (data: SessionData): void => {
   if (data.token) localStorage.setItem('token', data.token);
   if (data.username) localStorage.setItem('username', data.username);
   if (data.role) localStorage.setItem('role', data.role);
@@ -1212,19 +1303,267 @@ export const saveSession = (data) => {
 
 // Пытается обновить access token через refresh cookie
 // Возвращает true если успешно
-export const refreshToken = async () => {
+export const refreshToken = async (): Promise<boolean> => {
   try {
-    const res = await fetch('/api/auth/refresh', {
+    const res = await fetch('http://localhost:8080/api/auth/refresh', {
       method: 'POST',
       credentials: 'include', // отправляем httpOnly cookie
     });
     if (!res.ok) return false;
-    const data = await res.json();
+    const data: SessionData = await res.json();
     saveSession(data);
     return true;
   } catch {
     return false;
   }
+};
+```
+
+## File: frontend/src/api/promo.ts
+```typescript
+import { refreshToken, logout } from './auth';
+
+const API_BASE = 'http://localhost:8080';
+
+interface ApiError {
+  status: number;
+  message: string;
+}
+
+// ─── Promise Lock для refreshToken (предотвращает шторм 401) ──────────────
+let isRefreshing = false;
+let refreshPromise: Promise<boolean> | null = null;
+
+async function refreshTokenOnce(): Promise<boolean> {
+  if (!isRefreshing) {
+    isRefreshing = true;
+    refreshPromise = refreshToken().finally(() => {
+      isRefreshing = false;
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise!;
+}
+
+// ─── Утилита: fetch с авторизацией и таймаутом ──────────────────────────────
+async function fetchWithAuth(url: string, options: RequestInit = {}, timeout = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  const doFetch = (): Promise<Response> => {
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string> || {}),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(url, { ...options, headers, signal: controller.signal });
+  };
+
+  let res = await doFetch();
+
+  // При 401 пробуем обновить токен и повторить (с Promise Lock)
+  if (res.status === 401) {
+    const refreshed = await refreshTokenOnce();
+    if (refreshed) {
+      res = await doFetch();
+    } else {
+      // Рефреш не удался — полный logout и редирект
+      logout();
+      window.location.replace('/login');
+      // Заглушка с валидным JSON, чтобы не ломать вызывающий код при разборе
+      return new Response('{}', {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  }
+
+  clearTimeout(timer);
+  return res;
+}
+
+// ─── Утилита: построение query string ──────────────────────────────────────
+function buildParams(filters: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+    } else if (value !== '' && value != null) {
+      params.set(key, String(value));
+    }
+  });
+  return params.toString();
+}
+
+// ─── Типы для параметров API ───────────────────────────────────────────────
+export interface ApprovalParams {
+  kam?: string;
+  approval_status?: string;
+  year?: string;
+  month?: string;
+  network_name?: string;
+  brand?: string;
+  mechanics?: string;
+  has_comments?: boolean;
+}
+
+export interface ApprovalFiltersParams {
+  approval_status?: string;
+  kam?: string;
+  network_name?: string;
+  brand?: string;
+  mechanics?: string;
+  year?: string;
+  month?: string;
+}
+
+// ─── API: Промо ────────────────────────────────────────────────────────────
+export const promoAPI = {
+  // Справочники фильтров
+  getFilters: (filters: Record<string, unknown> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/filters?${buildParams(filters)}`).then(r => r.json()),
+
+  // Данные промо
+  getData: (filters: Record<string, unknown> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`).then(r => r.json()),
+
+  // История промо по SKU/сети/механике
+  getHistory: (params: Record<string, string> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/history?${new URLSearchParams(params)}`).then(r => r.json()),
+
+  // Сохранение (INSERT / UPDATE)
+  save: (data: unknown): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/save`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка сохранения' } as ApiError;
+      return json;
+    }),
+
+  // Удаление (soft-delete)
+  delete: (id: number): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/${id}`, { method: 'DELETE' }).then(async r => {
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${r.status}`);
+      }
+      return r.json();
+    }),
+
+  // SKU по бренду
+  getSKUByBrand: (brand: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/sku-by-brand?brand=${encodeURIComponent(brand)}`).then(r => r.json()),
+
+  // Информация о SKU (бренд)
+  getSKUInfo: (sku: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/sku-info?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
+
+  // Последние данные по SKU
+  getLastSKUData: (sku: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/last-sku-data?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
+
+  // KAM по сети
+  getKAMByNetwork: (network: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/kam-by-network?network=${encodeURIComponent(network)}`).then(r => r.json()),
+
+  // Гео-маппинг сети (KAM, регион, сегмент ТОП-20)
+  getNetworkGeo: (network: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/network-geo?network=${encodeURIComponent(network)}`).then(r => r.json()),
+
+  // Последние данные по сети (аптеки)
+  getLastNetworkData: (network: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/last-network-data?network=${encodeURIComponent(network)}`).then(r => r.json()),
+
+  // Типы инвестиций
+  getInvestmentTypes: (): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/investment-types`).then(r => r.json()),
+
+  // Последняя цена контракта по SKU
+  getLastContractPrice: (sku: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/last-contract-price?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
+
+  // ─── Согласование ──────────────────────────────────────────────────────
+
+  // Список KAM'ов с промо на согласовании
+  getApprovalKAMs: (): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-kams`).then(r => r.json()),
+
+  // Сети для выбранного KAM (в согласовании)
+  getApprovalNetworks: (kam: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-networks?kam=${encodeURIComponent(kam)}`).then(r => r.json()),
+
+  // Бренды для KAM + сети (в согласовании)
+  getApprovalBrands: (kam: string, network = ''): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}`).then(r => r.json()),
+
+  // Список промо на согласование
+  getApprovals: (params: ApprovalParams & { page?: number; pageSize?: number } = {}): Promise<unknown> => {
+    const qs = new URLSearchParams();
+    if (params.kam) qs.set('kam', params.kam);
+    if (params.approval_status) qs.set('approval_status', params.approval_status);
+    else qs.set('approval_status', 'pending');
+    if (params.year) qs.set('year', params.year);
+    if (params.month) qs.set('month', params.month);
+    if (params.network_name) qs.set('network_name', params.network_name);
+    if (params.brand) qs.set('brand', params.brand);
+    if (params.mechanics) qs.set('mechanics', params.mechanics);
+    if (params.has_comments) qs.set('has_comments', '1');
+    if (params.page !== undefined) qs.set('page', String(params.page));
+    if (params.pageSize !== undefined) qs.set('pageSize', String(params.pageSize));
+    return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
+  },
+
+  // Справочники сетей/брендов/механик для страницы согласования
+  getApprovalFilters: (params: ApprovalFiltersParams = {}): Promise<unknown> => {
+    const qs = new URLSearchParams();
+    qs.set('approval_status', params.approval_status || 'pending');
+    if (params.kam) qs.set('kam', params.kam);
+    if (params.network_name) qs.set('network_name', params.network_name);
+    if (params.brand) qs.set('brand', params.brand);
+    if (params.mechanics) qs.set('mechanics', params.mechanics);
+    if (params.year) qs.set('year', params.year);
+    if (params.month) qs.set('month', params.month);
+    return fetchWithAuth(`${API_BASE}/api/promo/approval-filters?${qs}`).then(r => r.json());
+  },
+
+  // Действие согласования: comment / согласовано / отклонено
+  approve: (id: number, status: string, comment = ''): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ id, status, comment }),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;
+      return json;
+    }),
+
+  // Массовое согласование
+  batchApprove: (ids: number[], status: string, comment = ''): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
+      method: 'POST',
+      body: JSON.stringify({ ids, status, comment }),
+    }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;
+      return json;
+    }),
+};
+
+// ─── API: Интернет-продажи ─────────────────────────────────────────────────
+export const salesAPI = {
+  getFilters: (): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/filters`).then(r => r.json()),
+
+  getData: (filters: Record<string, unknown> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/data?${buildParams(filters)}`).then(r => r.json()),
+
+  getDrilldown: (params: Record<string, string> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/drilldown?${new URLSearchParams(params)}`).then(r => r.json()),
 };
 ```
 
@@ -1419,429 +1758,6 @@ function getUniqueKeys(data, type) {
   data.forEach(item => { Object.keys(item[type] || {}).forEach(key => keys.add(key)); });
   return Array.from(keys).sort();
 }
-```
-
-## File: frontend/src/hooks/usePromoData.ts
-```typescript
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useCallback } from 'react';
-import type { PromoRow } from '../types/promo';
-
-// ─── Типы ────────────────────────────────────────────────────────────────────
-
-export interface PromoFilters {
-  yearFrom?: string;
-  yearTo?: string;
-  months?: string[];
-  kam?: string[];
-  brand?: string[];
-  sku?: string[];
-  network_name?: string[];
-  mechanics?: string[];
-  status?: string[];
-  channel?: string[];
-  [key: string]: string | string[] | undefined;
-}
-
-export interface UsePromoDataReturn {
-  rows: PromoRow[];
-  setRows: (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => void;
-  loading: boolean;
-  error: string | null;
-  refetch: () => void;
-}
-
-// ─── Хук ─────────────────────────────────────────────────────────────────────
-
-/**
- * Хук для получения данных промо с использованием React Query.
- */
-export function usePromoData(
-  filters: PromoFilters,
-  refreshTrigger: number
-): UsePromoDataReturn {
-  const queryClient = useQueryClient();
-  const filtersRef = useRef<PromoFilters>(filters);
-  filtersRef.current = filters;
-
-  const queryKey = ['promoData', filters, refreshTrigger] as const;
-
-  const fetchPromoData = useCallback(async ({ signal }: { signal?: AbortSignal }): Promise<PromoRow[]> => {
-    const currentFilters = filtersRef.current;
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-      } else if (value !== '' && value != null) {
-        params.set(key, String(value));
-      }
-    });
-
-    const qs = params.toString();
-    const response = await fetch(
-      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
-      {
-        signal,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      }
-    );
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-  }, []);
-
-  const { data: rows = [], isLoading, error, refetch } = useQuery<PromoRow[]>({
-    queryKey: queryKey as unknown as readonly unknown[],
-    queryFn: fetchPromoData,
-  });
-
-  // Обновление кэша React Query (для обратной совместимости)
-  const setRows = useCallback(
-    (newRowsOrUpdater: PromoRow[] | ((old: PromoRow[]) => PromoRow[])) => {
-      queryClient.setQueryData(queryKey as unknown as readonly unknown[], (old: unknown) => {
-        const currentRows = (old as PromoRow[]) || [];
-        if (typeof newRowsOrUpdater === 'function') {
-          return newRowsOrUpdater(currentRows);
-        }
-        return newRowsOrUpdater;
-      });
-    },
-    [queryClient, queryKey]
-  );
-
-  return {
-    rows,
-    setRows,
-    loading: isLoading,
-    error: error?.message || null,
-    refetch,
-  };
-}
-```
-
-## File: frontend/src/hooks/usePromoFilters.js
-```javascript
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { promoAPI } from '../api/promo';
-
-export function usePromoFilters(initialFilters, storageKey, persistFlagKey) {
-  const [meta, setMeta] = useState({
-    kam: [], brand: [], sku: [], network_name: [], mechanics: [], channel: [], status: [],
-    loading: true, error: null
-  });
-  
-  const [filters, setFilters] = useState(() => {
-    try {
-      if (localStorage.getItem(persistFlagKey) === 'true') {
-        const saved = sessionStorage.getItem(storageKey);
-        if (saved) return JSON.parse(saved);
-      }
-    } catch (e) {}
-    return { ...initialFilters };
-  });
-
-  const [appliedFilters, setAppliedFilters] = useState(filters);
-  const [persistFilters, setPersistFilters] = useState(
-    () => localStorage.getItem(persistFlagKey) === 'true'
-  );
-  const debounceRef = useRef(null);
-
-  // Загрузка метаданных
-  const fetchMeta = useCallback(async (currentFilters) => {
-    setMeta(prev => ({ ...prev, loading: true }));
-    try {
-      const json = await promoAPI.getFilters(currentFilters);
-      setMeta({
-        kam: json.kam || [], brand: json.brand || [], sku: json.sku || [],
-        network_name: json.network_name || [], mechanics: json.mechanics || [],
-        channel: json.channel || [], status: json.status || [],
-        loading: false, error: null
-      });
-    } catch (err) {
-      setMeta(prev => ({ ...prev, loading: false, error: err.message }));
-    }
-  }, []);
-
-  // Первичная загрузка
-  useEffect(() => { fetchMeta(filters); }, []);
-
-  // Обновление с debounce при изменении фильтров
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchMeta(filters), 300);
-    return () => clearTimeout(debounceRef.current);
-  }, [filters, fetchMeta]);
-
-  const handleSearch = useCallback(() => {
-    setAppliedFilters({ ...filters });
-    // Если галочка включена — сохраняем фильтры в sessionStorage
-    if (localStorage.getItem(persistFlagKey) === 'true') {
-      sessionStorage.setItem(storageKey, JSON.stringify(filters));
-    }
-  }, [filters, persistFlagKey, storageKey]);
-
-  const handleReset = useCallback(() => {
-    const empty = { ...initialFilters };
-    setFilters(empty);
-    setAppliedFilters(empty);
-    sessionStorage.removeItem(storageKey);
-  }, [initialFilters, storageKey]);
-
-  const handlePersistChange = useCallback((checked) => {
-    setPersistFilters(checked);
-    localStorage.setItem(persistFlagKey, String(checked));
-    if (checked) {
-      // Сразу сохраняем текущие фильтры при включении
-      sessionStorage.setItem(storageKey, JSON.stringify(filters));
-    } else {
-      sessionStorage.removeItem(storageKey);
-    }
-  }, [persistFlagKey, storageKey, filters]);
-
-  return {
-    meta, filters, setFilters, appliedFilters,
-    persistFilters, handleSearch, handleReset, handlePersistChange,
-    fetchMeta
-  };
-}
-```
-
-## File: frontend/src/hooks/usePromoForm.ts
-```typescript
-import { useState, useCallback } from 'react';
-import { promoAPI } from '../api/promo';
-import type { PromoRow } from '../types/promo';
-
-// ─── Типы ────────────────────────────────────────────────────────────────────
-
-/** Данные формы промо (могут быть строками из инпутов). */
-export interface PromoFormValues {
-  id: number | null;
-  network_name: string;
-  kam: string;
-  brand: string;
-  sku: string;
-  year: number;
-  month: number;
-  mechanics: string;
-  gtn_opex: string;
-  baseline_units: string;
-  baseline_rub: string;
-  plan_promo_units: string;
-  plan_promo_rub: string;
-  plan_promo_uplift_units: string;
-  plan_promo_uplift_rub: string;
-  plan_investments_rub: string;
-  contract_price: string;
-  plan_roi: string;
-  gm: string;
-  discount_amount: string;
-  actual_promo_sales_units: string;
-  actual_investments: string;
-  actual_promo_rub: string;
-  actual_promo_uplift_units: string;
-  actual_promo_uplift_rub: string;
-  actual_roi: string;
-  actual_external_ecom_units: string;
-  actual_corrected_baseline: string;
-  agreement1: string;
-  agreement2: string;
-  conditions: string;
-  comments: string;
-  id_directum: string;
-  ds_number: string;
-  total_pharmacies: string;
-  promo_pharmacies: string;
-  status: string;
-  updated_at: string | null;
-}
-
-interface UsePromoFormCallbacks {
-  onEditSuccess?: (id: number, data: Record<string, unknown>) => void;
-  onDeleteSuccess?: (id: number) => void;
-  onCreateSuccess?: () => void;
-}
-
-interface SaveResult {
-  success: boolean;
-  message: string;
-}
-
-// ─── Пустая форма ────────────────────────────────────────────────────────────
-const EMPTY_FORM: PromoFormValues = {
-  id: null, network_name: '', kam: '', brand: '', sku: '',
-  year: new Date().getFullYear(), month: new Date().getMonth() + 1,
-  mechanics: '', gtn_opex: '', baseline_units: '', baseline_rub: '',
-  plan_promo_units: '', plan_promo_rub: '', plan_promo_uplift_units: '',
-  plan_promo_uplift_rub: '', plan_investments_rub: '', contract_price: '',
-  plan_roi: '', gm: '', discount_amount: '',
-  actual_promo_sales_units: '', actual_investments: '', actual_promo_rub: '',
-  actual_promo_uplift_units: '', actual_promo_uplift_rub: '', actual_roi: '',
-  actual_external_ecom_units: '', actual_corrected_baseline: '',
-  agreement1: '', agreement2: '',
-  conditions: '', comments: '',
-  id_directum: '', ds_number: '',
-  total_pharmacies: '', promo_pharmacies: '',
-  status: '',
-  updated_at: null,
-};
-
-// ─── Хук ─────────────────────────────────────────────────────────────────────
-/**
- * Хук управления формой промо-акции.
- *
- * Колбэки:
- *   onEditSuccess(id, data) — после успешного редактирования
- *   onDeleteSuccess(id)     — после успешного удаления
- *   onCreateSuccess()       — после создания нового промо
- */
-export function usePromoForm(callbacks: UsePromoFormCallbacks = {}) {
-  const { onEditSuccess, onDeleteSuccess, onCreateSuccess } = callbacks;
-
-  const [form, setForm] = useState<PromoFormValues>({ ...EMPTY_FORM });
-  const [editMode, setEditMode] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
-  const handleRowClick = useCallback((row: PromoRow) => {
-    setForm({
-      id: row.id,
-      network_name: row.network_name ?? '',
-      kam: row.kam ?? '',
-      brand: row.brand_as ?? row.brand ?? '',
-      sku: row.sku ?? '',
-      year: row.year,
-      month: row.month ?? 0,
-      mechanics: row.mechanics ?? '',
-      gtn_opex: row.gtn_opex ?? '',
-      baseline_units: String(row.baseline_units ?? ''),
-      baseline_rub: String(row.baseline_rub ?? ''),
-      plan_promo_units: String(row.plan_promo_units ?? ''),
-      plan_promo_rub: String(row.plan_promo_rub ?? ''),
-      plan_promo_uplift_units: String(row.plan_promo_uplift_units ?? ''),
-      plan_promo_uplift_rub: String(row.plan_promo_uplift_rub ?? ''),
-      plan_investments_rub: String(row.plan_investments_rub ?? ''),
-      contract_price: String(row.contract_price ?? ''),
-      discount_amount: String(row.discount_amount ?? ''),
-      plan_roi: String(row.plan_roi ?? ''),
-      gm: String(row.gm ?? ''),
-      total_pharmacies: String(row.total_pharmacies ?? ''),
-      promo_pharmacies: String(row.promo_pharmacies ?? ''),
-      actual_promo_sales_units: String(row.actual_promo_sales_units ?? ''),
-      actual_investments: String(row.actual_investments ?? ''),
-      actual_promo_rub: String(row.actual_promo_rub ?? ''),
-      actual_promo_uplift_units: String(row.actual_promo_uplift_units ?? ''),
-      actual_promo_uplift_rub: String(row.actual_promo_uplift_rub ?? ''),
-      actual_roi: String(row.actual_roi ?? ''),
-      actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
-      actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
-      agreement1: row.agreement1 ?? '',
-      agreement2: row.agreement2 ?? '',
-      conditions: row.conditions ?? '',
-      comments: row.comments ?? '',
-      id_directum: row.id_directum ?? '',
-      ds_number: row.ds_number ?? '',
-      status: row.status ?? '',
-      updated_at: row.updated_at ?? null,
-    });
-    setEditMode(true);
-  }, []);
-
-  // ─── Сохранение (INSERT или UPDATE) ─────────────────────────────────────
-  const handleSave = useCallback(async (): Promise<SaveResult> => {
-    if (!form.sku || !form.network_name) {
-      return { success: false, message: '⚠️ Заполните Сеть и SKU' };
-    }
-    setSaving(true);
-    try {
-      const payload: Record<string, unknown> = {
-        id: form.id || undefined,
-        network_name: form.network_name, kam: form.kam, brand: form.brand, brand_as: form.brand,
-        sku: form.sku, year: parseInt(String(form.year)), month: parseInt(String(form.month)),
-        mechanics: form.mechanics, gtn_opex: form.gtn_opex,
-        baseline_units: form.baseline_units !== '' ? parseFloat(form.baseline_units) : null,
-        plan_promo_units: form.plan_promo_units !== '' ? parseFloat(form.plan_promo_units) : null,
-        plan_investments_rub: form.plan_investments_rub !== '' ? parseFloat(form.plan_investments_rub) : null,
-        contract_price: form.contract_price !== '' ? parseFloat(form.contract_price) : null,
-        gm: form.gm !== '' ? parseFloat(form.gm) : null,
-        id_directum: form.id_directum || null,
-        ds_number: form.ds_number || null,
-        discount_amount: form.discount_amount !== '' ? parseFloat(form.discount_amount) : null,
-        conditions: form.conditions || null,
-        comments: form.comments || null,
-        ecom_segment: (form as unknown as Record<string, unknown>).ecom_segment,
-        total_pharmacies: form.total_pharmacies !== '' ? parseInt(form.total_pharmacies) : null,
-        promo_pharmacies: form.promo_pharmacies !== '' ? parseInt(form.promo_pharmacies) : null,
-        actual_promo_sales_units: form.actual_promo_sales_units !== '' ? parseFloat(form.actual_promo_sales_units) : null,
-        actual_investments: form.actual_investments !== '' ? parseFloat(form.actual_investments) : null,
-        actual_promo_rub: form.actual_promo_rub !== '' ? parseFloat(form.actual_promo_rub) : null,
-        actual_promo_uplift_units: form.actual_promo_uplift_units !== '' ? parseFloat(form.actual_promo_uplift_units) : null,
-        actual_promo_uplift_rub: form.actual_promo_uplift_rub !== '' ? parseFloat(form.actual_promo_uplift_rub) : null,
-        actual_external_ecom_units: form.actual_external_ecom_units !== '' ? parseFloat(form.actual_external_ecom_units) : null,
-        actual_corrected_baseline: form.actual_corrected_baseline !== '' ? parseFloat(form.actual_corrected_baseline) : null,
-        agreement1: form.agreement1 || null,
-        agreement2: form.agreement2 || null,
-        status: form.status,
-        updated_at: form.updated_at,
-      };
-
-      const result = await promoAPI.save(payload);
-
-      if (result.data) {
-        setForm(prev => ({ ...prev, ...result.data, id: result.id }));
-      }
-
-      if (form.id && onEditSuccess && result.data) {
-        onEditSuccess(form.id, result.data);
-      } else if (!form.id && onCreateSuccess) {
-        onCreateSuccess();
-      }
-
-      return { success: true, message: '✅ Сохранено' };
-    } catch (err: unknown) {
-      if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 409) {
-        return { success: false, message: '⚠️ Запись изменена другим пользователем. Обновите страницу.' };
-      }
-      const message = err instanceof Error ? err.message : 'Ошибка сохранения';
-      return { success: false, message: '❌ ' + message };
-    } finally {
-      setSaving(false);
-    }
-  }, [form, onEditSuccess, onCreateSuccess]);
-
-  // ─── Удаление (soft-delete) ─────────────────────────────────────────────
-  const handleDelete = useCallback(async (): Promise<SaveResult> => {
-    if (!form.id) return { success: false, message: 'Нет ID' };
-    setDeleting(true);
-    try {
-      await promoAPI.delete(form.id);
-      if (onDeleteSuccess) onDeleteSuccess(form.id);
-      return { success: true, message: '🗑️ Удалено' };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Ошибка удаления';
-      return { success: false, message: '❌ ' + message };
-    } finally {
-      setDeleting(false);
-    }
-  }, [form.id, onDeleteSuccess]);
-
-  // ─── Сброс формы ────────────────────────────────────────────────────────
-  const resetForm = useCallback(() => {
-    setForm({ ...EMPTY_FORM });
-    setEditMode(false);
-  }, []);
-
-  return {
-    form, setForm, editMode, saving, deleting,
-    handleRowClick, handleSave, handleDelete, resetForm,
-  };
-}
-
-export { EMPTY_FORM };
 ```
 
 ## File: frontend/src/pages/InternetSales.jsx
@@ -2080,6 +1996,7 @@ export default function InternetSales() {
           apiUrl={`${API_BASE}/api/data`}
           filters={appliedFilters}
           exportFileName="internet-sales"
+          exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
           onDataLoaded={handleDataLoaded}
           onRowClick={handleRowClick}
         />
@@ -2203,45 +2120,23 @@ createRoot(document.getElementById('root')).render(
 );
 ```
 
-## File: frontend/package.json
-```json
-{
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+## File: frontend/vite.config.js
+```javascript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
   },
-  "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/icons-material": "^9.2.0",
-    "@mui/material": "^9.2.0",
-    "@mui/x-data-grid": "^9.10.1",
-    "@tanstack/react-query": "^5.101.4",
-    "exceljs": "^4.4.0",
-    "file-saver": "^2.0.5",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-router-dom": "^7.11.0",
-    "recharts": "^3.10.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "eslint": "^10.6.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.7.0",
-    "vite": "^8.1.1"
-  }
-}
+})
 ```
 
 ## File: backend/handlers/sales.go
@@ -2250,14 +2145,17 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"backend/config"
 	"backend/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 )
 
 func GetFilterOptions(c *gin.Context) {
@@ -2309,37 +2207,41 @@ func GetFilterOptions(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func GetData(c *gin.Context) {
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	brandNames := c.QueryArray("brandName")
-	networkNames := c.QueryArray("networkName")
-	unRubs := c.QueryArray("un_rub")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-	search := c.Query("search")
+// salesFilter — параметры фильтрации интернет-продаж.
+type salesFilter struct {
+	YearFromStr  string
+	YearToStr    string
+	Months       []string
+	BrandNames   []string
+	NetworkNames []string
+	UnRubs       []string
+	Segments     []string
+	Channels     []string
+	Search       string
+}
 
+// buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
+// Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
+func buildSalesWhere(f salesFilter) (string, []interface{}) {
 	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
-	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
 	args := []interface{}{}
 
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
+	if f.YearFromStr != "" {
+		if y, err := strconv.Atoi(f.YearFromStr); err == nil {
 			baseWhere += " AND n.[year] >= ?"
 			args = append(args, y)
 		}
 	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
+	if f.YearToStr != "" {
+		if y, err := strconv.Atoi(f.YearToStr); err == nil {
 			baseWhere += " AND n.[year] <= ?"
 			args = append(args, y)
 		}
 	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
+	if len(f.Months) > 0 {
+		placeholders := make([]string, 0, len(f.Months))
+		for _, m := range f.Months {
+			if val, err := strconv.Atoi(m); err == nil {
 				placeholders = append(placeholders, "?")
 				args = append(args, val)
 			}
@@ -2348,11 +2250,12 @@ func GetData(c *gin.Context) {
 			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
 		}
 	}
-	if len(brandNames) > 0 {
-		conds := make([]string, 0, len(brandNames))
-		for _, v := range brandNames {
+
+	likeFilter := func(col string, values []string) {
+		conds := make([]string, 0, len(values))
+		for _, v := range values {
 			if v != "" {
-				conds = append(conds, "n.brandName LIKE ?")
+				conds = append(conds, "n."+col+" LIKE ?")
 				args = append(args, "%"+v+"%")
 			}
 		}
@@ -2360,18 +2263,8 @@ func GetData(c *gin.Context) {
 			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
 		}
 	}
-	if len(networkNames) > 0 {
-		conds := make([]string, 0, len(networkNames))
-		for _, v := range networkNames {
-			if v != "" {
-				conds = append(conds, "n.networkName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
-	}
+	likeFilter("brandName", f.BrandNames)
+	likeFilter("networkName", f.NetworkNames)
 
 	appendFilter := func(col string, values []string) {
 		if len(values) > 0 {
@@ -2387,15 +2280,32 @@ func GetData(c *gin.Context) {
 			}
 		}
 	}
-	appendFilter("n.un_rub", unRubs)
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
+	appendFilter("n.un_rub", f.UnRubs)
+	appendFilter("n.segment", f.Segments)
+	appendFilter("n.channel", f.Channels)
 
-	if search != "" {
-		likeArg := "%" + search + "%"
+	if f.Search != "" {
+		likeArg := "%" + f.Search + "%"
 		baseWhere += " AND (n.brandName LIKE ? OR n.productName LIKE ? OR n.networkName LIKE ? OR n.metric_type LIKE ?)"
 		args = append(args, likeArg, likeArg, likeArg, likeArg)
 	}
+
+	return baseWhere, args
+}
+
+func GetData(c *gin.Context) {
+	baseWhere, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		BrandNames:   c.QueryArray("brandName"),
+		NetworkNames: c.QueryArray("networkName"),
+		UnRubs:       c.QueryArray("un_rub"),
+		Segments:     c.QueryArray("segment"),
+		Channels:     c.QueryArray("channel"),
+		Search:       c.Query("search"),
+	})
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
 
 	all := c.Query("all")
 
@@ -2476,58 +2386,22 @@ func GetDrilldown(c *gin.Context) {
 		return
 	}
 
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
+	where, args := buildSalesWhere(salesFilter{
+		YearFromStr: c.Query("yearFrom"),
+		YearToStr:   c.Query("yearTo"),
+		Months:      c.QueryArray("months"),
+		Segments:    c.QueryArray("segment"),
+		Channels:    c.QueryArray("channel"),
+	})
+	// Drilldown фильтрует по конкретному бренду/сети (точное совпадение),
+	// поэтому вставляем их сразу после базового условия.
+	where = strings.Replace(where,
+		" WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL",
+		" WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL", 1)
+	args = append([]interface{}{brandName, networkName}, args...)
 
-	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
-	args := []interface{}{brandName, networkName}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			query += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			query += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n` + where +
+		" GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
@@ -2546,921 +2420,89 @@ func GetDrilldown(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
 }
-```
 
-## File: backend/main_test.go
-```go
-package main
+// ─── Excel Export для интернет-продаж ──────────────────────────────────────
+func ExportSalesExcel(c *gin.Context) {
+	baseWhere, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		BrandNames:   c.QueryArray("brandName"),
+		NetworkNames: c.QueryArray("networkName"),
+		UnRubs:       c.QueryArray("un_rub"),
+		Segments:     c.QueryArray("segment"),
+		Channels:     c.QueryArray("channel"),
+		Search:       c.Query("search"),
+	})
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
 
-import (
-	"backend/config"
-	"backend/handlers"
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"math"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"testing"
-	"time"
-
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
-)
-
-func init() {
-	godotenv.Load()
-	config.Init()
-}
-
-func setupRouter() *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	r := gin.Default()
-	// Промо
-	r.POST("/api/promo/save", handlers.SavePromo)
-	r.DELETE("/api/promo/:id", handlers.DeletePromo)
-	r.GET("/api/promo/data", handlers.GetPromoData)
-	r.GET("/api/promo/filters", handlers.GetPromoFilters)
-	// Интернет-продажи
-	r.GET("/api/data", handlers.GetData)
-	r.GET("/api/filters", handlers.GetFilterOptions)
-	return r
-}
-
-// cleanupTestData удаляет тестовые записи после прогона
-func cleanupTestData() {
-	config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'")
-}
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	cleanupTestData()
-	os.Exit(code)
-}
-
-// ==================== СОЗДАНИЕ ====================
-
-func TestSavePromo_Create(t *testing.T) {
-	router := setupRouter()
-	payload := map[string]interface{}{
-		"network_name": "Тестовая сеть", "sku": "TEST-SKU-001",
-		"year": 2026, "month": 1, "mechanics": "Скидка", "gtn_opex": "GTN",
-		"baseline_units": 100, "plan_promo_units": 150, "plan_investments_rub": 5000,
-		"contract_price": 200, "id_directum": "DIR-001", "ds_number": "DS-001",
-		"discount_amount": 15.5, "conditions": "Тестовые условия",
-		"ecom_segment":     "есть, не убирают из отчета",
-		"total_pharmacies": 1000, "promo_pharmacies": 500, "status": "Планируется",
+	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
+		return
 	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	defer rows.Close()
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	if response["message"] != "Created" {
-		t.Errorf("Ожидалось 'Created', получено '%v'", response["message"])
-	}
-	data := response["data"].(map[string]interface{})
-	if data["plan_promo_rub"].(float64) != 30000 {
-		t.Errorf("plan_promo_rub: ожидалось 30000, получено %f", data["plan_promo_rub"])
-	}
-	if data["quarter"].(float64) != 1 {
-		t.Errorf("quarter: ожидался 1, получен %f", data["quarter"])
-	}
-}
-
-func TestSavePromo_MissingFields(t *testing.T) {
-	router := setupRouter()
-	payload := map[string]interface{}{"network_name": "Тестовая сеть", "year": 2026}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получен %d", w.Code)
-	}
-}
-
-func TestSavePromo_ZeroValues(t *testing.T) {
-	router := setupRouter()
-	payload := map[string]interface{}{
-		"network_name": "Тестовая сеть", "sku": "TEST-ZERO-001",
-		"year": 2026, "month": 6, "baseline_units": 0, "plan_promo_units": 0,
-		"plan_investments_rub": 0, "contract_price": 0,
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получен %d", w.Code)
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].(map[string]interface{})
-	if data["plan_promo_rub"].(float64) != 0 {
-		t.Error("plan_promo_rub должен быть 0 при нулевых входных данных")
-	}
-	if data["plan_roi"].(float64) != 0 {
-		t.Error("plan_roi должен быть 0 при нулевых инвестициях")
-	}
-}
-
-func TestSavePromo_NegativeValues(t *testing.T) {
-	router := setupRouter()
-	payload := map[string]interface{}{
-		"network_name": "Тест", "sku": "TEST-NEG-001",
-		"year": 2026, "month": 3, "baseline_units": 100, "plan_promo_units": 80,
-		"plan_investments_rub": 5000, "contract_price": 200,
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].(map[string]interface{})
-	if data["plan_promo_uplift_units"].(float64) != -20 {
-		t.Error("plan_promo_uplift_units должен быть -20")
-	}
-}
-
-func TestSavePromo_QuarterCalculation(t *testing.T) {
-	router := setupRouter()
-	months := []int{1, 4, 7, 10}
-	expectedQuarters := []float64{1, 2, 3, 4}
-	for i, month := range months {
-		payload := map[string]interface{}{
-			"network_name": "Тест", "sku": fmt.Sprintf("TEST-Q%d", month),
-			"year": 2026, "month": month, "plan_promo_units": 100, "contract_price": 100,
+	var results []models.Row
+	for rows.Next() {
+		var r models.Row
+		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+			continue
 		}
-		body, _ := json.Marshal(payload)
-		req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		var response map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &response)
-		data := response["data"].(map[string]interface{})
-		if data["quarter"].(float64) != expectedQuarters[i] {
-			t.Errorf("Месяц %d: ожидался квартал %.0f, получен %.0f", month, expectedQuarters[i], data["quarter"])
+		results = append(results, r)
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	sheet := "Интернет-продажи"
+	f.SetSheetName("Sheet1", sheet)
+
+	headers := []string{
+		"Год", "Месяц", "Бренд", "Продукт", "Сеть",
+		"Показатель", "Значение", "Уп/Руб", "Сегмент", "Канал", "Обновлено", "ID",
+	}
+	for i, h := range headers {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetCellValue(sheet, fmt.Sprintf("%s1", col), h)
+	}
+
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"6366F1"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	f.SetRowStyle(sheet, 1, 1, headerStyle)
+
+	for i, row := range results {
+		rowNum := i + 2
+		vals := []interface{}{
+			row.Year, row.Month,
+			row.BrandName, row.ProductName, row.NetworkName,
+			row.MetricType, row.MetricValue,
+			models.ValString(row.UnRub), models.ValString(row.Segment), models.ValString(row.Channel), models.ValString(row.UpdatedAt),
+			row.ID,
+		}
+		for j, v := range vals {
+			col, _ := excelize.ColumnNumberToName(j + 1)
+			f.SetCellValue(sheet, fmt.Sprintf("%s%d", col, rowNum), v)
 		}
 	}
-}
 
-// ==================== ОБНОВЛЕНИЕ ====================
-
-// saveTestPromo создаёт тестовое промо и возвращает его ID
-func saveTestPromo(t *testing.T, router *gin.Engine, sku string) int {
-	t.Helper()
-	payload := map[string]interface{}{
-		"network_name": "Тест-Update", "sku": sku, "year": 2026, "month": 5,
-		"baseline_units": 100, "plan_promo_units": 200, "plan_investments_rub": 10000,
-		"contract_price": 150, "mechanics": "Скидка", "gtn_opex": "GTN",
-		"status": "Планируется",
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	return int(response["id"].(float64))
-}
-
-func TestUpdatePromo_RecalculatesFields(t *testing.T) {
-	router := setupRouter()
-	id := saveTestPromo(t, router, "TEST-UPDATE-001")
-
-	// Меняем plan_promo_units: 200 → 300
-	payload := map[string]interface{}{
-		"id": id, "plan_promo_units": 300,
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
+	for i := 1; i <= len(headers); i++ {
+		col, _ := excelize.ColumnNumberToName(i)
+		f.SetColWidth(sheet, col, col, 18)
 	}
 
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	if response["message"] != "Updated" {
-		t.Errorf("Ожидалось 'Updated', получено '%v'", response["message"])
-	}
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=internet-sales_%s.xlsx", time.Now().Format("2006-01-02")))
+	c.Header("Content-Transfer-Encoding", "binary")
 
-	data := response["data"].(map[string]interface{})
-
-	// plan_promo_rub = 300 * 150 = 45000
-	if planRub, ok := data["plan_promo_rub"]; !ok || math.Abs(planRub.(float64)-45000) > 0.01 {
-		t.Errorf("plan_promo_rub: ожидалось 45000, получено %v", data["plan_promo_rub"])
-	}
-	// uplift_units = 300 - 100 = 200
-	if uplift, ok := data["plan_promo_uplift_units"]; !ok || math.Abs(uplift.(float64)-200) > 0.01 {
-		t.Errorf("plan_promo_uplift_units: ожидалось 200, получено %v", data["plan_promo_uplift_units"])
+	if err := f.Write(c.Writer); err != nil {
+		config.Logger.Error("excel_export_sales_failed", "error", err.Error())
 	}
 }
-
-func TestUpdatePromo_ChangesQuarterOnMonthChange(t *testing.T) {
-	router := setupRouter()
-	id := saveTestPromo(t, router, "TEST-UPDATE-Q")
-
-	// Меняем месяц: 5 (Q2) → 11 (Q4)
-	payload := map[string]interface{}{"id": id, "month": 11}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].(map[string]interface{})
-
-	if data["quarter"].(float64) != 4 {
-		t.Errorf("quarter: ожидался 4 (месяц 11), получен %v", data["quarter"])
-	}
-}
-
-func TestUpdatePromo_PreservesUnchangedFields(t *testing.T) {
-	router := setupRouter()
-	id := saveTestPromo(t, router, "TEST-UPDATE-PRES")
-
-	// Меняем только status
-	payload := map[string]interface{}{"id": id, "status": "Завершено"}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].(map[string]interface{})
-
-	// network_name должен сохраниться
-	if data["network_name"] != "Тест-Update" {
-		t.Errorf("network_name: ожидалось 'Тест-Update', получено '%v'", data["network_name"])
-	}
-	// contract_price должен сохраниться и использоваться в расчётах
-	if cp, ok := data["contract_price"]; !ok || math.Abs(cp.(float64)-150) > 0.01 {
-		t.Errorf("contract_price: ожидалось 150, получено %v", data["contract_price"])
-	}
-}
-
-func TestUpdatePromo_UpdateNonExistent(t *testing.T) {
-	router := setupRouter()
-	payload := map[string]interface{}{"id": 99999999, "status": "Завершено"}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// fetchExistingRow вернёт ошибку → 500
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Ожидался статус 500 для несуществующего ID, получен %d", w.Code)
-	}
-}
-
-// ==================== УДАЛЕНИЕ ====================
-
-func TestDeletePromo_NotFound(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("DELETE", "/api/promo/99999999", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
-		t.Errorf("Ожидался статус 200 или 404, получен %d", w.Code)
-	}
-}
-
-func TestDeletePromo_InvalidID(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("DELETE", "/api/promo/abc", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Ожидался статус 400, получен %d", w.Code)
-	}
-}
-
-func TestDeletePromo_ThenVerifyGone(t *testing.T) {
-	router := setupRouter()
-	id := saveTestPromo(t, router, "TEST-DELETE-001")
-
-	// Удаляем
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/promo/%d", id), nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("Ожидался статус 200 при удалении, получен %d", w.Code)
-	}
-
-	// Пробуем обновить удалённое → 500
-	payload := map[string]interface{}{"id": id, "status": "Обновлено"}
-	body, _ := json.Marshal(payload)
-	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req2.Header.Set("Content-Type", "application/json")
-	w2 := httptest.NewRecorder()
-	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusInternalServerError {
-		t.Errorf("Ожидался статус 500 при обновлении удалённой записи, получен %d", w2.Code)
-	}
-}
-
-// ==================== ФИЛЬТРЫ ПРОМО ====================
-
-func TestGetPromoFilters_All(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/promo/filters", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("Ожидался статус 200, получен %d", w.Code)
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-
-	// Все ключи должны присутствовать
-	for _, key := range []string{"kam", "brand", "sku", "network_name", "mechanics", "channel", "status"} {
-		if _, ok := response[key]; !ok {
-			t.Errorf("В ответе отсутствует ключ '%s'", key)
-		}
-	}
-}
-
-func TestGetPromoFilters_ByYear(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/promo/filters?yearFrom=2025&yearTo=2026", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Фильтр по году: ожидался 200, получен %d", w.Code)
-	}
-}
-
-func TestGetPromoFilters_ByMonth(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/promo/filters?months=1&months=6&months=12", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Фильтр по месяцам: ожидался 200, получен %d", w.Code)
-	}
-}
-
-func TestGetPromoFilters_Cascading(t *testing.T) {
-	router := setupRouter()
-	// Выбираем одного KAM → список брендов должен сузиться
-	req, _ := http.NewRequest("GET", "/api/promo/filters?kam=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// Даже если такого KAM нет — фильтр не должен падать
-	if w.Code != http.StatusOK {
-		t.Errorf("Каскадный фильтр: ожидался 200, получен %d", w.Code)
-	}
-}
-
-// ==================== ДАННЫЕ ПРОМО ====================
-
-func TestGetPromoData_Empty(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/promo/data?all=true&yearFrom=1900&yearTo=1901", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получен %d", w.Code)
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].([]interface{})
-	if len(data) != 0 {
-		t.Errorf("Ожидался пустой массив, получено %d записей", len(data))
-	}
-}
-
-func TestGetPromoData_Pagination(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/promo/data?page=0&pageSize=5", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Пагинация: ожидался 200, получен %d", w.Code)
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	data := response["data"].([]interface{})
-	if len(data) > 5 {
-		t.Errorf("Пагинация: ожидалось не более 5 записей, получено %d", len(data))
-	}
-}
-
-// ==================== ИНТЕРНЕТ-ПРОДАЖИ: ФИЛЬТРЫ ====================
-
-func TestGetFilterOptions_ReturnsAllKeys(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/filters", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("Ожидался статус 200, получен %d", w.Code)
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	for _, key := range []string{"brandName", "networkName", "un_rub", "segment", "channel", "segmentChannelMap", "channelSegmentMap"} {
-		if _, ok := response[key]; !ok {
-			t.Errorf("В ответе отсутствует ключ '%s'", key)
-		}
-	}
-}
-
-func TestGetData_WithFilters(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/data?yearFrom=2024&yearTo=2025&page=0&pageSize=10", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
-	}
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-	if _, ok := response["totalRows"]; !ok {
-		t.Error("Ответ должен содержать 'totalRows' при пагинации")
-	}
-}
-
-func TestGetData_AllForExport(t *testing.T) {
-	router := setupRouter()
-	req, _ := http.NewRequest("GET", "/api/data?all=true&yearFrom=2025&yearTo=2025", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Errorf("all=true: ожидался 200, получен %d", w.Code)
-	}
-}
-
-// ==================== ИНТЕГРАЦИОННЫЙ: Create → Read → Update → Delete ====================
-
-func TestIntegration_PromoCRUD(t *testing.T) {
-	router := setupRouter()
-	timestamp := time.Now().UnixNano()
-
-	// CREATE
-	createPayload := map[string]interface{}{
-		"network_name": "Интеграция-Сеть",
-		"sku":          fmt.Sprintf("TEST-INT-%d", timestamp),
-		"year":         2026, "month": 7,
-		"mechanics": "Скидка 15%", "gtn_opex": "GTN",
-		"baseline_units": 500, "plan_promo_units": 800,
-		"plan_investments_rub": 25000, "contract_price": 300,
-		"status": "Планируется",
-	}
-	body, _ := json.Marshal(createPayload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("CREATE: ожидался 200, получен %d: %s", w.Code, w.Body.String())
-	}
-	var createResp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &createResp)
-	id := int(createResp["id"].(float64))
-	t.Logf("Создано промо ID=%d", id)
-
-	// READ через GetPromoData с фильтром по SKU
-	req2, _ := http.NewRequest("GET",
-		fmt.Sprintf("/api/promo/data?all=true&sku=%s", createPayload["sku"]), nil)
-	w2 := httptest.NewRecorder()
-	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusOK {
-		t.Fatalf("READ: ожидался 200, получен %d", w2.Code)
-	}
-	var readResp map[string]interface{}
-	json.Unmarshal(w2.Body.Bytes(), &readResp)
-	rows := readResp["data"].([]interface{})
-	if len(rows) == 0 {
-		t.Fatal("READ: запись не найдена после создания")
-	}
-	t.Logf("Прочитано %d записей по SKU", len(rows))
-
-	// UPDATE
-	updatePayload := map[string]interface{}{
-		"id": id, "plan_promo_units": 1000, "status": "Согласовано",
-	}
-	body3, _ := json.Marshal(updatePayload)
-	req3, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body3))
-	req3.Header.Set("Content-Type", "application/json")
-	w3 := httptest.NewRecorder()
-	router.ServeHTTP(w3, req3)
-	if w3.Code != http.StatusOK {
-		t.Fatalf("UPDATE: ожидался 200, получен %d: %s", w3.Code, w3.Body.String())
-	}
-	var updateResp map[string]interface{}
-	json.Unmarshal(w3.Body.Bytes(), &updateResp)
-	if updateResp["message"] != "Updated" {
-		t.Errorf("UPDATE: ожидалось 'Updated', получено '%v'", updateResp["message"])
-	}
-	// Проверяем пересчёт
-	updatedData := updateResp["data"].(map[string]interface{})
-	if math.Abs(updatedData["plan_promo_rub"].(float64)-300000) > 0.01 {
-		t.Errorf("UPDATE: plan_promo_rub ожидалось 300000 (1000*300), получено %v", updatedData["plan_promo_rub"])
-	}
-
-	// DELETE
-	req4, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/promo/%d", id), nil)
-	w4 := httptest.NewRecorder()
-	router.ServeHTTP(w4, req4)
-	if w4.Code != http.StatusOK {
-		t.Fatalf("DELETE: ожидался 200, получен %d", w4.Code)
-	}
-	t.Log("Удалено успешно")
-
-	// VERIFY DELETION — обновление удалённой записи должно вернуть 500
-	body5, _ := json.Marshal(map[string]interface{}{"id": id, "status": "После удаления"})
-	req5, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body5))
-	req5.Header.Set("Content-Type", "application/json")
-	w5 := httptest.NewRecorder()
-	router.ServeHTTP(w5, req5)
-	if w5.Code != http.StatusInternalServerError {
-		t.Errorf("VERIFY: обновление удалённой записи должно вернуть 500, получен %d", w5.Code)
-	}
-}
-
-// ==================== МАТЕМАТИКА ====================
-
-func TestROICalculation(t *testing.T) {
-	upliftRub := 50000.0
-	investments := 200000.0
-	gm := 0.56
-	expected := (upliftRub/investments)*gm*100 - 100
-	roi := (upliftRub/investments)*gm*100 - 100
-	if math.Abs(roi-expected) > 0.001 {
-		t.Errorf("ROI: ожидалось %f, получено %f", expected, roi)
-	}
-}
-
-func TestBaselineRubCalculation(t *testing.T) {
-	tests := []struct {
-		baseline, price, expected float64
-	}{
-		{100, 200, 20000}, {0, 200, 0}, {100, 0, 0}, {150.5, 300.75, 45262.875},
-	}
-	for _, tt := range tests {
-		result := tt.baseline * tt.price
-		if math.Abs(result-tt.expected) > 0.001 {
-			t.Errorf("baseline_rub(%f*%f): ожидалось %f, получено %f", tt.baseline, tt.price, tt.expected, result)
-		}
-	}
-}
-
-func TestUpliftCalculation(t *testing.T) {
-	tests := []struct{ plan, baseline, expected float64 }{
-		{150, 100, 50}, {80, 100, -20}, {0, 100, -100}, {100, 0, 100},
-	}
-	for _, tt := range tests {
-		result := tt.plan - tt.baseline
-		if math.Abs(result-tt.expected) > 0.001 {
-			t.Errorf("uplift(%f-%f): ожидалось %f, получено %f", tt.plan, tt.baseline, tt.expected, result)
-		}
-	}
-}
-
-func TestQuarterCalculation(t *testing.T) {
-	tests := []struct{ month, expected int }{
-		{1, 1}, {2, 1}, {3, 1}, {4, 2}, {5, 2}, {6, 2},
-		{7, 3}, {8, 3}, {9, 3}, {10, 4}, {11, 4}, {12, 4},
-	}
-	for _, tt := range tests {
-		q := int(math.Ceil(float64(tt.month) / 3))
-		if q != tt.expected {
-			t.Errorf("Месяц %d: ожидался квартал %d, получен %d", tt.month, tt.expected, q)
-		}
-	}
-}
-
-// ==================== RATE LIMITING ====================
-
-func TestRateLimiter(t *testing.T) {
-	limiter := NewRateLimiter(5, 1*time.Second)
-	for i := 0; i < 5; i++ {
-		if !limiter.Allow("127.0.0.1") {
-			t.Errorf("Запрос %d должен быть разрешён", i+1)
-		}
-	}
-	if limiter.Allow("127.0.0.1") {
-		t.Error("6-й запрос должен быть отклонён")
-	}
-	if !limiter.Allow("192.168.1.1") {
-		t.Error("Запрос с другого IP должен быть разрешён")
-	}
-	time.Sleep(1 * time.Second)
-	if !limiter.Allow("127.0.0.1") {
-		t.Error("После сброса окна запрос должен быть разрешён")
-	}
-}
-
-func TestRateLimiter_Cleanup(t *testing.T) {
-	limiter := NewRateLimiter(3, 100*time.Millisecond)
-	limiter.Allow("ip1")
-	limiter.Allow("ip2")
-	limiter.Allow("ip1")
-	if len(limiter.visitors) != 2 {
-		t.Errorf("Ожидалось 2 посетителя, получено %d", len(limiter.visitors))
-	}
-	time.Sleep(150 * time.Millisecond)
-	limiter.Allow("ip1")
-	if len(limiter.visitors["ip1"]) > 1 {
-		t.Error("Старые записи должны были очиститься")
-	}
-}
-
-func saveTestPromoWithMeta(t *testing.T, router *gin.Engine, sku string) (int, string) {
-	t.Helper()
-	payload := map[string]interface{}{
-		"network_name": "Тест-OPTILOCK", "sku": sku, "year": 2026, "month": 5,
-		"baseline_units": 100, "plan_promo_units": 200, "plan_investments_rub": 10000,
-		"contract_price": 150, "mechanics": "Скидка", "gtn_opex": "GTN",
-		"status": "Планируется",
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var response map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &response)
-
-	if response["message"] != "Created" {
-		t.Fatalf("Не удалось создать тестовое промо: %v", response)
-	}
-
-	id := int(response["id"].(float64))
-
-	// Достаём реальный updated_at из БД
-	var updatedAt string
-	config.DB.QueryRow("SELECT CONVERT(NVARCHAR, updated_at, 121) FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id).Scan(&updatedAt)
-
-	return id, updatedAt
-}
-
-func TestSavePromo_OptimisticLocking(t *testing.T) {
-	router := setupRouter()
-	id, updatedAt := saveTestPromoWithMeta(t, router, "TEST-OPTILOCK-001")
-
-	// Первое обновление — передаём актуальный updated_at (должно пройти)
-	payload1 := map[string]interface{}{
-		"id": id, "status": "Первое изменение",
-		"updated_at": updatedAt,
-	}
-	body1, _ := json.Marshal(payload1)
-	req1, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body1))
-	req1.Header.Set("Content-Type", "application/json")
-	w1 := httptest.NewRecorder()
-	router.ServeHTTP(w1, req1)
-
-	if w1.Code != http.StatusOK {
-		var errResp map[string]interface{}
-		json.Unmarshal(w1.Body.Bytes(), &errResp)
-		t.Fatalf("Первое обновление должно пройти: %v", errResp)
-	}
-
-	var resp1 map[string]interface{}
-	json.Unmarshal(w1.Body.Bytes(), &resp1)
-	data1 := resp1["data"].(map[string]interface{})
-	newUpdatedAt := data1["updated_at"]
-
-	// Второе обновление с тем же старым updated_at — должно дать 409
-	payload2 := map[string]interface{}{
-		"id": id, "status": "Конфликт",
-		"updated_at": updatedAt, // тот же, что и в первом запросе — уже не актуален
-	}
-	body2, _ := json.Marshal(payload2)
-	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body2))
-	req2.Header.Set("Content-Type", "application/json")
-	w2 := httptest.NewRecorder()
-	router.ServeHTTP(w2, req2)
-
-	if w2.Code != http.StatusConflict {
-		t.Errorf("Ожидался 409 Conflict, получен %d. Ответ: %s", w2.Code, w2.Body.String())
-	} else {
-		t.Logf("✅ Optimistic locking работает: первый OK с новым updated_at=%v, второй 409 со старым=%v", newUpdatedAt, updatedAt)
-	}
-}
-```
-
-## File: frontend/src/components/ApprovalCard.jsx
-```javascript
-import { memo, useMemo } from 'react';
-import {
-  Box, Typography, Card, CardContent, CardActions,
-  Button, Chip, Collapse, Grid, TextField,
-  LinearProgress, CircularProgress,
-} from '@mui/material';
-import {
-  ExpandMore as ExpandMoreIcon,
-  CheckCircle as ApproveIcon,
-  Cancel as RejectIcon,
-  Comment as CommentIcon,
-} from '@mui/icons-material';
-import { ALL_FIELDS_FLAT } from '../utils/cardFields';
-
-const fmtNum = (v, decimals = 0) => {
-  if (v == null) return '—';
-  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-};
-
-const roiColor = (roi) => {
-  if (roi == null) return '#94a3b8';
-  return roi >= 0 ? '#16a34a' : '#dc2626';
-};
-
-const MONTHS = [
-  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
-  { label: 'Апрель', value: 4 }, { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 },
-  { label: 'Июль', value: 7 }, { label: 'Август', value: 8 }, { label: 'Сентябрь', value: 9 },
-  { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
-];
-
-// Эти поля всегда показываются на карточке, не выбираются в настройках
-const SIDEBAR_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as', 'kam']);
-
-const ApprovalCard = memo(function ApprovalCard({
-  item, expanded, submitting,
-  onCommentRef, onToggleExpand, onOpenConfirm, onCommentOnly,
-  visibleFields,
-}) {
-  const id = item.id;
-  const isSubmitting = submitting[id] || false;
-
-  // Динамические поля из настроек, исключая sidebar
-  const visibleData = useMemo(() => {
-    if (!visibleFields || visibleFields.length === 0) return [];
-    return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !SIDEBAR_FIELDS.has(f.id));
-  }, [visibleFields]);
-
-  // Цвет левой рамки по ROI
-  const leftBorderColor = item.plan_roi != null
-    ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
-    : '#94a3b8';
-
-  return (
-    <Box sx={{ position: 'relative' }}>
-      {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
-      <Card elevation={2} sx={{
-        borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 },
-        height: '100%', display: 'flex', flexDirection: 'column',
-        opacity: isSubmitting ? 0.7 : 1,
-        borderLeft: `4px solid ${leftBorderColor}`,
-      }}>
-        {isSubmitting && (
-          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
-            <CircularProgress size={32} />
-          </Box>
-        )}
-        <CardContent sx={{ flex: 1, pb: 1, pt: 2 }}>
-          {/* Заголовок и чипсы (фиксированные) */}
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-            {item.network_name || '—'}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
-            <Chip label={item.sku || '—'} size="small" variant="outlined" />
-            <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
-          </Box>
-          {item.year && item.month && (
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-              Период: {MONTHS.find(m => m.value === item.month)?.label || item.month} {item.year}
-            </Typography>
-          )}
-
-          {/* Динамические поля из настроек */}
-          {visibleData.length > 0 && (
-            <Grid container spacing={1.5} sx={{ mb: 1 }}>
-              {visibleData.map(fieldConfig => (
-                <Grid item xs={6} key={fieldConfig.id}>
-                  <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
-                  <Typography variant="body2" sx={{
-                    fontWeight: 600,
-                    color: fieldConfig.isRoi ? roiColor(item[fieldConfig.id]) : 'inherit',
-                  }}>
-                    {fieldConfig.isRoi || fieldConfig.isPercent
-                      ? (item[fieldConfig.id] != null ? `${Number(item[fieldConfig.id]).toFixed(1)}%` : '—')
-                      : (item[fieldConfig.id] != null ? fmtNum(item[fieldConfig.id], fieldConfig.isMoney ? 2 : 0) : '—')}
-                  </Typography>
-                </Grid>
-              ))}
-            </Grid>
-          )}
-
-          {/* Блок исторических данных — показываем, если поля включены */}
-          {(visibleFields?.includes('historical_count') || visibleFields?.includes('avg_historical_roi') || visibleFields?.includes('avg_historical_uplift')) && (
-            <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
-              {visibleFields.includes('historical_count') && (
-                <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
-              )}
-              {visibleFields.includes('avg_historical_roi') && (
-                <Typography variant="caption" color="text.secondary">
-                  Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
-                </Typography>
-              )}
-            </Box>
-          )}
-
-          {/* Согласования — всегда показываем, если есть */}
-          {(item.agreement1 || item.agreement2) && (
-            <Box sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-              {item.agreement1 && (
-                <Typography variant="caption" sx={{ 
-                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
-                  bgcolor: String(item.agreement1).startsWith('согласовано') ? '#f0fdf4' : 
-                           String(item.agreement1).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
-                  color: String(item.agreement1).startsWith('согласовано') ? '#16a34a' : 
-                         String(item.agreement1).startsWith('отклонено') ? '#dc2626' : '#6366f1',
-                }}>
-                  <b>Согл. 1:</b> {item.agreement1}
-                </Typography>
-              )}
-              {item.agreement2 && (
-                <Typography variant="caption" sx={{ 
-                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
-                  bgcolor: String(item.agreement2).startsWith('согласовано') ? '#f0fdf4' : 
-                           String(item.agreement2).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
-                  color: String(item.agreement2).startsWith('согласовано') ? '#16a34a' : 
-                         String(item.agreement2).startsWith('отклонено') ? '#dc2626' : '#6366f1',
-                }}>
-                  <b>Согл. 2:</b> {item.agreement2}
-                </Typography>
-              )}
-            </Box>
-          )}
-
-          {/* Условия — всегда показываем, если есть */}
-          {item.conditions && (
-            <Box sx={{ mb: 1 }}>
-              <Button size="small" onClick={() => onToggleExpand(id)}
-                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
-                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>Условия</Button>
-              <Collapse in={expanded}>
-                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.8rem', color: '#475569' }}>
-                  {item.conditions}
-                </Typography>
-              </Collapse>
-            </Box>
-          )}
-
-          {/* История переписки (поле comments из БД) */}
-          {item.comments && (
-            <Box sx={{ mb: 1 }}>
-              <Button size="small" onClick={() => onToggleExpand(id)}
-                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
-                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>💬 Комментарии</Button>
-              <Collapse in={expanded}>
-                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.75rem', color: '#475569', whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
-                  {item.comments}
-                </Typography>
-              </Collapse>
-            </Box>
-          )}
-
-          <TextField size="small" fullWidth multiline minRows={1} maxRows={3}
-            placeholder="Комментарий (необязательно)"
-            inputRef={(el) => { if (el && onCommentRef) onCommentRef(id, el); }}
-            sx={{ mb: 1 }} />
-        </CardContent>
-        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
-          <Button size="small" variant="outlined" startIcon={<CommentIcon />}
-            onClick={() => onCommentOnly(id)} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
-          <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
-            onClick={() => onOpenConfirm(id, 'согласовано')} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
-          <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
-            onClick={() => onOpenConfirm(id, 'отклонено')} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
-        </CardActions>
-      </Card>
-    </Box>
-  );
-});
-
-export default ApprovalCard;
 ```
 
 ## File: frontend/src/components/FilterPanel.jsx
@@ -3648,6 +2690,93 @@ export default function FilterPanel({
       </Stack>
     </Stack>
   );
+}
+```
+
+## File: frontend/src/hooks/usePromoData.ts
+```typescript
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useCallback } from 'react';
+
+export interface PromoDataResult {
+  rows: unknown[];
+  setRows: (updater: unknown[] | ((prev: unknown[]) => unknown[])) => void;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+/**
+ * Хук для получения данных промо с использованием React Query.
+ * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
+ * и state-машину loading/error.
+ *
+ * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
+ * чтобы не ломать PromoAnalysis.jsx.
+ */
+export function usePromoData(
+  filters: Record<string, unknown>,
+  refreshTrigger: number,
+): PromoDataResult {
+  const queryClient = useQueryClient();
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  // Стабильный queryKey на основе фильтров и refreshTrigger
+  const queryKey: [string, Record<string, unknown>, number] = ['promoData', filters, refreshTrigger];
+
+  const fetchPromoData = useCallback(async ({ signal }: { signal: AbortSignal }) => {
+    const currentFilters = filtersRef.current;
+    const params = new URLSearchParams();
+    Object.entries(currentFilters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
+    });
+
+    const qs = params.toString();
+    const response = await fetch(
+      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
+      {
+        signal,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      },
+    );
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return (json.data || []) as unknown[];
+  }, []);
+
+  const { data: rows = [], isLoading, error, refetch } = useQuery({
+    queryKey,
+    queryFn: fetchPromoData,
+  });
+
+  // setRows — для обратной совместимости: обновляет кеш React Query
+  const setRows = useCallback(
+    (newRowsOrUpdater: unknown[] | ((prev: unknown[]) => unknown[])) => {
+      queryClient.setQueryData(queryKey, (old: unknown[] | undefined) => {
+        if (typeof newRowsOrUpdater === 'function') {
+          return newRowsOrUpdater(old || []);
+        }
+        return newRowsOrUpdater;
+      });
+    },
+    [queryClient, queryKey],
+  );
+
+  return {
+    rows,
+    setRows,
+    loading: isLoading,
+    error: error ? (error as Error).message || String(error) : null,
+    refetch,
+  };
 }
 ```
 
@@ -4873,13 +4002,780 @@ func DBRowToMap(r *models.PromoRowDB) map[string]interface{} {
 }
 ```
 
-## File: frontend/src/hooks/usePromoForm.js
-```javascript
+## File: backend/main_test.go
+```go
+package main
+
+import (
+	"backend/config"
+	"backend/handlers"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+)
+
+func init() {
+	godotenv.Load()
+	config.Init()
+}
+
+func setupRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.Default()
+	// Промо
+	r.POST("/api/promo/save", handlers.SavePromo)
+	r.DELETE("/api/promo/:id", handlers.DeletePromo)
+	r.GET("/api/promo/data", handlers.GetPromoData)
+	r.GET("/api/promo/filters", handlers.GetPromoFilters)
+	// Интернет-продажи
+	r.GET("/api/data", handlers.GetData)
+	r.GET("/api/filters", handlers.GetFilterOptions)
+	return r
+}
+
+// cleanupTestData удаляет тестовые записи после прогона.
+// Защита: выполняется только если имя БД содержит _test или _dev.
+func cleanupTestData() {
+	dbName := os.Getenv("DB_NAME")
+	if !strings.Contains(dbName, "_test") && !strings.Contains(dbName, "_dev") {
+		fmt.Println("[WARN] cleanupTestData: БД не тестовая, пропускаем DELETE")
+		return
+	}
+	config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'")
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	cleanupTestData()
+	os.Exit(code)
+}
+
+// ==================== СОЗДАНИЕ ====================
+
+func TestSavePromo_Create(t *testing.T) {
+	router := setupRouter()
+	payload := map[string]interface{}{
+		"network_name": "Тестовая сеть", "sku": "TEST-SKU-001",
+		"year": 2026, "month": 1, "mechanics": "Скидка", "gtn_opex": "GTN",
+		"baseline_units": 100, "plan_promo_units": 150, "plan_investments_rub": 5000,
+		"contract_price": 200, "id_directum": "DIR-001", "ds_number": "DS-001",
+		"discount_amount": 15.5, "conditions": "Тестовые условия",
+		"ecom_segment":     "есть, не убирают из отчета",
+		"total_pharmacies": 1000, "promo_pharmacies": 500, "status": "Планируется",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	if response["message"] != "Created" {
+		t.Errorf("Ожидалось 'Created', получено '%v'", response["message"])
+	}
+	data := response["data"].(map[string]interface{})
+	if data["plan_promo_rub"].(float64) != 30000 {
+		t.Errorf("plan_promo_rub: ожидалось 30000, получено %f", data["plan_promo_rub"])
+	}
+	if data["quarter"].(float64) != 1 {
+		t.Errorf("quarter: ожидался 1, получен %f", data["quarter"])
+	}
+}
+
+func TestSavePromo_MissingFields(t *testing.T) {
+	router := setupRouter()
+	payload := map[string]interface{}{"network_name": "Тестовая сеть", "year": 2026}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Ожидался статус 200, получен %d", w.Code)
+	}
+}
+
+func TestSavePromo_ZeroValues(t *testing.T) {
+	router := setupRouter()
+	payload := map[string]interface{}{
+		"network_name": "Тестовая сеть", "sku": "TEST-ZERO-001",
+		"year": 2026, "month": 6, "baseline_units": 0, "plan_promo_units": 0,
+		"plan_investments_rub": 0, "contract_price": 0,
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Ожидался статус 200, получен %d", w.Code)
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].(map[string]interface{})
+	if data["plan_promo_rub"].(float64) != 0 {
+		t.Error("plan_promo_rub должен быть 0 при нулевых входных данных")
+	}
+	if data["plan_roi"].(float64) != 0 {
+		t.Error("plan_roi должен быть 0 при нулевых инвестициях")
+	}
+}
+
+func TestSavePromo_NegativeValues(t *testing.T) {
+	router := setupRouter()
+	payload := map[string]interface{}{
+		"network_name": "Тест", "sku": "TEST-NEG-001",
+		"year": 2026, "month": 3, "baseline_units": 100, "plan_promo_units": 80,
+		"plan_investments_rub": 5000, "contract_price": 200,
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].(map[string]interface{})
+	if data["plan_promo_uplift_units"].(float64) != -20 {
+		t.Error("plan_promo_uplift_units должен быть -20")
+	}
+}
+
+func TestSavePromo_QuarterCalculation(t *testing.T) {
+	router := setupRouter()
+	months := []int{1, 4, 7, 10}
+	expectedQuarters := []float64{1, 2, 3, 4}
+	for i, month := range months {
+		payload := map[string]interface{}{
+			"network_name": "Тест", "sku": fmt.Sprintf("TEST-Q%d", month),
+			"year": 2026, "month": month, "plan_promo_units": 100, "contract_price": 100,
+		}
+		body, _ := json.Marshal(payload)
+		req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		var response map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &response)
+		data := response["data"].(map[string]interface{})
+		if data["quarter"].(float64) != expectedQuarters[i] {
+			t.Errorf("Месяц %d: ожидался квартал %.0f, получен %.0f", month, expectedQuarters[i], data["quarter"])
+		}
+	}
+}
+
+// ==================== ОБНОВЛЕНИЕ ====================
+
+// saveTestPromo создаёт тестовое промо и возвращает его ID
+func saveTestPromo(t *testing.T, router *gin.Engine, sku string) int {
+	t.Helper()
+	payload := map[string]interface{}{
+		"network_name": "Тест-Update", "sku": sku, "year": 2026, "month": 5,
+		"baseline_units": 100, "plan_promo_units": 200, "plan_investments_rub": 10000,
+		"contract_price": 150, "mechanics": "Скидка", "gtn_opex": "GTN",
+		"status": "Планируется",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	return int(response["id"].(float64))
+}
+
+func TestUpdatePromo_RecalculatesFields(t *testing.T) {
+	router := setupRouter()
+	id := saveTestPromo(t, router, "TEST-UPDATE-001")
+
+	// Меняем plan_promo_units: 200 → 300
+	payload := map[string]interface{}{
+		"id": id, "plan_promo_units": 300,
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	if response["message"] != "Updated" {
+		t.Errorf("Ожидалось 'Updated', получено '%v'", response["message"])
+	}
+
+	data := response["data"].(map[string]interface{})
+
+	// plan_promo_rub = 300 * 150 = 45000
+	if planRub, ok := data["plan_promo_rub"]; !ok || math.Abs(planRub.(float64)-45000) > 0.01 {
+		t.Errorf("plan_promo_rub: ожидалось 45000, получено %v", data["plan_promo_rub"])
+	}
+	// uplift_units = 300 - 100 = 200
+	if uplift, ok := data["plan_promo_uplift_units"]; !ok || math.Abs(uplift.(float64)-200) > 0.01 {
+		t.Errorf("plan_promo_uplift_units: ожидалось 200, получено %v", data["plan_promo_uplift_units"])
+	}
+}
+
+func TestUpdatePromo_ChangesQuarterOnMonthChange(t *testing.T) {
+	router := setupRouter()
+	id := saveTestPromo(t, router, "TEST-UPDATE-Q")
+
+	// Меняем месяц: 5 (Q2) → 11 (Q4)
+	payload := map[string]interface{}{"id": id, "month": 11}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].(map[string]interface{})
+
+	if data["quarter"].(float64) != 4 {
+		t.Errorf("quarter: ожидался 4 (месяц 11), получен %v", data["quarter"])
+	}
+}
+
+func TestUpdatePromo_PreservesUnchangedFields(t *testing.T) {
+	router := setupRouter()
+	id := saveTestPromo(t, router, "TEST-UPDATE-PRES")
+
+	// Меняем только status
+	payload := map[string]interface{}{"id": id, "status": "Завершено"}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].(map[string]interface{})
+
+	// network_name должен сохраниться
+	if data["network_name"] != "Тест-Update" {
+		t.Errorf("network_name: ожидалось 'Тест-Update', получено '%v'", data["network_name"])
+	}
+	// contract_price должен сохраниться и использоваться в расчётах
+	if cp, ok := data["contract_price"]; !ok || math.Abs(cp.(float64)-150) > 0.01 {
+		t.Errorf("contract_price: ожидалось 150, получено %v", data["contract_price"])
+	}
+}
+
+func TestUpdatePromo_UpdateNonExistent(t *testing.T) {
+	router := setupRouter()
+	payload := map[string]interface{}{"id": 99999999, "status": "Завершено"}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// fetchExistingRow вернёт ошибку → 500
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Ожидался статус 500 для несуществующего ID, получен %d", w.Code)
+	}
+}
+
+// ==================== УДАЛЕНИЕ ====================
+
+func TestDeletePromo_NotFound(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("DELETE", "/api/promo/99999999", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+		t.Errorf("Ожидался статус 200 или 404, получен %d", w.Code)
+	}
+}
+
+func TestDeletePromo_InvalidID(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("DELETE", "/api/promo/abc", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Ожидался статус 400, получен %d", w.Code)
+	}
+}
+
+func TestDeletePromo_ThenVerifyGone(t *testing.T) {
+	router := setupRouter()
+	id := saveTestPromo(t, router, "TEST-DELETE-001")
+
+	// Удаляем
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/promo/%d", id), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ожидался статус 200 при удалении, получен %d", w.Code)
+	}
+
+	// Пробуем обновить удалённое → 500
+	payload := map[string]interface{}{"id": id, "status": "Обновлено"}
+	body, _ := json.Marshal(payload)
+	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusInternalServerError {
+		t.Errorf("Ожидался статус 500 при обновлении удалённой записи, получен %d", w2.Code)
+	}
+}
+
+// ==================== ФИЛЬТРЫ ПРОМО ====================
+
+func TestGetPromoFilters_All(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/promo/filters", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ожидался статус 200, получен %d", w.Code)
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+
+	// Все ключи должны присутствовать
+	for _, key := range []string{"kam", "brand", "sku", "network_name", "mechanics", "channel", "status"} {
+		if _, ok := response[key]; !ok {
+			t.Errorf("В ответе отсутствует ключ '%s'", key)
+		}
+	}
+}
+
+func TestGetPromoFilters_ByYear(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/promo/filters?yearFrom=2025&yearTo=2026", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Фильтр по году: ожидался 200, получен %d", w.Code)
+	}
+}
+
+func TestGetPromoFilters_ByMonth(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/promo/filters?months=1&months=6&months=12", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Фильтр по месяцам: ожидался 200, получен %d", w.Code)
+	}
+}
+
+func TestGetPromoFilters_Cascading(t *testing.T) {
+	router := setupRouter()
+	// Выбираем одного KAM → список брендов должен сузиться
+	req, _ := http.NewRequest("GET", "/api/promo/filters?kam=%D0%98%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Даже если такого KAM нет — фильтр не должен падать
+	if w.Code != http.StatusOK {
+		t.Errorf("Каскадный фильтр: ожидался 200, получен %d", w.Code)
+	}
+}
+
+// ==================== ДАННЫЕ ПРОМО ====================
+
+func TestGetPromoData_Empty(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/promo/data?all=true&yearFrom=1900&yearTo=1901", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Ожидался статус 200, получен %d", w.Code)
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].([]interface{})
+	if len(data) != 0 {
+		t.Errorf("Ожидался пустой массив, получено %d записей", len(data))
+	}
+}
+
+func TestGetPromoData_Pagination(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/promo/data?page=0&pageSize=5", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Пагинация: ожидался 200, получен %d", w.Code)
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	data := response["data"].([]interface{})
+	if len(data) > 5 {
+		t.Errorf("Пагинация: ожидалось не более 5 записей, получено %d", len(data))
+	}
+}
+
+// ==================== ИНТЕРНЕТ-ПРОДАЖИ: ФИЛЬТРЫ ====================
+
+func TestGetFilterOptions_ReturnsAllKeys(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/filters", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Ожидался статус 200, получен %d", w.Code)
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	for _, key := range []string{"brandName", "networkName", "un_rub", "segment", "channel", "segmentChannelMap", "channelSegmentMap"} {
+		if _, ok := response[key]; !ok {
+			t.Errorf("В ответе отсутствует ключ '%s'", key)
+		}
+	}
+}
+
+func TestGetData_WithFilters(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/data?yearFrom=2024&yearTo=2025&page=0&pageSize=10", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("Ожидался статус 200, получен %d: %s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+	if _, ok := response["totalRows"]; !ok {
+		t.Error("Ответ должен содержать 'totalRows' при пагинации")
+	}
+}
+
+func TestGetData_AllForExport(t *testing.T) {
+	router := setupRouter()
+	req, _ := http.NewRequest("GET", "/api/data?all=true&yearFrom=2025&yearTo=2025", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("all=true: ожидался 200, получен %d", w.Code)
+	}
+}
+
+// ==================== ИНТЕГРАЦИОННЫЙ: Create → Read → Update → Delete ====================
+
+func TestIntegration_PromoCRUD(t *testing.T) {
+	router := setupRouter()
+	timestamp := time.Now().UnixNano()
+
+	// CREATE
+	createPayload := map[string]interface{}{
+		"network_name": "Интеграция-Сеть",
+		"sku":          fmt.Sprintf("TEST-INT-%d", timestamp),
+		"year":         2026, "month": 7,
+		"mechanics": "Скидка 15%", "gtn_opex": "GTN",
+		"baseline_units": 500, "plan_promo_units": 800,
+		"plan_investments_rub": 25000, "contract_price": 300,
+		"status": "Планируется",
+	}
+	body, _ := json.Marshal(createPayload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("CREATE: ожидался 200, получен %d: %s", w.Code, w.Body.String())
+	}
+	var createResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &createResp)
+	id := int(createResp["id"].(float64))
+	t.Logf("Создано промо ID=%d", id)
+
+	// READ через GetPromoData с фильтром по SKU
+	req2, _ := http.NewRequest("GET",
+		fmt.Sprintf("/api/promo/data?all=true&sku=%s", createPayload["sku"]), nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("READ: ожидался 200, получен %d", w2.Code)
+	}
+	var readResp map[string]interface{}
+	json.Unmarshal(w2.Body.Bytes(), &readResp)
+	rows := readResp["data"].([]interface{})
+	if len(rows) == 0 {
+		t.Fatal("READ: запись не найдена после создания")
+	}
+	t.Logf("Прочитано %d записей по SKU", len(rows))
+
+	// UPDATE
+	updatePayload := map[string]interface{}{
+		"id": id, "plan_promo_units": 1000, "status": "Согласовано",
+	}
+	body3, _ := json.Marshal(updatePayload)
+	req3, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body3))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("UPDATE: ожидался 200, получен %d: %s", w3.Code, w3.Body.String())
+	}
+	var updateResp map[string]interface{}
+	json.Unmarshal(w3.Body.Bytes(), &updateResp)
+	if updateResp["message"] != "Updated" {
+		t.Errorf("UPDATE: ожидалось 'Updated', получено '%v'", updateResp["message"])
+	}
+	// Проверяем пересчёт
+	updatedData := updateResp["data"].(map[string]interface{})
+	if math.Abs(updatedData["plan_promo_rub"].(float64)-300000) > 0.01 {
+		t.Errorf("UPDATE: plan_promo_rub ожидалось 300000 (1000*300), получено %v", updatedData["plan_promo_rub"])
+	}
+
+	// DELETE
+	req4, _ := http.NewRequest("DELETE", fmt.Sprintf("/api/promo/%d", id), nil)
+	w4 := httptest.NewRecorder()
+	router.ServeHTTP(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("DELETE: ожидался 200, получен %d", w4.Code)
+	}
+	t.Log("Удалено успешно")
+
+	// VERIFY DELETION — обновление удалённой записи должно вернуть 500
+	body5, _ := json.Marshal(map[string]interface{}{"id": id, "status": "После удаления"})
+	req5, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body5))
+	req5.Header.Set("Content-Type", "application/json")
+	w5 := httptest.NewRecorder()
+	router.ServeHTTP(w5, req5)
+	if w5.Code != http.StatusInternalServerError {
+		t.Errorf("VERIFY: обновление удалённой записи должно вернуть 500, получен %d", w5.Code)
+	}
+}
+
+// ==================== МАТЕМАТИКА ====================
+
+func TestROICalculation(t *testing.T) {
+	upliftRub := 50000.0
+	investments := 200000.0
+	gm := 0.56
+	expected := (upliftRub/investments)*gm*100 - 100
+	roi := (upliftRub/investments)*gm*100 - 100
+	if math.Abs(roi-expected) > 0.001 {
+		t.Errorf("ROI: ожидалось %f, получено %f", expected, roi)
+	}
+}
+
+func TestBaselineRubCalculation(t *testing.T) {
+	tests := []struct {
+		baseline, price, expected float64
+	}{
+		{100, 200, 20000}, {0, 200, 0}, {100, 0, 0}, {150.5, 300.75, 45262.875},
+	}
+	for _, tt := range tests {
+		result := tt.baseline * tt.price
+		if math.Abs(result-tt.expected) > 0.001 {
+			t.Errorf("baseline_rub(%f*%f): ожидалось %f, получено %f", tt.baseline, tt.price, tt.expected, result)
+		}
+	}
+}
+
+func TestUpliftCalculation(t *testing.T) {
+	tests := []struct{ plan, baseline, expected float64 }{
+		{150, 100, 50}, {80, 100, -20}, {0, 100, -100}, {100, 0, 100},
+	}
+	for _, tt := range tests {
+		result := tt.plan - tt.baseline
+		if math.Abs(result-tt.expected) > 0.001 {
+			t.Errorf("uplift(%f-%f): ожидалось %f, получено %f", tt.plan, tt.baseline, tt.expected, result)
+		}
+	}
+}
+
+func TestQuarterCalculation(t *testing.T) {
+	tests := []struct{ month, expected int }{
+		{1, 1}, {2, 1}, {3, 1}, {4, 2}, {5, 2}, {6, 2},
+		{7, 3}, {8, 3}, {9, 3}, {10, 4}, {11, 4}, {12, 4},
+	}
+	for _, tt := range tests {
+		q := int(math.Ceil(float64(tt.month) / 3))
+		if q != tt.expected {
+			t.Errorf("Месяц %d: ожидался квартал %d, получен %d", tt.month, tt.expected, q)
+		}
+	}
+}
+
+// ==================== RATE LIMITING ====================
+
+func TestRateLimiter(t *testing.T) {
+	limiter := NewRateLimiter(5, 1*time.Second)
+	for i := 0; i < 5; i++ {
+		if !limiter.Allow("127.0.0.1") {
+			t.Errorf("Запрос %d должен быть разрешён", i+1)
+		}
+	}
+	if limiter.Allow("127.0.0.1") {
+		t.Error("6-й запрос должен быть отклонён")
+	}
+	if !limiter.Allow("192.168.1.1") {
+		t.Error("Запрос с другого IP должен быть разрешён")
+	}
+	time.Sleep(1 * time.Second)
+	if !limiter.Allow("127.0.0.1") {
+		t.Error("После сброса окна запрос должен быть разрешён")
+	}
+}
+
+func TestRateLimiter_Cleanup(t *testing.T) {
+	limiter := NewRateLimiter(3, 100*time.Millisecond)
+	limiter.Allow("ip1")
+	limiter.Allow("ip2")
+	limiter.Allow("ip1")
+	if len(limiter.visitors) != 2 {
+		t.Errorf("Ожидалось 2 посетителя, получено %d", len(limiter.visitors))
+	}
+	time.Sleep(150 * time.Millisecond)
+	limiter.Allow("ip1")
+	if len(limiter.visitors["ip1"]) > 1 {
+		t.Error("Старые записи должны были очиститься")
+	}
+}
+
+func saveTestPromoWithMeta(t *testing.T, router *gin.Engine, sku string) (int, string) {
+	t.Helper()
+	payload := map[string]interface{}{
+		"network_name": "Тест-OPTILOCK", "sku": sku, "year": 2026, "month": 5,
+		"baseline_units": 100, "plan_promo_units": 200, "plan_investments_rub": 10000,
+		"contract_price": 150, "mechanics": "Скидка", "gtn_opex": "GTN",
+		"status": "Планируется",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var response map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &response)
+
+	if response["message"] != "Created" {
+		t.Fatalf("Не удалось создать тестовое промо: %v", response)
+	}
+
+	id := int(response["id"].(float64))
+
+	// Достаём реальный updated_at из БД
+	var updatedAt string
+	config.DB.QueryRow("SELECT CONVERT(NVARCHAR, updated_at, 121) FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id).Scan(&updatedAt)
+
+	return id, updatedAt
+}
+
+func TestSavePromo_OptimisticLocking(t *testing.T) {
+	router := setupRouter()
+	id, updatedAt := saveTestPromoWithMeta(t, router, "TEST-OPTILOCK-001")
+
+	// Первое обновление — передаём актуальный updated_at (должно пройти)
+	payload1 := map[string]interface{}{
+		"id": id, "status": "Первое изменение",
+		"updated_at": updatedAt,
+	}
+	body1, _ := json.Marshal(payload1)
+	req1, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body1))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	router.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		var errResp map[string]interface{}
+		json.Unmarshal(w1.Body.Bytes(), &errResp)
+		t.Fatalf("Первое обновление должно пройти: %v", errResp)
+	}
+
+	var resp1 map[string]interface{}
+	json.Unmarshal(w1.Body.Bytes(), &resp1)
+	data1 := resp1["data"].(map[string]interface{})
+	newUpdatedAt := data1["updated_at"]
+
+	// Второе обновление с тем же старым updated_at — должно дать 409
+	payload2 := map[string]interface{}{
+		"id": id, "status": "Конфликт",
+		"updated_at": updatedAt, // тот же, что и в первом запросе — уже не актуален
+	}
+	body2, _ := json.Marshal(payload2)
+	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusConflict {
+		t.Errorf("Ожидался 409 Conflict, получен %d. Ответ: %s", w2.Code, w2.Body.String())
+	} else {
+		t.Logf("✅ Optimistic locking работает: первый OK с новым updated_at=%v, второй 409 со старым=%v", newUpdatedAt, updatedAt)
+	}
+}
+```
+
+## File: frontend/src/hooks/usePromoForm.ts
+```typescript
 import { useState, useCallback } from 'react';
 import { promoAPI } from '../api/promo';
 
+export interface PromoFormValues {
+  id: number | null;
+  network_name: string;
+  kam: string;
+  brand: string;
+  sku: string;
+  year: number;
+  month: number;
+  mechanics: string;
+  gtn_opex: string;
+  baseline_units: string;
+  baseline_rub: string;
+  plan_promo_units: string;
+  plan_promo_rub: string;
+  plan_promo_uplift_units: string;
+  plan_promo_uplift_rub: string;
+  plan_investments_rub: string;
+  contract_price: string;
+  plan_roi: string;
+  gm: string;
+  discount_amount: string;
+  actual_promo_sales_units: string;
+  actual_investments: string;
+  actual_promo_rub: string;
+  actual_promo_uplift_units: string;
+  actual_promo_uplift_rub: string;
+  actual_roi: string;
+  actual_external_ecom_units: string;
+  actual_corrected_baseline: string;
+  agreement1: string;
+  agreement2: string;
+  conditions: string;
+  comments: string;
+  id_directum: string;
+  ds_number: string;
+  total_pharmacies: string;
+  promo_pharmacies: string;
+  status: string;
+  ecom_segment?: string;
+  updated_at: string | null;
+}
+
 // ─── Пустая форма ──────────────────────────────────────────────────────────
-const EMPTY_FORM = {
+export const EMPTY_FORM: PromoFormValues = {
   id: null, network_name: '', kam: '', brand: '', sku: '',
   year: new Date().getFullYear(), month: new Date().getMonth() + 1,
   mechanics: '', gtn_opex: '', baseline_units: '', baseline_rub: '',
@@ -4897,73 +4793,81 @@ const EMPTY_FORM = {
   updated_at: null, // ← для optimistic locking
 };
 
+interface SaveResult {
+  success: boolean;
+  message: string;
+}
+
+interface UsePromoFormCallbacks {
+  onEditSuccess?: (id: number, data: Record<string, unknown>) => void;
+  onDeleteSuccess?: (id: number) => void;
+  onCreateSuccess?: () => void;
+}
+
 // ─── Хук ────────────────────────────────────────────────────────────────────
-// Колбэки:
-//   onEditSuccess(id, data) — после успешного редактирования
-//   onDeleteSuccess(id)     — после успешного удаления
-//   onCreateSuccess()       — после создания нового промо
-export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }) {
-  const [form, setForm] = useState({ ...EMPTY_FORM });
+export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }: UsePromoFormCallbacks) {
+  const [form, setForm] = useState<PromoFormValues>({ ...EMPTY_FORM });
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
-  const handleRowClick = useCallback((row) => {
+  const handleRowClick = useCallback((row: Record<string, unknown>) => {
     setForm({
-      id: row.id,
-      network_name: row.network_name ?? '',
-      kam: row.kam ?? '',
-      brand: row.brand_as ?? row.brand ?? '',
-      sku: row.sku ?? '',
-      year: row.year,
-      month: row.month,
-      mechanics: row.mechanics ?? '',
-      gtn_opex: row.gtn_opex ?? '',
-      baseline_units: row.baseline_units ?? '',
-      baseline_rub: row.baseline_rub ?? '',
-      plan_promo_units: row.plan_promo_units ?? '',
-      plan_promo_rub: row.plan_promo_rub ?? '',
-      plan_promo_uplift_units: row.plan_promo_uplift_units ?? '',
-      plan_promo_uplift_rub: row.plan_promo_uplift_rub ?? '',
-      plan_investments_rub: row.plan_investments_rub ?? '',
-      contract_price: row.contract_price ?? '',
-      discount_amount: row.discount_amount ?? '',
-      plan_roi: row.plan_roi ?? '',
-      gm: row.gm ?? '',
-      total_pharmacies: row.total_pharmacies ?? '',
-      promo_pharmacies: row.promo_pharmacies ?? '',
-      actual_promo_sales_units: row.actual_promo_sales_units ?? '',
-      actual_investments: row.actual_investments ?? '',
-      actual_promo_rub: row.actual_promo_rub ?? '',
-      actual_promo_uplift_units: row.actual_promo_uplift_units ?? '',
-      actual_promo_uplift_rub: row.actual_promo_uplift_rub ?? '',
-      actual_roi: row.actual_roi ?? '',
-      actual_external_ecom_units: row.actual_external_ecom_units ?? '',
-      actual_corrected_baseline: row.actual_corrected_baseline ?? '',
-      agreement1: row.agreement1 ?? '',
-      agreement2: row.agreement2 ?? '',
-      conditions: row.conditions ?? '',
-      comments: row.comments ?? '',
-      id_directum: row.id_directum ?? '',
-      ds_number: row.ds_number ?? '',
-      status: row.status ?? '',
-      updated_at: row.updated_at ?? null, // ← критично для optimistic locking
+      id: row.id as number,
+      network_name: (row.network_name as string) ?? '',
+      kam: (row.kam as string) ?? '',
+      brand: ((row.brand_as || row.brand) as string) ?? '',
+      sku: (row.sku as string) ?? '',
+      year: row.year as number,
+      month: row.month as number,
+      mechanics: (row.mechanics as string) ?? '',
+      gtn_opex: (row.gtn_opex as string) ?? '',
+      baseline_units: String(row.baseline_units ?? ''),
+      baseline_rub: String(row.baseline_rub ?? ''),
+      plan_promo_units: String(row.plan_promo_units ?? ''),
+      plan_promo_rub: String(row.plan_promo_rub ?? ''),
+      plan_promo_uplift_units: String(row.plan_promo_uplift_units ?? ''),
+      plan_promo_uplift_rub: String(row.plan_promo_uplift_rub ?? ''),
+      plan_investments_rub: String(row.plan_investments_rub ?? ''),
+      contract_price: String(row.contract_price ?? ''),
+      discount_amount: String(row.discount_amount ?? ''),
+      plan_roi: String(row.plan_roi ?? ''),
+      gm: String(row.gm ?? ''),
+      total_pharmacies: String(row.total_pharmacies ?? ''),
+      promo_pharmacies: String(row.promo_pharmacies ?? ''),
+      actual_promo_sales_units: String(row.actual_promo_sales_units ?? ''),
+      actual_investments: String(row.actual_investments ?? ''),
+      actual_promo_rub: String(row.actual_promo_rub ?? ''),
+      actual_promo_uplift_units: String(row.actual_promo_uplift_units ?? ''),
+      actual_promo_uplift_rub: String(row.actual_promo_uplift_rub ?? ''),
+      actual_roi: String(row.actual_roi ?? ''),
+      actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
+      actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
+      agreement1: (row.agreement1 as string) ?? '',
+      agreement2: (row.agreement2 as string) ?? '',
+      conditions: (row.conditions as string) ?? '',
+      comments: (row.comments as string) ?? '',
+      id_directum: (row.id_directum as string) ?? '',
+      ds_number: (row.ds_number as string) ?? '',
+      status: (row.status as string) ?? '',
+      updated_at: (row.updated_at as string) ?? null,
     });
     setEditMode(true);
   }, []);
 
-  // ─── Сохранение (INSERT или UPDATE) ─────────────────────────────────────
-  const handleSave = useCallback(async () => {
+  // ─── Сохранение (INSERT или UPDATE). commentOverride — комментарий КАМ из диалога (обходит batching) ──
+  const handleSave = useCallback(async (commentOverride?: string | null): Promise<SaveResult> => {
     if (!form.sku || !form.network_name) {
       return { success: false, message: '⚠️ Заполните Сеть и SKU' };
     }
     setSaving(true);
     try {
-      const payload = {
+      const commentsValue = commentOverride !== undefined ? commentOverride : (form.comments ?? null);
+      const payload: Record<string, unknown> = {
         id: form.id || undefined,
         network_name: form.network_name, kam: form.kam, brand: form.brand, brand_as: form.brand,
-        sku: form.sku, year: parseInt(form.year), month: parseInt(form.month),
+        sku: form.sku, year: parseInt(String(form.year)), month: parseInt(String(form.month)),
         mechanics: form.mechanics, gtn_opex: form.gtn_opex,
         baseline_units: parseFloat(form.baseline_units) || null,
         plan_promo_units: parseFloat(form.plan_promo_units) || null,
@@ -4974,7 +4878,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         ds_number: form.ds_number ?? null,
         discount_amount: parseFloat(form.discount_amount) || null,
         conditions: form.conditions ?? null,
-        comments: form.comments ?? null,
+        comments: commentsValue,
         ecom_segment: form.ecom_segment,
         total_pharmacies: form.total_pharmacies !== '' ? parseInt(form.total_pharmacies) : null,
         promo_pharmacies: form.promo_pharmacies !== '' ? parseInt(form.promo_pharmacies) : null,
@@ -4988,10 +4892,10 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         agreement1: form.agreement1 ?? null,
         agreement2: form.agreement2 ?? null,
         status: form.status,
-        updated_at: form.updated_at, // ← для optimistic locking
+        updated_at: form.updated_at,
       };
 
-      const result = await promoAPI.save(payload);
+      const result = await promoAPI.save(payload) as { data?: Record<string, unknown>; id: number; message: string };
 
       if (result.data) {
         setForm(prev => ({ ...prev, ...result.data, id: result.id }));
@@ -5004,27 +4908,28 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
       }
 
       return { success: true, message: '✅ Сохранено' };
-    } catch (err) {
-      // 409 — конфликт версий (optimistic locking)
-      if (err.status === 409) {
+    } catch (err: unknown) {
+      const apiErr = err as { status?: number; message?: string };
+      if (apiErr.status === 409) {
         return { success: false, message: '⚠️ Запись изменена другим пользователем. Обновите страницу.' };
       }
-      return { success: false, message: '❌ ' + (err.message || 'Ошибка сохранения') };
+      return { success: false, message: '❌ ' + (apiErr.message || 'Ошибка сохранения') };
     } finally {
       setSaving(false);
     }
   }, [form, onEditSuccess, onCreateSuccess]);
 
   // ─── Удаление (soft-delete) ─────────────────────────────────────────────
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(async (): Promise<SaveResult> => {
     if (!form.id) return { success: false, message: 'Нет ID' };
     setDeleting(true);
     try {
       await promoAPI.delete(form.id);
       if (onDeleteSuccess) onDeleteSuccess(form.id);
       return { success: true, message: '🗑️ Удалено' };
-    } catch (err) {
-      return { success: false, message: '❌ ' + (err.message || 'Ошибка удаления') };
+    } catch (err: unknown) {
+      const apiErr = err as { message?: string };
+      return { success: false, message: '❌ ' + (apiErr.message || 'Ошибка удаления') };
     } finally {
       setDeleting(false);
     }
@@ -5038,16 +4943,315 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
   return {
     form, setForm, editMode, saving, deleting,
-    handleRowClick, handleSave, handleDelete, resetForm
+    handleRowClick, handleSave, handleDelete, resetForm,
   };
 }
+```
 
-export { EMPTY_FORM };
+## File: frontend/package.json
+```json
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.2.0",
+    "@mui/material": "^9.2.0",
+    "@mui/x-data-grid": "^9.10.1",
+    "@tanstack/react-query": "^5.101.4",
+    "file-saver": "^2.0.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router-dom": "^7.11.0",
+    "recharts": "^3.10.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "vite": "^8.1.1"
+  }
+}
+```
+
+## File: frontend/src/components/ApprovalCard.jsx
+```javascript
+import { memo, useMemo, useState } from 'react';
+import {
+  Box, Typography, Card, CardContent, CardActions,
+  Button, Chip, Collapse, Grid, TextField,
+  LinearProgress, CircularProgress, Popover,
+} from '@mui/material';
+import {
+  ExpandMore as ExpandMoreIcon,
+  CheckCircle as ApproveIcon,
+  Cancel as RejectIcon,
+  Comment as CommentIcon,
+} from '@mui/icons-material';
+import { ALL_FIELDS_FLAT } from '../utils/cardFields';
+
+const fmtNum = (v, decimals = 0) => {
+  if (v == null) return '—';
+  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+};
+
+const roiColor = (roi) => {
+  if (roi == null) return '#94a3b8';
+  return roi >= 0 ? '#16a34a' : '#dc2626';
+};
+
+const MONTHS = [
+  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
+  { label: 'Апрель', value: 4 }, { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 },
+  { label: 'Июль', value: 7 }, { label: 'Август', value: 8 }, { label: 'Сентябрь', value: 9 },
+  { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
+];
+
+const SIDEBAR_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as', 'kam']);
+
+const ROLE_COLORS = {
+  'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
+  'agreement1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'agreement2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'согласование1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'согласование2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'КАМ': { bg: '#f5f3ff', text: '#7c3aed', dot: '#7c3aed' },
+};
+
+const ROLE_ICONS = {
+  'admin': '👑',
+  'agreement1': '✅',
+  'agreement2': '✅',
+  'согласование1': '✅',
+  'согласование2': '✅',
+  'КАМ': '💬',
+};
+
+function parseComments(raw) {
+  if (!raw) return [];
+  const lines = raw.split('\n').filter(l => l.trim());
+  const messages = [];
+  const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (m) messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
+    else {
+      if (messages.length > 0 && messages[messages.length - 1].role === 'КАМ') {
+        messages[messages.length - 1].text += '\n' + line;
+      } else {
+        messages.push({ date: '', role: 'КАМ', author: '', text: line });
+      }
+    }
+  }
+  return messages;
+}
+
+const ApprovalCard = memo(function ApprovalCard({
+  item, expanded, submitting,
+  onCommentChange, comments, onToggleExpand, onOpenConfirm, onCommentOnly,
+  visibleFields,
+}) {
+  const id = item.id;
+  const isSubmitting = submitting[id] || false;
+  const localComment = comments[id] || '';
+
+  const visibleData = useMemo(() => {
+    if (!visibleFields || visibleFields.length === 0) return [];
+    return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !SIDEBAR_FIELDS.has(f.id));
+  }, [visibleFields]);
+
+  const parsedComments = useMemo(() => parseComments(item.comments), [item.comments]);
+
+  const [historyAnchor, setHistoryAnchor] = useState(null);
+
+  const leftBorderColor = item.plan_roi != null
+    ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
+    : '#94a3b8';
+
+  return (
+    <Box sx={{ position: 'relative' }}>
+      {isSubmitting && <LinearProgress sx={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2, borderTopLeftRadius: 12, borderTopRightRadius: 12 }} />}
+      <Card elevation={2} sx={{
+        borderRadius: 3, transition: 'all 0.2s', '&:hover': { boxShadow: 6 },
+        height: '100%', display: 'flex', flexDirection: 'column',
+        opacity: isSubmitting ? 0.7 : 1,
+        borderLeft: `4px solid ${leftBorderColor}`,
+      }}>
+        {isSubmitting && (
+          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, bgcolor: 'rgba(255,255,255,0.4)', borderRadius: 3 }}>
+            <CircularProgress size={32} />
+          </Box>
+        )}
+        <CardContent sx={{ flex: 1, pb: 1, pt: 2, display: 'flex', flexDirection: 'column' }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
+            {item.network_name || '—'}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
+            <Chip label={item.sku || '—'} size="small" variant="outlined" />
+            <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
+          </Box>
+          {item.year && item.month && (
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+              Период: {MONTHS.find(m => m.value === item.month)?.label || item.month} {item.year}
+            </Typography>
+          )}
+
+          {visibleData.length > 0 && (
+            <Grid container spacing={1.5} sx={{ mb: 1 }}>
+              {visibleData.map(fieldConfig => (
+                <Grid item xs={6} key={fieldConfig.id}>
+                  <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
+                  <Typography variant="body2" sx={{
+                    fontWeight: 600,
+                    color: fieldConfig.isRoi ? roiColor(item[fieldConfig.id]) : 'inherit',
+                  }}>
+                    {fieldConfig.isRoi || fieldConfig.isPercent
+                      ? (item[fieldConfig.id] != null ? `${Number(item[fieldConfig.id]).toFixed(1)}%` : '—')
+                      : (item[fieldConfig.id] != null ? fmtNum(item[fieldConfig.id], fieldConfig.isMoney ? 2 : 0) : '—')}
+                  </Typography>
+                </Grid>
+              ))}
+            </Grid>
+          )}
+
+          {(visibleFields?.includes('historical_count') || visibleFields?.includes('avg_historical_roi') || visibleFields?.includes('avg_historical_uplift')) && (
+            <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
+              {visibleFields.includes('historical_count') && (
+                <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
+              )}
+              {visibleFields.includes('avg_historical_roi') && (
+                <Typography variant="caption" color="text.secondary">
+                  Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {(item.agreement1 || item.agreement2) && (
+            <Box sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {item.agreement1 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement1).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement1).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement1).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement1).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 1:</b> {item.agreement1}
+                </Typography>
+              )}
+              {item.agreement2 && (
+                <Typography variant="caption" sx={{ 
+                  p: 0.75, borderRadius: 1, fontSize: '0.72rem',
+                  bgcolor: String(item.agreement2).startsWith('согласовано') ? '#f0fdf4' : 
+                           String(item.agreement2).startsWith('отклонено') ? '#fef2f2' : '#eef2ff',
+                  color: String(item.agreement2).startsWith('согласовано') ? '#16a34a' : 
+                         String(item.agreement2).startsWith('отклонено') ? '#dc2626' : '#6366f1',
+                }}>
+                  <b>Согл. 2:</b> {item.agreement2}
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {item.conditions && (
+            <Box sx={{ mb: 1 }}>
+              <Button size="small" onClick={() => onToggleExpand(id)}
+                endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />}
+                sx={{ color: '#64748b', textTransform: 'none', p: 0 }}>Условия</Button>
+              <Collapse in={expanded}>
+                <Typography variant="body2" sx={{ mt: 0.5, p: 1, bgcolor: '#f8fafc', borderRadius: 1, fontSize: '0.8rem', color: '#475569' }}>
+                  {item.conditions}
+                </Typography>
+              </Collapse>
+            </Box>
+          )}
+
+          {/* Кнопка просмотра истории (только если есть комментарии) */}
+          {parsedComments.length > 0 && (
+            <Button size="small"
+              onClick={(e) => setHistoryAnchor(e.currentTarget)}
+              sx={{ color: '#6366f1', textTransform: 'none', p: 0, mb: 1, justifyContent: 'flex-start', fontSize: '0.75rem' }}>
+              📝 История ({parsedComments.length})
+            </Button>
+          )}
+
+          {/* Поле ввода нового комментария */}
+          <TextField size="small" fullWidth multiline minRows={1} maxRows={2}
+            placeholder="Новый комментарий"
+            value={localComment}
+            onChange={(e) => onCommentChange(id, e.target.value)}
+            sx={{ mb: 1 }} />
+        </CardContent>
+
+        <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
+          <Button size="small" variant="outlined" startIcon={<CommentIcon />}
+            onClick={() => onCommentOnly(id)} disabled={isSubmitting || !localComment.trim()}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
+          <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
+            onClick={() => onOpenConfirm(id, 'согласовано')} disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
+          <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
+            onClick={() => onOpenConfirm(id, 'отклонено')} disabled={isSubmitting}
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
+        </CardActions>
+      </Card>
+
+      {/* Popover с историей комментариев */}
+      <Popover
+        open={Boolean(historyAnchor)}
+        anchorEl={historyAnchor}
+        onClose={() => setHistoryAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+      >
+        <Box sx={{ p: 2, maxWidth: 420, maxHeight: 360, overflowY: 'auto' }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>📝 История переписки</Typography>
+          {parsedComments.map((msg, idx) => {
+            const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
+            const icon = ROLE_ICONS[msg.role] || '💬';
+            return (
+              <Box key={idx} sx={{
+                px: 1.5, py: 1, borderRadius: 1.5, bgcolor: style.bg,
+                borderLeft: `3px solid ${style.dot}`,
+                mb: 0.75,
+              }}>
+                <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.72rem', mb: 0.25 }}>
+                  {icon} {msg.role === 'КАМ' ? msg.author : msg.role}
+                  {msg.date && ` · ${msg.date}`}
+                </Typography>
+                <Typography sx={{ fontSize: '0.75rem', color: '#475569', whiteSpace: 'pre-wrap' }}>
+                  {msg.text}
+                </Typography>
+              </Box>
+            );
+          })}
+        </Box>
+      </Popover>
+    </Box>
+  );
+});
+
+export default ApprovalCard;
 ```
 
 ## File: frontend/src/App.jsx
 ```javascript
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
@@ -5189,6 +5393,13 @@ export default function App() {
     setAuth({ token: null, username: null, role: null });
   };
 
+  // Слушаем принудительный разлогин из api/promo.ts
+  useEffect(() => {
+    const onForceLogout = () => setAuth({ token: null, username: null, role: null });
+    window.addEventListener('auth:logout', onForceLogout);
+    return () => window.removeEventListener('auth:logout', onForceLogout);
+  }, []);
+
   if (!auth.token) {
     return (
       <ThemeProvider theme={modernTheme}>
@@ -5257,8 +5468,14 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/richardlehane/mscfb v1.0.7 // indirect
+	github.com/richardlehane/msoleps v1.0.6 // indirect
+	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/xuri/efp v0.0.1 // indirect
+	github.com/xuri/excelize/v2 v2.11.0 // indirect
+	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
@@ -5266,398 +5483,6 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
-```
-
-## File: frontend/src/components/DataTable.jsx
-```javascript
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { 
-  Box, Alert, TextField, Button, Menu, MenuItem, 
-  Checkbox, ListItemText, Typography, Divider, ButtonGroup,
-  Dialog, DialogTitle, DialogContent, DialogActions,
-} from '@mui/material';
-import { 
-  ViewColumn as ColumnsIcon,
-  FileDownload as ExportIcon,
-  Search as SearchIcon,
-} from '@mui/icons-material';
-import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
-
-export default function DataTable({ 
-  columns, apiUrl, filters = {}, defaultPageSize = 100, 
-  exportFileName = 'export', onDataLoaded = null, 
-  onRowClick = null, refreshKey 
-}) {
-  const [rawRows, setRawRows] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
-
-  // Серверная пагинация
-  const [paginationModel, setPaginationModel] = useState({
-    page: 0,
-    pageSize: defaultPageSize,
-  });
-  const [totalRows, setTotalRows] = useState(0);
-
-  // Тулбар
-  const [searchText, setSearchText] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [columnsAnchor, setColumnsAnchor] = useState(null);
-  const [exportDialog, setExportDialog] = useState({ open: false, data: null });
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = true; });
-    return map;
-  });
-  const apiRef = useRef(null);
-
-  // Уникальные ключи
-  const rows = useMemo(() => {
-    return rawRows.map((row, idx) => ({
-      ...row,
-      _rowId: `${row.id ?? 'row'}_${paginationModel.page}_${idx}`,
-    }));
-  }, [rawRows, paginationModel.page]);
-
-  // Debounce поиска (400ms) — чтобы не дёргать API на каждый символ
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(searchText.trim());
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [searchText]);
-
-  // Сброс страницы при изменении поиска
-  useEffect(() => {
-    setPaginationModel(prev => ({ ...prev, page: 0 }));
-  }, [debouncedSearch]);
-
-  const visibleCols = useMemo(
-    () => columns.filter(c => visibleColumns[c.field] !== false),
-    [columns, visibleColumns]
-  );
-
-  const toggleColumn = (field) => {
-    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
-  };
-
-  const showAllColumns = () => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = true; });
-    setVisibleColumns(map);
-  };
-
-  const hideAllColumns = () => {
-    const map = {};
-    columns.forEach(c => { map[c.field] = false; });
-    setVisibleColumns(map);
-  };
-
-  const fetchExportData = async () => {
-    const params = new URLSearchParams();
-    params.set('all', 'true');
-    if (debouncedSearch) {
-      params.set('search', debouncedSearch);
-    }
-    Object.entries(filters).forEach(([key, value]) => { 
-      if (Array.isArray(value)) { 
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-      } else if (value !== '' && value != null) { 
-        params.set(key, String(value)); 
-      } 
-    });
-    const url = `${apiUrl}?${params.toString()}`;
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
-      },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-  };
-
-  const handleExportCSV = async () => {
-    setLoading(true);
-    try {
-      const data = await fetchExportData();
-      const headers = visibleCols.map(c => c.headerName || c.field);
-      const fields = visibleCols.map(c => c.field);
-
-      let csv = '\uFEFF' + headers.join(';') + '\n';
-      data.forEach(row => {
-        const line = fields.map(f => {
-          let val = row[f];
-          if (val == null) return '';
-          val = String(val);
-          if (val.includes(';') || val.includes('"') || val.includes('\n')) {
-            val = '"' + val.replace(/"/g, '""') + '"';
-          }
-          return val;
-        }).join(';');
-        csv += line + '\n';
-      });
-
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
-    } catch (err) {
-      console.error('Ошибка экспорта CSV:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const confirmedExportXLSX = async (data) => {
-    setLoading(true);
-    try {
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet('Export Data');
-
-      worksheet.columns = visibleCols.map(c => ({
-        header: c.headerName || c.field,
-        key: c.field,
-        width: c.width ? c.width / 7 : 20,
-      }));
-
-      const headerRow = worksheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
-      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      data.forEach(row => worksheet.addRow(row));
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      saveAs(new Blob([buffer]), `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (err) {
-      console.error('Ошибка экспорта Excel:', err);
-    } finally {
-      setLoading(false);
-      setExportDialog({ open: false, data: null });
-    }
-  };
-
-  const handleExportXLSX = async () => {
-    const data = await fetchExportData();
-    if (data.length > 10000) {
-      setExportDialog({ open: true, data });
-    } else {
-      confirmedExportXLSX(data);
-    }
-  };
-
-  // Загрузка данных с пагинацией
-  const fetchData = useCallback(async () => {
-    setLoading(true); setError(null);
-    try {
-      const params = new URLSearchParams();
-      params.set('page', String(paginationModel.page));
-      params.set('pageSize', String(paginationModel.pageSize));
-      if (debouncedSearch) {
-        params.set('search', debouncedSearch);
-      }
-      
-      Object.entries(filters).forEach(([key, value]) => { 
-        if (Array.isArray(value)) { 
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-        } else if (value !== '' && value != null) { 
-          params.set(key, String(value)); 
-        } 
-      });
-      const qs = params.toString();
-      const url = `${apiUrl}?${qs}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      const data = json.data || [];
-      setRawRows(data);
-      setTotalRows(json.totalRows || data.length);
-      if (onDataLoaded) onDataLoaded(data);
-    } catch (err) { setError(err.message); } finally { setLoading(false); }
-  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
-
-  // Сброс страницы при смене фильтров
-  useEffect(() => {
-    setPaginationModel(prev => ({ ...prev, page: 0 }));
-  }, [filtersKey]);
-
-  useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
-
-  if (error) return <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>Ошибка загрузки: {error}</Alert>;
-
-  return (
-    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-      
-      {/* Тулбар */}
-      <Box sx={{ 
-        display: 'flex', alignItems: 'center', gap: 1, 
-        px: 2, py: 1, bgcolor: '#f1f5f9', 
-        borderRadius: '12px 12px 0 0',
-        border: '1px solid #e2e8f0', borderBottom: 'none',
-      }}>
-        <Button size="small" startIcon={<ColumnsIcon />}
-          onClick={(e) => setColumnsAnchor(e.currentTarget)}
-          sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
-        <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
-          onClose={() => setColumnsAnchor(null)}
-          slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
-          <MenuItem dense onClick={showAllColumns}>
-            <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
-          <MenuItem dense onClick={hideAllColumns}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
-          <Divider />
-          {columns.map(col => (
-            <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
-              <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
-              <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
-            </MenuItem>
-          ))}
-        </Menu>
-
-        <TextField size="small" placeholder="Поиск..." value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
-          sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
-
-        <Box sx={{ flex: 1 }} />
-
-        {totalRows > 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-            {totalRows.toLocaleString('ru-RU')} строк
-          </Typography>
-        )}
-
-        <ButtonGroup size="small" variant="text">
-          <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
-            sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
-          <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
-            sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
-        </ButtonGroup>
-      </Box>
-
-      {/* Диалог подтверждения большого экспорта */}
-      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false, data: null })}>
-        <DialogTitle>Подтверждение экспорта</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Количество строк для экспорта: {(exportDialog.data?.length || 0).toLocaleString('ru-RU')}.<br />
-            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
-            Продолжить?
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setExportDialog({ open: false, data: null })}>Отмена</Button>
-          <Button variant="contained" onClick={() => confirmedExportXLSX(exportDialog.data)}>
-            Экспортировать
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Таблица */}
-      <DataGrid 
-        apiRef={apiRef}
-        rows={rows} 
-        columns={visibleCols}
-        getRowId={(row) => row._rowId}
-        loading={loading} 
-        sortingMode="server"
-        paginationMode="server"
-        rowCount={totalRows}
-        paginationModel={paginationModel}
-        onPaginationModelChange={setPaginationModel}
-        disableColumnFilter
-        onRowClick={onRowClick}
-        pageSizeOptions={[25, 50, 100]} 
-        disableRowSelectionOnClick
-        sx={{ 
-          flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
-          borderRadius: '0 0 12px 12px',
-          '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
-          '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
-        }} 
-      />
-    </Box>
-  );
-}
-```
-
-## File: frontend/src/hooks/usePromoData.js
-```javascript
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useCallback } from 'react';
-
-/**
- * Хук для получения данных промо с использованием React Query.
- * Заменяет ручной AbortController, JSON.stringify сравнение фильтров,
- * и state-машину loading/error.
- *
- * Возвращает совместимый интерфейс: { rows, setRows, loading, error, refetch }
- * чтобы не ломать PromoAnalysis.jsx.
- */
-export function usePromoData(filters, refreshTrigger) {
-  const queryClient = useQueryClient();
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
-
-  // Стабильный queryKey на основе фильтров и refreshTrigger
-  const queryKey = ['promoData', filters, refreshTrigger];
-
-  const fetchPromoData = useCallback(async ({ signal }) => {
-    const currentFilters = filtersRef.current;
-    const params = new URLSearchParams();
-    Object.entries(currentFilters).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-      } else if (value !== '' && value != null) {
-        params.set(key, String(value));
-      }
-    });
-
-    const qs = params.toString();
-    const response = await fetch(
-      `http://localhost:8080/api/promo/data?all=true${qs ? '&' + qs : ''}`,
-      {
-        signal,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      }
-    );
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return json.data || [];
-  }, []);
-
-  const { data: rows = [], isLoading, error, refetch } = useQuery({
-    queryKey,
-    queryFn: fetchPromoData,
-  });
-
-  // setRows — для обратной совместимости: обновляет кеш React Query
-  const setRows = useCallback((newRowsOrUpdater) => {
-    queryClient.setQueryData(queryKey, (old) => {
-      if (typeof newRowsOrUpdater === 'function') {
-        return newRowsOrUpdater(old || []);
-      }
-      return newRowsOrUpdater;
-    });
-  }, [queryClient, queryKey]);
-
-  return {
-    rows,
-    setRows,
-    loading: isLoading,
-    error: error?.message || null,
-    refetch,
-  };
-}
 ```
 
 ## File: backend/models/types.go
@@ -5682,6 +5507,14 @@ func ValFloat(p *float64) float64 {
 func ValInt(p *int) int {
 	if p == nil {
 		return 0
+	}
+	return *p
+}
+
+// ValString возвращает значение по указателю или пустую строку.
+func ValString(p *string) string {
+	if p == nil {
+		return ""
 	}
 	return *p
 }
@@ -5891,6 +5724,695 @@ type ApprovalRow struct {
 	Status                *string  `json:"status"`
 	HistoricalCount       int      `json:"historical_count"`
 	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
+}
+```
+
+## File: frontend/src/components/DataTable.jsx
+```javascript
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { DataGrid } from '@mui/x-data-grid';
+import { 
+  Box, Alert, TextField, Button, Menu, MenuItem, 
+  Checkbox, ListItemText, Typography, Divider, ButtonGroup,
+} from '@mui/material';
+import { 
+  ViewColumn as ColumnsIcon,
+  FileDownload as ExportIcon,
+  Search as SearchIcon,
+} from '@mui/icons-material';
+import { saveAs } from 'file-saver';
+
+const EXPORT_WARNING_THRESHOLD = 10000;
+
+export default function DataTable({ 
+  columns, apiUrl, filters = {}, defaultPageSize = 100, 
+  exportFileName = 'export', exportXlsxUrl = null, onDataLoaded = null, 
+  onRowClick = null, refreshKey 
+}) {
+  const [rawRows, setRawRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
+
+  // Серверная пагинация
+  const [paginationModel, setPaginationModel] = useState({
+    page: 0,
+    pageSize: defaultPageSize,
+  });
+  const [totalRows, setTotalRows] = useState(0);
+
+  // Тулбар
+  const [searchText, setSearchText] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [columnsAnchor, setColumnsAnchor] = useState(null);
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = true; });
+    return map;
+  });
+  const apiRef = useRef(null);
+
+  // Уникальные ключи
+  const rows = useMemo(() => {
+    return rawRows.map((row, idx) => ({
+      ...row,
+      _rowId: `${row.id ?? 'row'}_${paginationModel.page}_${idx}`,
+    }));
+  }, [rawRows, paginationModel.page]);
+
+  // Debounce поиска (400ms) — чтобы не дёргать API на каждый символ
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchText.trim());
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  // Сброс страницы при изменении поиска
+  useEffect(() => {
+    setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }, [debouncedSearch]);
+
+  const visibleCols = useMemo(
+    () => columns.filter(c => visibleColumns[c.field] !== false),
+    [columns, visibleColumns]
+  );
+
+  const toggleColumn = (field) => {
+    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
+  };
+
+  const showAllColumns = () => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = true; });
+    setVisibleColumns(map);
+  };
+
+  const hideAllColumns = () => {
+    const map = {};
+    columns.forEach(c => { map[c.field] = false; });
+    setVisibleColumns(map);
+  };
+
+  const fetchExportData = async () => {
+    const params = new URLSearchParams();
+    params.set('all', 'true');
+    if (debouncedSearch) {
+      params.set('search', debouncedSearch);
+    }
+    Object.entries(filters).forEach(([key, value]) => { 
+      if (Array.isArray(value)) { 
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
+      } else if (value !== '' && value != null) { 
+        params.set(key, String(value)); 
+      } 
+    });
+    const url = `${apiUrl}?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    return json.data || [];
+  };
+
+  const handleExportCSV = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchExportData();
+      if (!data.length) {
+        window.alert('Нет данных для выгрузки.');
+        return;
+      }
+      if (data.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
+      const headers = visibleCols.map(c => c.headerName || c.field);
+      const fields = visibleCols.map(c => c.field);
+
+      let csv = '\uFEFF' + headers.join(';') + '\n';
+      data.forEach(row => {
+        const line = fields.map(f => {
+          let val = row[f];
+          if (val == null) return '';
+          val = String(val);
+          if (val.includes(';') || val.includes('"') || val.includes('\n')) {
+            val = '"' + val.replace(/"/g, '""') + '"';
+          }
+          return val;
+        }).join(';');
+        csv += line + '\n';
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
+    } catch (err) {
+      console.error('Ошибка экспорта CSV:', err);
+      window.alert('Ошибка при выгрузке CSV.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Выгрузка в Excel через серверный эндпоинт (отдаёт готовый .xlsx)
+  const handleExportXLSX = async () => {
+    if (!exportXlsxUrl) {
+      window.alert('Экспорт в Excel не настроен для этой страницы.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await fetchExportData();
+      const count = Array.isArray(data) ? data.length : 0;
+      if (!count) {
+        window.alert('Нет данных для выгрузки.');
+        return;
+      }
+      if (count > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${count.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
+      const params = new URLSearchParams();
+      params.set('all', 'true');
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      Object.entries(filters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          params.set(key, String(value));
+        }
+      });
+      const resp = await fetch(`${exportXlsxUrl}?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error('Ошибка экспорта Excel:', err);
+      window.alert('Ошибка при выгрузке Excel.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
+  // Загрузка данных с пагинацией
+  const fetchData = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('page', String(paginationModel.page));
+      params.set('pageSize', String(paginationModel.pageSize));
+      if (debouncedSearch) {
+        params.set('search', debouncedSearch);
+      }
+      
+      Object.entries(filters).forEach(([key, value]) => { 
+        if (Array.isArray(value)) { 
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
+        } else if (value !== '' && value != null) { 
+          params.set(key, String(value)); 
+        } 
+      });
+      const qs = params.toString();
+      const url = `${apiUrl}?${qs}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const json = await response.json();
+      const data = json.data || [];
+      setRawRows(data);
+      setTotalRows(json.totalRows || data.length);
+      if (onDataLoaded) onDataLoaded(data);
+    } catch (err) { setError(err.message); } finally { setLoading(false); }
+  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
+
+  // Сброс страницы при смене фильтров
+  useEffect(() => {
+    setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }, [filtersKey]);
+
+  useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
+
+  if (error) return <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>Ошибка загрузки: {error}</Alert>;
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+      
+      {/* Тулбар */}
+      <Box sx={{ 
+        display: 'flex', alignItems: 'center', gap: 1, 
+        px: 2, py: 1, bgcolor: '#f1f5f9', 
+        borderRadius: '12px 12px 0 0',
+        border: '1px solid #e2e8f0', borderBottom: 'none',
+      }}>
+        <Button size="small" startIcon={<ColumnsIcon />}
+          onClick={(e) => setColumnsAnchor(e.currentTarget)}
+          sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
+        <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
+          onClose={() => setColumnsAnchor(null)}
+          slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
+          <MenuItem dense onClick={showAllColumns}>
+            <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
+          <MenuItem dense onClick={hideAllColumns}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
+          <Divider />
+          {columns.map(col => (
+            <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
+              <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
+              <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
+            </MenuItem>
+          ))}
+        </Menu>
+
+        <TextField size="small" placeholder="Поиск..." value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
+          sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
+
+        <Box sx={{ flex: 1 }} />
+
+        {totalRows > 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+            {totalRows.toLocaleString('ru-RU')} строк
+          </Typography>
+        )}
+
+        <ButtonGroup size="small" variant="text">
+          <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+            sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
+          {exportXlsxUrl && (
+            <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+              sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
+          )}
+        </ButtonGroup>
+      </Box>
+
+      {/* Таблица */}
+      <DataGrid 
+        apiRef={apiRef}
+        rows={rows} 
+        columns={visibleCols}
+        getRowId={(row) => row._rowId}
+        loading={loading} 
+        sortingMode="server"
+        paginationMode="server"
+        rowCount={totalRows}
+        paginationModel={paginationModel}
+        onPaginationModelChange={setPaginationModel}
+        disableColumnFilter
+        onRowClick={onRowClick}
+        pageSizeOptions={[25, 50, 100]} 
+        disableRowSelectionOnClick
+        sx={{ 
+          flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
+          borderRadius: '0 0 12px 12px',
+          '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
+          '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
+        }} 
+      />
+    </Box>
+  );
+}
+```
+
+## File: frontend/src/components/PromoEditDialog.jsx
+```javascript
+import { useState, useEffect } from 'react';
+import {
+  Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
+  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
+} from '@mui/material';
+import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { promoAPI } from '../api/promo';
+
+// ─── Месяцы ────────────────────────────────────────────────────────────────
+const MONTH_OPTIONS = [
+  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 }, { label: 'Апрель', value: 4 },
+  { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 }, { label: 'Июль', value: 7 }, { label: 'Август', value: 8 },
+  { label: 'Сентябрь', value: 9 }, { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
+];
+
+// ─── Форматирование ────────────────────────────────────────────────────────
+const fmtDisplay = (v) => {
+  if (v == null || v === '') return '';
+  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
+const AgreementChip = ({ label, value }) => {
+  const text = value || '';
+  if (!text || text === '0') return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Chip label="Ожидает" size="small" variant="outlined" sx={{ borderColor: '#94a3b8', color: '#64748b', fontWeight: 500, height: 28 }} />
+    </Box>
+  );
+
+  const lower = text.toLowerCase();
+  const isApproved = lower.startsWith('согласовано');
+  const isRejected = lower.startsWith('отклонено');
+  const color = isApproved ? '#16a34a' : isRejected ? '#dc2626' : '#6366f1';
+  const bg = isApproved ? '#f0fdf4' : isRejected ? '#fef2f2' : '#eef2ff';
+  const shortLabel = isApproved ? '✓ Согласовано' : isRejected ? '✗ Отклонено' : '💬 Комментарий';
+
+  const chip = (
+    <Chip
+      label={shortLabel}
+      size="small"
+      variant="filled"
+      sx={{
+        bgcolor: bg, color, fontWeight: 600, height: 28, maxWidth: '100%',
+        '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }}
+    />
+  );
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
+      <Tooltip title={text} arrow placement="top" slotProps={{ tooltip: { sx: { maxWidth: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } } }}>
+        {chip}
+      </Tooltip>
+    </Box>
+  );
+};
+
+// ─── Подсветка согласований ────────────────────────────────────────────────
+const renderAgreementSx = (value) => {
+  if (value == null || value === '' || value === '0') return {};
+  const v = String(value).toLowerCase();
+  if (v.startsWith('согласовано')) return { 
+    '& .MuiOutlinedInput-input': { color: '#16a34a', fontWeight: 600 },
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#16a34a' },
+    '& .MuiInputBase-root': { bgcolor: '#f0fdf4' },
+  };
+  if (v.startsWith('отклонено')) return { 
+    '& .MuiOutlinedInput-input': { color: '#dc2626', fontWeight: 600 },
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#dc2626' },
+    '& .MuiInputBase-root': { bgcolor: '#fef2f2' },
+  };
+  return { 
+    '& .MuiOutlinedInput-input': { color: '#6366f1', fontStyle: 'italic' },
+    '& .MuiInputBase-root': { bgcolor: '#eef2ff' },
+  };
+};
+
+// ─── Компонент ─────────────────────────────────────────────────────────────
+// Цвета по ролям (для отображения истории)
+const ROLE_COLORS = {
+  'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
+  'agreement1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'agreement2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'согласование1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
+  'согласование2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
+  'КАМ': { bg: '#f5f3ff', text: '#7c3aed', dot: '#7c3aed' },
+};
+const ROLE_ICONS = { 'admin': '👑', 'agreement1': '✅', 'agreement2': '✅', 'согласование1': '✅', 'согласование2': '✅', 'КАМ': '💬' };
+
+function parseComments(raw) {
+  if (!raw) return [];
+  const lines = raw.split('\n').filter(l => l.trim());
+  const messages = [];
+  const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (m) messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
+  }
+  return messages;
+}
+
+export default function PromoEditDialog({
+  open, onClose, form, setForm, recalcPlan, recalcActual,
+  onSave, onDelete, saving, deleting,
+  meta, allSkuOptions, allNetworkOptions, investmentTypes,
+  role,
+}) {
+  const [editingFields, setEditingFields] = useState({});
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [newComment, setNewComment] = useState(''); // отдельное поле для нового комментария КАМ
+
+  const fetchSKUInfoForEdit = async (sku) => {
+    try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
+  };
+
+  useEffect(() => { setEditingFields({}); }, [open]);
+
+  if (!form) return null;
+
+  const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
+
+  const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
+  const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
+  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
+
+  const handleFieldChange = (field) => (e) => {
+    const rawValue = e.target.value;
+    const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
+    if (planTriggers.includes(field)) {
+      setForm(prev => { const calc = recalcPlan({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
+    } else if (actualTriggers.includes(field)) {
+      setForm(prev => { const calc = recalcActual({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
+    } else {
+      setForm(prev => ({ ...prev, [field]: textFields.includes(field) ? rawValue : cleanValue }));
+    }
+  };
+
+  const handleFocus = (field) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
+  const handleBlur = (field) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
+
+  const getDisplayValue = (field, editable) => {
+    if (!editable) return form[field] != null ? fmtDisplay(form[field]) : '';
+    if (editingFields[field]) return form[field] != null ? String(form[field]) : '';
+    return form[field] != null ? fmtDisplay(form[field]) : '';
+  };
+
+  const isApprover = role === 'agreement1' || role === 'agreement2';
+
+  const handleSaveClick = () => {
+    if (isApprover) {
+      setConfirmOpen(true);
+    } else {
+      onSave(newComment.trim() || null);
+      setNewComment('');
+    }
+  };
+
+  const handleConfirmSave = () => {
+    setConfirmOpen(false);
+    onSave(newComment.trim() || null);
+    setNewComment('');
+  };
+
+  return (
+    <Dialog 
+      open={open} 
+      onClose={onClose} 
+      maxWidth="lg" 
+      fullWidth 
+      // Растягиваем окно почти на всю высоту экрана
+      PaperProps={{ sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } }}
+    >
+      
+      {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
+      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#ffffff', py: 1.5, px: 3 }}>
+        <Typography component="span" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
+          Редактирование: {form.network_name || 'Промо'}
+        </Typography>
+        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
+      </DialogTitle>
+  
+      {/* Уменьшили внутренний отступ формы (p: 2 вместо 3) */}
+      <DialogContent dividers sx={{ p: 2, overflow: 'auto' }}>
+        
+        {/* Уменьшили расстояние между тремя блоками (gap: 1.5 вместо 3) */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+  
+          {(() => {
+            const gridStyles = { 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', 
+              gap: 1.5, // Уменьшили расстояние между полями (было 2.5)
+            };
+  
+            const paperStyles = {
+              p: 2, // Уменьшили отступы внутри белых блоков (было 3)
+              borderRadius: 2, 
+              boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+            };
+  
+            // Стиль для заголовков блоков (mb: 1.5 вместо 2.5)
+            const titleStyles = { fontWeight: 600, mb: 1.5 };
+  
+            return (
+              <>
+                {/* ─── Блок 1: Основные данные ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#ffffff' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles }}>📋 Основные данные</Typography>
+                  
+                  <Box sx={gridStyles}>
+                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} />
+                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} />
+                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')}>
+                      {MONTH_OPTIONS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
+                    </TextField>
+                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
+  
+                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''}
+                      onChange={(e) => { const v = e.target.value; setForm(prev => ({ ...prev, sku: v })); if (v) fetchSKUInfoForEdit(v); }}>
+                      {allSkuOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')}>
+                      {meta.mechanics?.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')}>
+                      {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                    </TextField>
+                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')}>
+                      {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
+                    </TextField>
+  
+                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
+                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
+                    <AgreementChip label="Согласование 1" value={form.agreement1} />
+                    <AgreementChip label="Согласование 2" value={form.agreement2} />
+                  </Box>
+  
+                  {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
+                    <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
+                      value={form.conditions || ''} onChange={updateField('conditions')} />
+                  {/* История комментариев (только чтение) */}
+                  {form.comments && (() => {
+                    const msgs = parseComments(form.comments);
+                    return msgs.length > 0 && (
+                      <Box sx={{ mt: 1.5, p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', maxHeight: 180, overflowY: 'auto' }}>
+                        <Typography variant="caption" sx={{ fontWeight: 600, color: '#64748b', fontSize: '0.7rem', mb: 1, display: 'block' }}>📝 История переписки</Typography>
+                        {msgs.map((msg, idx) => {
+                          const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
+                          return (
+                            <Box key={idx} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: style.bg, borderLeft: `3px solid ${style.dot}`, mb: 0.5 }}>
+                              <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.7rem' }}>
+                                {ROLE_ICONS[msg.role] || '💬'} {msg.role === 'КАМ' ? msg.author : msg.role}
+                                {msg.date && ` · ${msg.date}`}
+                              </Typography>
+                              <Typography sx={{ fontSize: '0.7rem', color: '#475569' }}>{msg.text}</Typography>
+                            </Box>
+                          );
+                        })}
+                      </Box>
+                    );
+                  })()}
+                  {/* Поле для нового комментария КАМ */}
+                  <TextField label="Новый комментарий" size="small" fullWidth multiline minRows={1} maxRows={3}
+                    value={newComment} onChange={(e) => setNewComment(e.target.value)} />
+                  </Box>
+                </Paper>
+  
+                {/* ─── Блок 2: Плановые показатели ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1a237e' }}>📊 Плановые показатели</Typography>
+                  <Box sx={gridStyles}>
+                    {[
+                      { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
+                      { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
+                      { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
+                      { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
+                      { label: 'Сумма скидки', field: 'discount_amount', editable: true },
+                      { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
+                      { label: 'Цена контракта', field: 'contract_price', editable: true },
+                      { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
+                      { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
+                      { label: 'ROI план %', field: 'plan_roi', editable: false },
+                    ].map(({ label, field, editable }) => (
+                      <TextField key={field} label={label} type="text" size="small" fullWidth
+                        value={getDisplayValue(field, editable)}
+                        onChange={editable ? handleFieldChange(field) : undefined}
+                        onFocus={editable ? handleFocus(field) : undefined}
+                        onBlur={editable ? handleBlur(field) : undefined}
+                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
+                        sx={{ bgcolor: editable ? '#ffffff' : '#f0f0f0' }} 
+                      />
+                    ))}
+                  </Box>
+                </Paper>
+  
+                {/* ─── Блок 3: Фактические показатели ──────────────────── */}
+                <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
+                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
+                  <Box sx={gridStyles}>
+                    {[
+                      { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
+                      { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
+                      { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
+                      { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
+                      { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
+                      { label: 'Факт ROI %', field: 'actual_roi', editable: false },
+                      { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
+                      { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
+                    ].map(({ label, field, editable }) => (
+                      <TextField key={field} label={label} type="text" size="small" fullWidth
+                        value={getDisplayValue(field, editable)}
+                        onChange={editable ? handleFieldChange(field) : undefined}
+                        onFocus={editable ? handleFocus(field) : undefined}
+                        onBlur={editable ? handleBlur(field) : undefined}
+                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
+                        sx={{ bgcolor: editable ? '#ffffff' : '#e9ecea' }} 
+                      />
+                    ))}
+                  </Box>
+                </Paper>
+              </>
+            );
+          })()}
+  
+        </Box>
+      </DialogContent>
+  
+      {/* Уменьшили отступы в подвале (py: 1.5) */}
+      <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
+        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" onClick={onClose}>Закрыть</Button>
+          <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving}>
+            {saving ? 'Сохранение...' : 'Сохранить'}
+          </Button>
+        </Box>
+      </DialogActions>
+
+      {/* ─── Подтверждение для согласующих ──────────────────────── */}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Подтверждение изменений</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mt: 1 }}>
+            Вы вносите изменения в параметры промо-акции в роли согласующего.
+            Вы уверены, что хотите сохранить изменения?
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button variant="outlined" onClick={() => setConfirmOpen(false)}>Отмена</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={handleConfirmSave}
+          >
+            Подтвердить и сохранить
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Dialog>
+  );
 }
 ```
 
@@ -6553,7 +7075,8 @@ func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 	return &r, nil
 }
 
-// UpdatePromo возвращает rowsAffected (0 = конфликт версий)
+// UpdatePromo возвращает rowsAffected (0 = конфликт версий).
+// Если updatedAt пустой — обновляем без проверки версии (нет optimistic locking).
 func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) {
 	query := `UPDATE dbo.tbl_PromoActivities SET 
 		network_name = ?, kam = ?, brand = ?, brand_as = ?, sku = ?,
@@ -6584,7 +7107,10 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		plan_vs_fact_rub = ?, plan_vs_fact_investments = ?,
 		turnover_per_point = ?, turnover_per_point_promo = ?,
 		updated_at = GETDATE()
-		WHERE id = ? AND updated_at = ?`
+		WHERE id = ?`
+	if updatedAt != "" && updatedAt != "<nil>" {
+		query += " AND updated_at = ?"
+	}
 
 	values := []interface{}{
 		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
@@ -6614,7 +7140,10 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
 		r.PlanVsFactRub, r.PlanVsFactInvestments,
 		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
-		id, updatedAt,
+		id,
+	}
+	if updatedAt != "" && updatedAt != "<nil>" {
+		values = append(values, updatedAt)
 	}
 
 	result, err := config.DB.Exec(query, values...)
@@ -6737,14 +7266,16 @@ type ApprovalParams struct {
 	Brand             string
 	Mechanics         string
 	HasComments       bool
+	Page              int
+	PageSize          int
 }
 
-func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
+func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
 	query := `
-		SELECT TOP 500
+		SELECT
 			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
 			p.plan_investments_rub, p.plan_roi, p.actual_roi,
@@ -6819,11 +7350,29 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
 	}
 
+	// Сначала считаем общее количество (без пагинации)
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + query[strings.Index(query, "WHERE")+6:]
+	countRow := config.DB.QueryRow(countQuery, args...)
+	var total int
+	if err := countRow.Scan(&total); err != nil {
+		total = 0
+	}
+
 	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
+
+	// Пагинация
+	if params.PageSize <= 0 {
+		params.PageSize = 50
+	}
+	if params.PageSize > 500 {
+		params.PageSize = 500
+	}
+	offset := params.Page * params.PageSize
+	query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, params.PageSize)
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -6847,7 +7396,7 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, error) {
 	if results == nil {
 		results = []models.ApprovalRow{}
 	}
-	return results, nil
+	return results, total, nil
 }
 
 // ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
@@ -6865,11 +7414,12 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 		return err
 	}
 
-	// Добавляем новый комментарий с пометкой автора и времени
+	// Добавляем новый комментарий с пометкой автора, даты и роли
 	newComments := currentComments.String
 	if comment != "" {
-		timestamp := time.Now().Format("02.01.2006 15:04")
-		commentLine := fmt.Sprintf("[%s %s]: %s\n", timestamp, username, comment)
+		timestamp := time.Now().Format("02.01.2006")
+		roleLabel := fmt.Sprintf("согласование%d", agreementNum)
+		commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, username, comment)
 		newComments += commentLine
 	}
 
@@ -6881,7 +7431,7 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 	return err
 }
 
-// BatchApprove — массовое согласование массива ID
+// BatchApprove — массовое согласование массива ID с дописыванием комментария в историю
 func BatchApprove(agreementNum int, ids []int, status string, comment string, legacyValue string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -6891,6 +7441,8 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
 	agreementField := fmt.Sprintf("agreement%d", agreementNum)
 
+	timestamp := time.Now().Format("02.01.2006 15:04")
+
 	placeholders := make([]string, 0, len(ids))
 	args := []interface{}{legacyValue, status, comment}
 	for _, id := range ids {
@@ -6898,16 +7450,61 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 		args = append(args, id)
 	}
 
-	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, updated_at = GETDATE() WHERE id IN (%s) AND deleted_at IS NULL",
-		agreementField, statusField, commentField, strings.Join(placeholders, ","),
+	// Сначала читаем текущие comments для всех ID
+	idArgs := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		idArgs = append(idArgs, id)
+	}
+	idPlaceholders := make([]string, 0, len(ids))
+	for range ids {
+		idPlaceholders = append(idPlaceholders, "?")
+	}
+
+	readQuery := fmt.Sprintf(
+		"SELECT id, comments FROM dbo.tbl_PromoActivities WHERE id IN (%s) AND deleted_at IS NULL",
+		strings.Join(idPlaceholders, ","),
 	)
 
-	result, err := config.DB.Exec(query, args...)
+	rows, err := config.DB.Query(readQuery, idArgs...)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+
+	// Для каждого ID формируем новый comments с добавленной строкой лога
+	commentUpdates := make(map[int]string)
+	for rows.Next() {
+		var id int
+		var currentComments sql.NullString
+		if err := rows.Scan(&id, &currentComments); err != nil {
+			continue
+		}
+		newComments := currentComments.String
+		if comment != "" {
+			roleLabel := fmt.Sprintf("согласование%d", agreementNum)
+			commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, "batch", comment)
+			newComments += commentLine
+		}
+		commentUpdates[id] = newComments
+	}
+	rows.Close()
+
+	// Обновляем каждую запись индивидуально, чтобы проставить свой comments
+	var totalAffected int64
+	for _, id := range ids {
+		newComments := commentUpdates[id]
+		query := fmt.Sprintf(
+			"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+			agreementField, statusField, commentField,
+		)
+		result, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
+		if err != nil {
+			return totalAffected, err
+		}
+		affected, _ := result.RowsAffected()
+		totalAffected += affected
+	}
+	return totalAffected, nil
 }
 
 // ─── Approval Filters ───────────────────────────────────────────────────────
@@ -7012,7 +7609,9 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 		return nil
 	})
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	return resNetwork, resBrand, resMech, resKam, nil
 }
@@ -7109,325 +7708,6 @@ func GetApprovalBrands(field, kam, network string) ([]string, error) {
 		brands = []string{}
 	}
 	return brands, nil
-}
-```
-
-## File: frontend/src/components/PromoEditDialog.jsx
-```javascript
-import { useState, useEffect } from 'react';
-import {
-  Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
-  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
-} from '@mui/material';
-import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
-import { promoAPI } from '../api/promo';
-
-// ─── Месяцы ────────────────────────────────────────────────────────────────
-const MONTH_OPTIONS = [
-  { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 }, { label: 'Апрель', value: 4 },
-  { label: 'Май', value: 5 }, { label: 'Июнь', value: 6 }, { label: 'Июль', value: 7 }, { label: 'Август', value: 8 },
-  { label: 'Сентябрь', value: 9 }, { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
-];
-
-// ─── Форматирование ────────────────────────────────────────────────────────
-const fmtDisplay = (v) => {
-  if (v == null || v === '') return '';
-  return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-
-// ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
-const AgreementChip = ({ label, value }) => {
-  const text = value || '';
-  if (!text || text === '0') return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
-      <Chip label="Ожидает" size="small" variant="outlined" sx={{ borderColor: '#94a3b8', color: '#64748b', fontWeight: 500, height: 28 }} />
-    </Box>
-  );
-
-  const lower = text.toLowerCase();
-  const isApproved = lower.startsWith('согласовано');
-  const isRejected = lower.startsWith('отклонено');
-  const color = isApproved ? '#16a34a' : isRejected ? '#dc2626' : '#6366f1';
-  const bg = isApproved ? '#f0fdf4' : isRejected ? '#fef2f2' : '#eef2ff';
-  const shortLabel = isApproved ? '✓ Согласовано' : isRejected ? '✗ Отклонено' : '💬 Комментарий';
-
-  const chip = (
-    <Chip
-      label={shortLabel}
-      size="small"
-      variant="filled"
-      sx={{
-        bgcolor: bg, color, fontWeight: 600, height: 28, maxWidth: '100%',
-        '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      }}
-    />
-  );
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>{label}</Typography>
-      <Tooltip title={text} arrow placement="top" slotProps={{ tooltip: { sx: { maxWidth: 320, whiteSpace: 'pre-wrap', wordBreak: 'break-word' } } }}>
-        {chip}
-      </Tooltip>
-    </Box>
-  );
-};
-
-// ─── Подсветка согласований ────────────────────────────────────────────────
-const renderAgreementSx = (value) => {
-  if (value == null || value === '' || value === '0') return {};
-  const v = String(value).toLowerCase();
-  if (v.startsWith('согласовано')) return { 
-    '& .MuiOutlinedInput-input': { color: '#16a34a', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#16a34a' },
-    '& .MuiInputBase-root': { bgcolor: '#f0fdf4' },
-  };
-  if (v.startsWith('отклонено')) return { 
-    '& .MuiOutlinedInput-input': { color: '#dc2626', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#dc2626' },
-    '& .MuiInputBase-root': { bgcolor: '#fef2f2' },
-  };
-  return { 
-    '& .MuiOutlinedInput-input': { color: '#6366f1', fontStyle: 'italic' },
-    '& .MuiInputBase-root': { bgcolor: '#eef2ff' },
-  };
-};
-
-// ─── Компонент ─────────────────────────────────────────────────────────────
-export default function PromoEditDialog({
-  open, onClose, form, setForm, recalcPlan, recalcActual,
-  onSave, onDelete, saving, deleting,
-  meta, allSkuOptions, allNetworkOptions, investmentTypes,
-  role,
-}) {
-  const [editingFields, setEditingFields] = useState({});
-  const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const fetchSKUInfoForEdit = async (sku) => {
-    try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
-  };
-
-  useEffect(() => { setEditingFields({}); }, [open]);
-
-  if (!form) return null;
-
-  const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
-  const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
-  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'comments', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
-
-  const handleFieldChange = (field) => (e) => {
-    const rawValue = e.target.value;
-    const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
-    if (planTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcPlan({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
-    } else if (actualTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcActual({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
-    } else {
-      setForm(prev => ({ ...prev, [field]: textFields.includes(field) ? rawValue : cleanValue }));
-    }
-  };
-
-  const handleFocus = (field) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
-  const handleBlur = (field) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
-
-  const getDisplayValue = (field, editable) => {
-    if (!editable) return form[field] != null ? fmtDisplay(form[field]) : '';
-    if (editingFields[field]) return form[field] != null ? String(form[field]) : '';
-    return form[field] != null ? fmtDisplay(form[field]) : '';
-  };
-
-  const isApprover = role === 'agreement1' || role === 'agreement2';
-
-  const handleSaveClick = () => {
-    if (isApprover) {
-      setConfirmOpen(true);
-    } else {
-      onSave();
-    }
-  };
-
-  return (
-    <Dialog 
-      open={open} 
-      onClose={onClose} 
-      maxWidth="lg" 
-      fullWidth 
-      // Растягиваем окно почти на всю высоту экрана
-      PaperProps={{ sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } }}
-    >
-      
-      {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
-      <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#ffffff', py: 1.5, px: 3 }}>
-        <Typography component="span" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
-          Редактирование: {form.network_name || 'Промо'}
-        </Typography>
-        <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
-      </DialogTitle>
-  
-      {/* Уменьшили внутренний отступ формы (p: 2 вместо 3) */}
-      <DialogContent dividers sx={{ p: 2, overflow: 'auto' }}>
-        
-        {/* Уменьшили расстояние между тремя блоками (gap: 1.5 вместо 3) */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-  
-          {(() => {
-            const gridStyles = { 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', 
-              gap: 1.5, // Уменьшили расстояние между полями (было 2.5)
-            };
-  
-            const paperStyles = {
-              p: 2, // Уменьшили отступы внутри белых блоков (было 3)
-              borderRadius: 2, 
-              boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
-            };
-  
-            // Стиль для заголовков блоков (mb: 1.5 вместо 2.5)
-            const titleStyles = { fontWeight: 600, mb: 1.5 };
-  
-            return (
-              <>
-                {/* ─── Блок 1: Основные данные ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#ffffff' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles }}>📋 Основные данные</Typography>
-                  
-                  <Box sx={gridStyles}>
-                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} />
-                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} />
-                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')}>
-                      {MONTH_OPTIONS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
-                    </TextField>
-                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
-  
-                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''}
-                      onChange={(e) => { const v = e.target.value; setForm(prev => ({ ...prev, sku: v })); if (v) fetchSKUInfoForEdit(v); }}>
-                      {allSkuOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')}>
-                      {meta.mechanics?.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')}>
-                      {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-                    </TextField>
-                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')}>
-                      {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
-                    </TextField>
-  
-                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} slotProps={{ htmlInput: { min: 0 } }} />
-                    <AgreementChip label="Согласование 1" value={form.agreement1} />
-                    <AgreementChip label="Согласование 2" value={form.agreement2} />
-                  </Box>
-  
-                  {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
-                    <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.conditions || ''} onChange={updateField('conditions')} />
-                    <TextField label="Комментарии" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.comments || ''} onChange={updateField('comments')} />
-                  </Box>
-                </Paper>
-  
-                {/* ─── Блок 2: Плановые показатели ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1a237e' }}>📊 Плановые показатели</Typography>
-                  <Box sx={gridStyles}>
-                    {[
-                      { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
-                      { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
-                      { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
-                      { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
-                      { label: 'Сумма скидки', field: 'discount_amount', editable: true },
-                      { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
-                      { label: 'Цена контракта', field: 'contract_price', editable: true },
-                      { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
-                      { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
-                      { label: 'ROI план %', field: 'plan_roi', editable: false },
-                    ].map(({ label, field, editable }) => (
-                      <TextField key={field} label={label} type="text" size="small" fullWidth
-                        value={getDisplayValue(field, editable)}
-                        onChange={editable ? handleFieldChange(field) : undefined}
-                        onFocus={editable ? handleFocus(field) : undefined}
-                        onBlur={editable ? handleBlur(field) : undefined}
-                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
-                        sx={{ bgcolor: editable ? '#ffffff' : '#f0f0f0' }} 
-                      />
-                    ))}
-                  </Box>
-                </Paper>
-  
-                {/* ─── Блок 3: Фактические показатели ──────────────────── */}
-                <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
-                  <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
-                  <Box sx={gridStyles}>
-                    {[
-                      { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
-                      { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
-                      { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
-                      { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
-                      { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
-                      { label: 'Факт ROI %', field: 'actual_roi', editable: false },
-                      { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
-                      { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
-                    ].map(({ label, field, editable }) => (
-                      <TextField key={field} label={label} type="text" size="small" fullWidth
-                        value={getDisplayValue(field, editable)}
-                        onChange={editable ? handleFieldChange(field) : undefined}
-                        onFocus={editable ? handleFocus(field) : undefined}
-                        onBlur={editable ? handleBlur(field) : undefined}
-                        slotProps={{ input: editable ? {} : { readOnly: true }, htmlInput: { inputMode: 'text' } }} 
-                        sx={{ bgcolor: editable ? '#ffffff' : '#e9ecea' }} 
-                      />
-                    ))}
-                  </Box>
-                </Paper>
-              </>
-            );
-          })()}
-  
-        </Box>
-      </DialogContent>
-  
-      {/* Уменьшили отступы в подвале (py: 1.5) */}
-      <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
-        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" onClick={onClose}>Закрыть</Button>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving}>
-            {saving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
-        </Box>
-      </DialogActions>
-
-      {/* ─── Подтверждение для согласующих ──────────────────────── */}
-      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ fontWeight: 600 }}>Подтверждение изменений</DialogTitle>
-        <DialogContent>
-          <Typography variant="body1" sx={{ mt: 1 }}>
-            Вы вносите изменения в параметры промо-акции в роли согласующего.
-            Вы уверены, что хотите сохранить изменения?
-          </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button variant="outlined" onClick={() => setConfirmOpen(false)}>Отмена</Button>
-          <Button
-            variant="contained"
-            color="warning"
-            onClick={() => {
-              setConfirmOpen(false);
-              onSave();
-            }}
-          >
-            Подтвердить и сохранить
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Dialog>
-  );
 }
 ```
 
@@ -7559,6 +7839,7 @@ func main() {
 	{
 		// Интернет-продажи
 		api.GET("/data", handlers.GetData)
+		api.GET("/data/export-xlsx", handlers.ExportSalesExcel)
 		api.GET("/filters", handlers.GetFilterOptions)
 		api.GET("/drilldown", handlers.GetDrilldown)
 
@@ -7574,6 +7855,7 @@ func main() {
 		api.GET("/promo/history", handlers.GetPromoHistoryFiltered)
 		api.GET("/promo/sku-info", handlers.GetSKUInfo)
 		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
+		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
 
 		// Промо — запись (agreement1, agreement2, admin)
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
@@ -7613,7 +7895,6 @@ import {
   FileDownload as ExportIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
-import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
@@ -7625,10 +7906,12 @@ import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
-import { usePromoCalculations } from '../hooks/usePromoCalculations.ts';
+import { usePromoCalculations } from '../hooks/usePromoCalculations';
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
+const API_BASE = 'http://localhost:8080';
+const EXPORT_WARNING_THRESHOLD = 10000;
 
 const renderAgreement = (value) => {
   if (value == null || value === '' || value === '0') return '';
@@ -7726,7 +8009,6 @@ export default function PromoAnalysis({ role }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-  const [exportDialog, setExportDialog] = useState({ open: false });
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
@@ -7744,27 +8026,14 @@ export default function PromoAnalysis({ role }) {
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
   const { rows, setRows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters, refreshTrigger);
 
-  // ─── Локальные обновления UI (без перезагрузки всей таблицы) ──────────
-  // После редактирования: заменяем одну строку в массиве
-  const handleEditSuccess = useCallback((editedId, updatedData) => {
-    setRows(prev => prev.map(row => 
-      row.id === editedId ? { ...row, ...updatedData } : row
-    ));
-  }, [setRows]);
-
-  // После удаления: убираем строку из массива
-  const handleDeleteSuccess = useCallback((deletedId) => {
-    setRows(prev => prev.filter(row => row.id !== deletedId));
-  }, [setRows]);
-
-  // После создания нового промо: перезагружаем таблицу полностью
-  const handleCreateSuccess = useCallback(() => {
+  // После редактирования/удаления/создания — инвалидируем кеш React Query
+  const handleDataChanged = useCallback(() => {
     setRefreshTrigger(prev => prev + 1);
   }, []);
 
   // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete, resetForm } = 
-    usePromoForm({ onEditSuccess: handleEditSuccess, onDeleteSuccess: handleDeleteSuccess, onCreateSuccess: handleCreateSuccess });
+    usePromoForm({ onEditSuccess: handleDataChanged, onDeleteSuccess: handleDataChanged, onCreateSuccess: handleDataChanged });
   const { recalcPlan, recalcActual } = usePromoCalculations(form);
 
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
@@ -7790,8 +8059,8 @@ export default function PromoAnalysis({ role }) {
   // ─── Обработчики действий ─────────────────────────────────────────────
   const handleRowClick = (params) => { formHandleRowClick(params.row); setEditDialogOpen(true); };
 
-  const handleSave = async () => { 
-    const result = await formHandleSave(); 
+  const handleSave = async (commentOverride) => { 
+    const result = await formHandleSave(commentOverride); 
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
 
@@ -7836,6 +8105,13 @@ export default function PromoAnalysis({ role }) {
   const handleExportCSV = () => {
     try {
       const data = filteredRows;
+      if (!data.length) { window.alert('Нет данных для выгрузки.'); return; }
+      if (data.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';
@@ -7852,38 +8128,31 @@ export default function PromoAnalysis({ role }) {
     } catch (e) { console.error('Export error:', e); }
   };
 
-  const confirmedExportXLSX = async () => {
+  // Экспорт XLSX через серверный эндпоинт
+  const handleExportXLSX = async () => {
     try {
-      const data = filteredRows;
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet('Promo Data');
-
-      worksheet.columns = visibleCols.map(c => ({
-        header: c.headerName || c.field,
-        key: c.field,
-        width: c.width ? c.width / 7 : 20,
-      }));
-
-      const headerRow = worksheet.getRow(1);
-      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6366F1' } };
-      headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      data.forEach(row => worksheet.addRow(row));
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      saveAs(new Blob([buffer]), `promo-analysis_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (e) { console.error('Export error:', e); } finally {
-      setExportDialog({ open: false });
-    }
-  };
-
-  const handleExportXLSX = () => {
-    if (filteredRows.length > 10000) {
-      setExportDialog({ open: true });
-    } else {
-      confirmedExportXLSX();
-    }
+      const token = localStorage.getItem('token');
+      if (rows.length > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${rows.length.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
+      const qs = new URLSearchParams();
+      Object.entries(appliedFilters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) qs.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          qs.set(key, String(value));
+        }
+      });
+      const resp = await fetch(`${API_BASE}/api/promo/export-xlsx?${qs}`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      saveAs(blob, `promo-export_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (e) { console.error('Export error:', e); window.alert('Ошибка при выгрузке Excel.'); }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────
@@ -8010,24 +8279,6 @@ export default function PromoAnalysis({ role }) {
         </Dialog>
       </>)}
 
-      {/* Диалог подтверждения большого экспорта */}
-      <Dialog open={exportDialog.open} onClose={() => setExportDialog({ open: false })}>
-        <DialogTitle>Подтверждение экспорта</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Количество строк для экспорта: {filteredRows.length.toLocaleString('ru-RU')}.<br />
-            Экспорт в Excel может занять длительное время и создать файл большого объёма.<br />
-            Продолжить?
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setExportDialog({ open: false })}>Отмена</Button>
-          <Button variant="contained" onClick={confirmedExportXLSX}>
-            Экспортировать
-          </Button>
-        </DialogActions>
-      </Dialog>
-
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
 
@@ -8044,201 +8295,6 @@ export default function PromoAnalysis({ role }) {
     </Box>
   );
 }
-```
-
-## File: frontend/src/api/promo.js
-```javascript
-import { refreshToken } from './auth';
-
-const API_BASE = 'http://localhost:8080';
-
-// ─── Утилита: fetch с авторизацией и таймаутом ──────────────────────────────
-async function fetchWithAuth(url, options = {}, timeout = 15000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  const doFetch = () => {
-    const token = localStorage.getItem('token');
-    const headers = {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    return fetch(url, { ...options, headers, signal: controller.signal });
-  };
-
-  let res = await doFetch();
-
-  // При 401 пробуем обновить токен и повторить
-  if (res.status === 401) {
-    const refreshed = await refreshToken();
-    if (refreshed) {
-      res = await doFetch();
-    }
-  }
-
-  clearTimeout(timer);
-  return res;
-}
-
-// ─── Утилита: построение query string ──────────────────────────────────────
-function buildParams(filters) {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-    } else if (value !== '' && value != null) {
-      params.set(key, String(value));
-    }
-  });
-  return params.toString();
-}
-
-// ─── API: Промо ────────────────────────────────────────────────────────────
-export const promoAPI = {
-  // Справочники фильтров
-  getFilters: (filters = {}) =>
-    fetchWithAuth(`${API_BASE}/api/promo/filters?${buildParams(filters)}`).then(r => r.json()),
-
-  // Данные промо
-  getData: (filters = {}) =>
-    fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`).then(r => r.json()),
-
-  // История промо по SKU/сети/механике
-  getHistory: (params = {}) =>
-    fetchWithAuth(`${API_BASE}/api/promo/history?${new URLSearchParams(params)}`).then(r => r.json()),
-
-  // Сохранение (INSERT / UPDATE)
-  save: (data) =>
-    fetchWithAuth(`${API_BASE}/api/promo/save`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }).then(async r => {
-      const json = await r.json();
-      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка сохранения' };
-      return json;
-    }),
-
-  // Удаление (soft-delete)
-  delete: (id) =>
-    fetchWithAuth(`${API_BASE}/api/promo/${id}`, { method: 'DELETE' }).then(async r => {
-      if (!r.ok) {
-        const data = await r.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${r.status}`);
-      }
-      return r.json();
-    }),
-
-  // SKU по бренду
-  getSKUByBrand: (brand) =>
-    fetchWithAuth(`${API_BASE}/api/promo/sku-by-brand?brand=${encodeURIComponent(brand)}`).then(r => r.json()),
-
-  // Информация о SKU (бренд)
-  getSKUInfo: (sku) =>
-    fetchWithAuth(`${API_BASE}/api/promo/sku-info?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
-
-  // Последние данные по SKU
-  getLastSKUData: (sku) =>
-    fetchWithAuth(`${API_BASE}/api/promo/last-sku-data?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
-
-  // KAM по сети
-  getKAMByNetwork: (network) =>
-    fetchWithAuth(`${API_BASE}/api/promo/kam-by-network?network=${encodeURIComponent(network)}`).then(r => r.json()),
-
-  // Гео-маппинг сети (KAM, регион, сегмент ТОП-20)
-  getNetworkGeo: (network) =>
-    fetchWithAuth(`${API_BASE}/api/promo/network-geo?network=${encodeURIComponent(network)}`).then(r => r.json()),
-
-  // Последние данные по сети (аптеки)
-  getLastNetworkData: (network) =>
-    fetchWithAuth(`${API_BASE}/api/promo/last-network-data?network=${encodeURIComponent(network)}`).then(r => r.json()),
-
-  // Типы инвестиций
-  getInvestmentTypes: () =>
-    fetchWithAuth(`${API_BASE}/api/promo/investment-types`).then(r => r.json()),
-
-  // Последняя цена контракта по SKU
-  getLastContractPrice: (sku) =>
-    fetchWithAuth(`${API_BASE}/api/promo/last-contract-price?sku=${encodeURIComponent(sku)}`).then(r => r.json()),
-
-  // ─── Согласование ──────────────────────────────────────────────────────
-
-  // Список KAM'ов с промо на согласовании
-  getApprovalKAMs: () =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-kams`).then(r => r.json()),
-
-  // Сети для выбранного KAM (в согласовании)
-  getApprovalNetworks: (kam) =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-networks?kam=${encodeURIComponent(kam)}`).then(r => r.json()),
-
-  // Бренды для KAM + сети (в согласовании)
-  getApprovalBrands: (kam, network = '') =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}`).then(r => r.json()),
-
-  // Список промо на согласование
-  getApprovals: (params = {}) => {
-    const qs = new URLSearchParams();
-    if (params.kam) qs.set('kam', params.kam);
-    if (params.approval_status) qs.set('approval_status', params.approval_status);
-    else qs.set('approval_status', 'pending');
-    if (params.year) qs.set('year', params.year);
-    if (params.month) qs.set('month', params.month);
-    if (params.network_name) qs.set('network_name', params.network_name);
-    if (params.brand) qs.set('brand', params.brand);
-    if (params.mechanics) qs.set('mechanics', params.mechanics);
-    if (params.has_comments) qs.set('has_comments', '1');
-    return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
-  },
-
-  // Справочники сетей/брендов/механик для страницы согласования
-  getApprovalFilters: (params = {}) => {
-    const qs = new URLSearchParams();
-    qs.set('approval_status', params.approval_status || 'pending');
-    if (params.kam) qs.set('kam', params.kam);
-    if (params.network_name) qs.set('network_name', params.network_name);
-    if (params.brand) qs.set('brand', params.brand);
-    if (params.mechanics) qs.set('mechanics', params.mechanics);
-    if (params.year) qs.set('year', params.year);
-    if (params.month) qs.set('month', params.month);
-    return fetchWithAuth(`${API_BASE}/api/promo/approval-filters?${qs}`).then(r => r.json());
-  },
-
-  // Действие согласования: comment / согласовано / отклонено
-  approve: (id, status, comment = '') =>
-    fetchWithAuth(`${API_BASE}/api/promo/approve`, {
-      method: 'POST',
-      body: JSON.stringify({ id, status, comment }),
-    }).then(async r => {
-      const json = await r.json();
-      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
-      return json;
-    }),
-
-  // Массовое согласование
-  batchApprove: (ids, status, comment = '') =>
-    fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
-      method: 'POST',
-      body: JSON.stringify({ ids, status, comment }),
-    }).then(async r => {
-      const json = await r.json();
-      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' };
-      return json;
-    }),
-};
-
-// ─── API: Интернет-продажи ─────────────────────────────────────────────────
-export const salesAPI = {
-  getFilters: () =>
-    fetchWithAuth(`${API_BASE}/api/filters`).then(r => r.json()),
-
-  getData: (filters = {}) =>
-    fetchWithAuth(`${API_BASE}/api/data?${buildParams(filters)}`).then(r => r.json()),
-
-  getDrilldown: (params = {}) =>
-    fetchWithAuth(`${API_BASE}/api/drilldown?${new URLSearchParams(params)}`).then(r => r.json()),
-};
 ```
 
 ## File: backend/handlers/promo.go
@@ -8262,6 +8318,7 @@ import (
 	"backend/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -8329,7 +8386,11 @@ func GetPromoFilters(c *gin.Context) {
 		return nil
 	})
 
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		config.Logger.Error("filter_values_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка загрузки фильтров"})
+		return
+	}
 
 	result := gin.H{
 		"kam":          resKam,
@@ -8504,7 +8565,8 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
 		if k == "id" || k == "deleted_at" || k == "updated_at" ||
 			k == "agreement1_status" || k == "agreement1_comment" ||
-			k == "agreement2_status" || k == "agreement2_comment" {
+			k == "agreement2_status" || k == "agreement2_comment" ||
+			k == "comments" {
 			continue
 		}
 
@@ -8654,10 +8716,37 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
-			updatedAt := row.UpdatedAt
+			// Берём updated_at из запроса клиента для Optimistic Locking
+			clientUpdatedAt := fmt.Sprint(input["updated_at"])
 
 			// Применяем входящие данные поверх существующей строки
 			applyJSONToRow(row, input)
+
+			// Сохраняем комментарий КАМ с датой и ролью, не затирая историю согласования
+			if newComment, ok := input["comments"]; ok {
+				var newCommentStr string
+				if newComment != nil {
+					newCommentStr = strings.TrimSpace(fmt.Sprint(newComment))
+				}
+				if newCommentStr != "" && newCommentStr != "<nil>" {
+					// Сохраняем ВСЮ историю (как структурированные строки вида
+					// [DD.MM.YYYY роль|автор]: текст, так и любые прочие строки),
+					// чтобы ничего не терялось при последовательных сохранениях.
+					var historyLines []string
+					for _, line := range strings.Split(row.Comments, "\n") {
+						line = strings.TrimSpace(line)
+						if line != "" {
+							historyLines = append(historyLines, line)
+						}
+					}
+					// Добавляем новый комментарий КАМ с меткой
+					usernameVal, _ := c.Get("username")
+					timestamp := time.Now().Format("02.01.2006")
+					kamLine := fmt.Sprintf("[%s КАМ|%s]: %s", timestamp, fmt.Sprint(usernameVal), newCommentStr)
+					historyLines = append(historyLines, kamLine)
+					row.Comments = strings.Join(historyLines, "\n")
+				}
+			}
 
 			// Пересчитываем вычисляемые поля
 			dto := services.DBRowToDTO(row)
@@ -8665,7 +8754,7 @@ func SavePromo(c *gin.Context) {
 			calc := services.CalculateFields(&dto, calcCtx)
 			services.MergeCalculatedIntoDBRow(row, calc)
 
-			rowsAffected, err := repository.UpdatePromo(idInt, row, updatedAt)
+			rowsAffected, err := repository.UpdatePromo(idInt, row, clientUpdatedAt)
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -8703,6 +8792,15 @@ func SavePromo(c *gin.Context) {
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
 	row := services.DTOToDBRow(dto, calc)
+
+	// Первый комментарий КАМ при создании промо тоже оформляем как строку истории
+	// вида [DD.MM.YYYY КАМ|автор]: текст, чтобы он корректно накапливался дальше.
+	insertComments := strings.TrimSpace(fmt.Sprint(row.Comments))
+	if insertComments != "" && insertComments != "<nil>" {
+		usernameVal, _ := c.Get("username")
+		ts := time.Now().Format("02.01.2006")
+		row.Comments = fmt.Sprintf("[%s КАМ|%s]: %s", ts, fmt.Sprint(usernameVal), insertComments)
+	}
 
 	newID, err := repository.InsertPromo(row)
 	if err != nil {
@@ -8763,6 +8861,9 @@ func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
 
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
+
 	params := repository.ApprovalParams{
 		Role:           roleStr,
 		KAM:            c.Query("kam"),
@@ -8773,14 +8874,16 @@ func GetApprovals(c *gin.Context) {
 		Brand:          c.Query("brand"),
 		Mechanics:      c.Query("mechanics"),
 		HasComments:    c.Query("has_comments") == "1",
+		Page:           page,
+		PageSize:       pageSize,
 	}
 
-	results, err := repository.GetApprovals(params)
+	results, total, err := repository.GetApprovals(params)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": results})
+	c.JSON(http.StatusOK, gin.H{"data": results, "total": total})
 }
 
 func ApprovePromo(c *gin.Context) {
@@ -9016,6 +9119,93 @@ func BatchApprovePromo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Обновлено", "affected": rowsAffected})
 }
 
+// ─── Excel Export ────────────────────────────────────────────────────────────
+
+func ExportPromoExcel(c *gin.Context) {
+	params := repository.PromoFilterParams{
+		YearFromStr: c.Query("yearFrom"),
+		YearToStr:   c.Query("yearTo"),
+		Months:      c.QueryArray("months"),
+		Kams:        c.QueryArray("kam"),
+		Brands:      c.QueryArray("brand"),
+		SKUs:        c.QueryArray("sku"),
+		Networks:    c.QueryArray("network_name"),
+		Mechanics:   c.QueryArray("mechanics"),
+		Statuses:    c.QueryArray("status"),
+	}
+	channels := c.QueryArray("channel")
+
+	results, err := repository.GetPromoRows(params, channels, 0, 0, true)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения данных"})
+		return
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	sheet := "Promo Data"
+	f.SetSheetName("Sheet1", sheet)
+
+	// Заголовки
+	headers := []string{
+		"Год", "Месяц", "Канал", "Сеть", "Бренд", "SKU", "Механика",
+		"План (уп)", "Факт (уп)", "План инвест.", "Факт инвест.",
+		"Согласование 1", "Согласование 2", "Статус",
+	}
+	for i, h := range headers {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetCellValue(sheet, fmt.Sprintf("%s1", col), h)
+	}
+
+	// Стиль заголовка
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"6366F1"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	f.SetRowStyle(sheet, 1, 1, headerStyle)
+
+	// Данные
+	for i, row := range results {
+		rowNum := i + 2
+		vals := []interface{}{
+			row.Year,
+			models.ValInt(row.Month),
+			models.ValString(row.PromoChannel),
+			models.ValString(row.NetworkName),
+			models.ValString(row.BrandAS),
+			models.ValString(row.SKU),
+			models.ValString(row.Mechanics),
+			models.ValFloat(row.PlanPromoUnits),
+			models.ValFloat(row.ActualPromoSalesUnits),
+			models.ValFloat(row.PlanInvestmentsRub),
+			models.ValFloat(row.ActualInvestments),
+			models.ValString(row.Agreement1),
+			models.ValString(row.Agreement2),
+			models.ValString(row.Status),
+		}
+		for j, v := range vals {
+			col, _ := excelize.ColumnNumberToName(j + 1)
+			f.SetCellValue(sheet, fmt.Sprintf("%s%d", col, rowNum), v)
+		}
+	}
+
+	// Автоширина
+	for i := 1; i <= len(headers); i++ {
+		col, _ := excelize.ColumnNumberToName(i)
+		f.SetColWidth(sheet, col, col, 18)
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=promo-export_%s.xlsx", time.Now().Format("2006-01-02")))
+	c.Header("Content-Transfer-Encoding", "binary")
+
+	if err := f.Write(c.Writer); err != nil {
+		config.Logger.Error("excel_export_failed", "error", err.Error())
+	}
+}
+
 // ─── Log helpers (используются для логирования, оставлены для совместимости) ─
 
 func init() {
@@ -9034,7 +9224,7 @@ import {
   DialogTitle, DialogContent, DialogActions,
   Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
   Checkbox, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow,
+  TableHead, TableRow, TablePagination,
   Drawer, Accordion, AccordionSummary, AccordionDetails,
   FormControlLabel, InputAdornment, IconButton,
 } from '@mui/material';
@@ -9125,11 +9315,16 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
 
-  const commentRefs = useRef({});
+  const [comments, setComments] = useState({}); // контролируемый стейт комментариев
   const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
+
+  // Пагинация
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
 
   // Загрузка справочников
   useEffect(() => {
@@ -9153,7 +9348,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   // Загрузка данных
   const fetchApprovals = useCallback(async () => {
-    if (!hasApplied || (!appliedKam && !appliedNetwork && !appliedBrand && !appliedMechanics && !appliedYear && !appliedMonth)) return;
+    if (!hasApplied) return;
     const currentFetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
@@ -9168,11 +9363,14 @@ export default function PromoApproval({ role, onDataChanged }) {
         brand: appliedBrand || undefined,
         mechanics: appliedMechanics || undefined,
         has_comments: appliedHasComments || undefined,
+        page,
+        pageSize,
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      commentRefs.current = {};
+      setComments({});
       setApprovals(data.data || []);
+      setTotal(data.total || 0);
       setSelectedIds(new Set()); // сбрасываем выделение при новой загрузке
     } catch (err) {
       if (currentFetchId !== fetchIdRef.current) return;
@@ -9180,13 +9378,11 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments]);
+  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments, page, pageSize]);
 
   useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
   const handleApply = () => {
-    const hasAnyFilter = draftKam || draftNetwork || draftBrand || draftMechanics || draftYear || draftMonth;
-    if (!hasAnyFilter) return;
     setHasApplied(true);
     setAppliedKam(draftKam);
     setAppliedNetwork(draftNetwork);
@@ -9196,6 +9392,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedYear(draftYear);
     setAppliedMonth(draftMonth);
     setAppliedHasComments(draftHasComments);
+    setPage(0); // сброс страницы при новом поиске
   };
 
   const handleReset = () => {
@@ -9207,22 +9404,25 @@ export default function PromoApproval({ role, onDataChanged }) {
     setApprovals([]);
     setSelectedIds(new Set());
     setHasApplied(false);
+    setPage(0);
+    setTotal(0);
   };
 
-  const handleCommentRef = useCallback((id, el) => { commentRefs.current[id] = el; }, []);
+  const handleCommentChange = useCallback((id, value) => {
+    setComments(prev => ({ ...prev, [id]: value }));
+  }, []);
   const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
 
   const handleConfirmedAction = async () => {
     const { id, status } = confirmDialog;
     setConfirmDialog({ open: false, id: null, status: '' });
     if (!id) return;
-    const inputEl = commentRefs.current[id];
-    const comment = inputEl ? inputEl.value : '';
+    const comment = comments[id] || '';
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
       setApprovals(prev => prev.filter(a => a.id !== id));
-      delete commentRefs.current[id];
+      setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
       setSnackbar({ open: true, message: '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
@@ -9234,8 +9434,8 @@ export default function PromoApproval({ role, onDataChanged }) {
   };
 
   const handleCommentOnly = (id) => {
-    const inputEl = commentRefs.current[id];
-    if (!inputEl || !inputEl.value.trim()) return;
+    const comment = (comments[id] || '').trim();
+    if (!comment) return;
     openConfirm(id, 'comment');
   };
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
@@ -9419,6 +9619,21 @@ export default function PromoApproval({ role, onDataChanged }) {
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{error}</Alert>}
 
+      {/* Пагинация (сверху) */}
+      {total > 0 && (
+        <TablePagination
+          component="div"
+          count={total}
+          page={page}
+          onPageChange={(_, newPage) => setPage(newPage)}
+          rowsPerPage={pageSize}
+          onRowsPerPageChange={(e) => { setPageSize(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[25, 50, 100]}
+          labelRowsPerPage="Строк:"
+          sx={{ '.MuiTablePagination-toolbar': { minHeight: 44, px: 0 } }}
+        />
+      )}
+
       {!loading && !error && approvals.length === 0 && (
         <Box sx={{ textAlign: 'center', py: 6 }}>
           <Typography color="text.secondary" variant="h6">
@@ -9448,7 +9663,8 @@ export default function PromoApproval({ role, onDataChanged }) {
                 <ApprovalCard key={a.id} item={a}
                   expanded={expandedCards[a.id] || false} submitting={submitting}
                   visibleFields={visibleFields}
-                  onCommentRef={handleCommentRef} onToggleExpand={toggleExpand}
+                  onCommentChange={handleCommentChange} comments={comments}
+                  onToggleExpand={toggleExpand}
                   onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
               ))}
             </Box>

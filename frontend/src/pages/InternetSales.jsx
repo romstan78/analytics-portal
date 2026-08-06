@@ -232,6 +232,7 @@ export default function InternetSales() {
           apiUrl={`${API_BASE}/api/data`}
           filters={appliedFilters}
           exportFileName="internet-sales"
+          exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
           onDataLoaded={handleDataLoaded}
           onRowClick={handleRowClick}
         />

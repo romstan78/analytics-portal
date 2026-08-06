@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -121,6 +122,64 @@ func GetChannelFilterValues(baseWhere string, baseArgs []interface{}, filters ma
 }
 
 // ─── Promo Data ─────────────────────────────────────────────────────────────
+
+// GetPromoRowsStream возвращает sql.Rows для потокового чтения (Excel export).
+// Вызывающая сторона обязана закрыть rows (defer rows.Close()).
+func GetPromoRowsStream(params PromoFilterParams, channels []string) (*sql.Rows, error) {
+	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
+	args := []interface{}{}
+
+	appendFilter := func(col string, values []string) {
+		if len(values) > 0 {
+			placeholders := make([]string, 0, len(values))
+			for _, v := range values {
+				if v != "" {
+					placeholders = append(placeholders, "?")
+					args = append(args, v)
+				}
+			}
+			if len(placeholders) > 0 {
+				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			}
+		}
+	}
+
+	if params.YearFromStr != "" {
+		if y, _ := strconv.Atoi(params.YearFromStr); true {
+			query += " AND p.year >= ?"
+			args = append(args, y)
+		}
+	}
+	if params.YearToStr != "" {
+		if y, _ := strconv.Atoi(params.YearToStr); true {
+			query += " AND p.year <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(params.Months) > 0 {
+		placeholders := make([]string, 0, len(params.Months))
+		for _, m := range params.Months {
+			if val, _ := strconv.Atoi(m); true {
+				placeholders = append(placeholders, "?")
+				args = append(args, val)
+			}
+		}
+		if len(placeholders) > 0 {
+			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
+		}
+	}
+
+	appendFilter("p.kam", params.Kams)
+	appendFilter("p.brand_as", params.Brands)
+	appendFilter("p.sku", params.SKUs)
+	appendFilter("p.network_name", params.Networks)
+	appendFilter("p.mechanics", params.Mechanics)
+	appendFilter("p.status", params.Statuses)
+	appendFilter("m.channel", channels)
+
+	query += " ORDER BY p.year DESC, p.month DESC"
+	return config.DB.Query(query, args...)
+}
 
 func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize int, getAll bool) ([]models.PromoRow, error) {
 	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
@@ -655,7 +714,8 @@ func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 	return &r, nil
 }
 
-// UpdatePromo возвращает rowsAffected (0 = конфликт версий)
+// UpdatePromo возвращает rowsAffected (0 = конфликт версий).
+// Если updatedAt пустой — обновляем без проверки версии (нет optimistic locking).
 func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) {
 	query := `UPDATE dbo.tbl_PromoActivities SET 
 		network_name = ?, kam = ?, brand = ?, brand_as = ?, sku = ?,
@@ -686,7 +746,10 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		plan_vs_fact_rub = ?, plan_vs_fact_investments = ?,
 		turnover_per_point = ?, turnover_per_point_promo = ?,
 		updated_at = GETDATE()
-		WHERE id = ? AND updated_at = ?`
+		WHERE id = ?`
+	if updatedAt != "" && updatedAt != "<nil>" {
+		query += " AND updated_at = ?"
+	}
 
 	values := []interface{}{
 		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
@@ -716,7 +779,10 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
 		r.PlanVsFactRub, r.PlanVsFactInvestments,
 		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
-		id, updatedAt,
+		id,
+	}
+	if updatedAt != "" && updatedAt != "<nil>" {
+		values = append(values, updatedAt)
 	}
 
 	result, err := config.DB.Exec(query, values...)
@@ -974,26 +1040,57 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 
 // ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
 // и добавляет комментарий в поле comments с пометкой автора (не затирает историю).
+// Если отправлен только комментарий (status="commented") и промо уже approved/rejected,
+// то статус не меняется — только добавляется комментарий в историю.
 func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string, username string) error {
 	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
 	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
 	agreementField := fmt.Sprintf("agreement%d", agreementNum)
 
-	// Читаем текущее значение comments
+	// Читаем текущие comments и статус согласования
 	var currentComments sql.NullString
+	var currentStatus sql.NullString
 	if err := config.DB.QueryRow(
-		"SELECT comments FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id,
-	).Scan(&currentComments); err != nil {
+		"SELECT comments, "+statusField+" FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id,
+	).Scan(&currentComments, &currentStatus); err != nil {
 		return err
+	}
+
+	// Если отправлен только комментарий на уже утверждённом/отклонённом промо —
+	// не сбрасываем статус, только дописываем в историю
+	preserveStatus := false
+	if status == "commented" && (currentStatus.String == "approved" || currentStatus.String == "rejected") {
+		preserveStatus = true
 	}
 
 	// Добавляем новый комментарий с пометкой автора, даты и роли
 	newComments := currentComments.String
 	if comment != "" {
+		// Гарантируем перенос строки перед новым комментарием
+		if len(newComments) > 0 && !strings.HasSuffix(newComments, "\n") {
+			newComments += "\n"
+		}
 		timestamp := time.Now().Format("02.01.2006")
 		roleLabel := fmt.Sprintf("согласование%d", agreementNum)
-		commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, username, comment)
+		commentLine := fmt.Sprintf("[%s %s|%s]: %s", timestamp, roleLabel, username, comment)
 		newComments += commentLine
+	}
+
+	// Определяем роль для записи в tbl_PromoComments
+	commentRole := fmt.Sprintf("согласование%d", agreementNum)
+
+	if preserveStatus {
+		// Только обновляем comments, не трогаем agreementN / _status / _comment
+		_, err := config.DB.Exec(
+			"UPDATE dbo.tbl_PromoActivities SET comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+			newComments, id,
+		)
+		if err != nil {
+			return err
+		}
+		// Запись в новую таблицу комментариев
+		_ = InsertComment(id, username, commentRole, comment)
+		return nil
 	}
 
 	query := fmt.Sprintf(
@@ -1001,7 +1098,14 @@ func ApprovePromoWithStatus(agreementNum int, id int, status string, comment str
 		agreementField, statusField, commentField,
 	)
 	_, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
-	return err
+	if err != nil {
+		return err
+	}
+	// Запись в новую таблицу комментариев
+	if comment != "" {
+		_ = InsertComment(id, username, commentRole, comment)
+	}
+	return nil
 }
 
 // BatchApprove — массовое согласование массива ID с дописыванием комментария в историю
@@ -1054,8 +1158,11 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 		}
 		newComments := currentComments.String
 		if comment != "" {
+			if len(newComments) > 0 && !strings.HasSuffix(newComments, "\n") {
+				newComments += "\n"
+			}
 			roleLabel := fmt.Sprintf("согласование%d", agreementNum)
-			commentLine := fmt.Sprintf("[%s %s|%s]: %s\n", timestamp, roleLabel, "batch", comment)
+			commentLine := fmt.Sprintf("[%s %s|%s]: %s", timestamp, roleLabel, "batch", comment)
 			newComments += commentLine
 		}
 		commentUpdates[id] = newComments
@@ -1063,6 +1170,7 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 	rows.Close()
 
 	// Обновляем каждую запись индивидуально, чтобы проставить свой comments
+	commentRole := fmt.Sprintf("согласование%d", agreementNum)
 	var totalAffected int64
 	for _, id := range ids {
 		newComments := commentUpdates[id]
@@ -1076,8 +1184,185 @@ func BatchApprove(agreementNum int, ids []int, status string, comment string, le
 		}
 		affected, _ := result.RowsAffected()
 		totalAffected += affected
+		// Запись в новую таблицу комментариев
+		if comment != "" {
+			_ = InsertComment(id, "batch", commentRole, comment)
+		}
 	}
 	return totalAffected, nil
+}
+
+// ─── Audit Log ──────────────────────────────────────────────────────────────
+
+// DiffPromoRows сравнивает старую и новую строку PromoRowDB и возвращает JSON-строку с изменениями.
+// Если изменений нет (или diff пустой), возвращает "".
+func DiffPromoRows(old, new *models.PromoRowDB) string {
+	changes := make(map[string]map[string]interface{})
+
+	// Числовые поля (float64)
+	compareFloat := func(name string, oldV, newV *float64) {
+		o := 0.0
+		n := 0.0
+		if oldV != nil {
+			o = *oldV
+		}
+		if newV != nil {
+			n = *newV
+		}
+		if o != n {
+			changes[name] = map[string]interface{}{"old": o, "new": n}
+		}
+	}
+	// Целочисленные поля
+	compareInt := func(name string, oldV, newV *int) {
+		o := 0
+		n := 0
+		if oldV != nil {
+			o = *oldV
+		}
+		if newV != nil {
+			n = *newV
+		}
+		if o != n {
+			changes[name] = map[string]interface{}{"old": o, "new": n}
+		}
+	}
+	// Строковые поля
+	compareStr := func(name string, oldV, newV string) {
+		if oldV != newV {
+			changes[name] = map[string]interface{}{"old": oldV, "new": newV}
+		}
+	}
+
+	// Основные поля
+	compareStr("network_name", old.NetworkName, new.NetworkName)
+	compareStr("kam", old.KAM, new.KAM)
+	compareStr("brand", old.Brand, new.Brand)
+	compareStr("brand_as", old.BrandAS, new.BrandAS)
+	compareStr("sku", old.SKU, new.SKU)
+	if old.Year != new.Year {
+		changes["year"] = map[string]interface{}{"old": old.Year, "new": new.Year}
+	}
+	if old.Month != new.Month {
+		changes["month"] = map[string]interface{}{"old": old.Month, "new": new.Month}
+	}
+	compareInt("quarter", old.Quarter, new.Quarter)
+	compareStr("mechanics", old.Mechanics, new.Mechanics)
+	compareStr("gtn_opex", old.GTNOpex, new.GTNOpex)
+
+	// Числовые
+	compareFloat("baseline_units", old.BaselineUnits, new.BaselineUnits)
+	compareFloat("baseline_rub", old.BaselineRub, new.BaselineRub)
+	compareFloat("plan_promo_units", old.PlanPromoUnits, new.PlanPromoUnits)
+	compareFloat("plan_promo_rub", old.PlanPromoRub, new.PlanPromoRub)
+	compareFloat("plan_investments_rub", old.PlanInvestmentsRub, new.PlanInvestmentsRub)
+	compareFloat("contract_price", old.ContractPrice, new.ContractPrice)
+	compareFloat("gm", old.GM, new.GM)
+	compareFloat("discount_amount", old.DiscountAmount, new.DiscountAmount)
+	compareFloat("olap_price", old.OlapPrice, new.OlapPrice)
+
+	// Строковые
+	compareStr("id_directum", old.IDDirectum, new.IDDirectum)
+	compareStr("ds_number", old.DSNumber, new.DSNumber)
+	compareStr("conditions", old.Conditions, new.Conditions)
+	compareStr("ecom_segment", old.EcomSegment, new.EcomSegment)
+	compareStr("status", old.Status, new.Status)
+	compareStr("date", old.Date, new.Date)
+	compareStr("key_region", old.KeyRegion, new.KeyRegion)
+	compareStr("top20_segment", old.Top20Segment, new.Top20Segment)
+
+	// Int
+	compareInt("total_pharmacies", old.TotalPharmacies, new.TotalPharmacies)
+	compareInt("promo_pharmacies", old.PromoPharmacies, new.PromoPharmacies)
+
+	// Фактические
+	compareFloat("actual_promo_sales_units", old.ActualPromoSalesUnits, new.ActualPromoSalesUnits)
+	compareFloat("actual_investments", old.ActualInvestments, new.ActualInvestments)
+	compareFloat("actual_promo_rub", old.ActualPromoRub, new.ActualPromoRub)
+	compareFloat("actual_promo_uplift_units", old.ActualPromoUpliftUnits, new.ActualPromoUpliftUnits)
+	compareFloat("actual_promo_uplift_rub", old.ActualPromoUpliftRub, new.ActualPromoUpliftRub)
+	compareFloat("actual_external_ecom_units", old.ActualExternalEcomUnits, new.ActualExternalEcomUnits)
+	compareFloat("actual_corrected_baseline", old.ActualCorrectedBaseline, new.ActualCorrectedBaseline)
+
+	// Согласования
+	compareStr("agreement1", old.Agreement1, new.Agreement1)
+	compareStr("agreement2", old.Agreement2, new.Agreement2)
+
+	if len(changes) == 0 {
+		return ""
+	}
+
+	b, err := json.Marshal(changes)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// InsertAuditLog записывает событие в tbl_AuditLog.
+func InsertAuditLog(entityID int, userName string, actionType string, changedFields string) error {
+	_, err := config.DB.Exec(
+		"INSERT INTO dbo.tbl_AuditLog (entity_id, user_name, action_type, changed_fields) VALUES (?, ?, ?, ?)",
+		entityID, userName, actionType, changedFields,
+	)
+	return err
+}
+
+// GetAuditLog возвращает историю изменений для сущности.
+func GetAuditLog(entityType string, entityID int) ([]models.AuditLogRow, error) {
+	query := "SELECT id, entity_type, entity_id, user_name, action_type, changed_fields, CONVERT(NVARCHAR, created_at, 121) FROM dbo.tbl_AuditLog WHERE entity_type = ? AND entity_id = ? ORDER BY id DESC"
+	rows, err := config.DB.Query(query, entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.AuditLogRow
+	for rows.Next() {
+		var r models.AuditLogRow
+		if err := rows.Scan(&r.ID, &r.EntityType, &r.EntityID, &r.UserName, &r.ActionType, &r.ChangedFields, &r.CreatedAt); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.AuditLogRow{}
+	}
+	return results, nil
+}
+
+// ─── Comments ───────────────────────────────────────────────────────────────
+
+// GetPromoComments возвращает комментарии для конкретного промо, упорядоченные по дате.
+func GetPromoComments(promoID int) ([]models.CommentRow, error) {
+	query := "SELECT id, promo_id, user_name, role, comment_text, CONVERT(NVARCHAR, created_at, 121) FROM dbo.tbl_PromoComments WHERE promo_id = ? ORDER BY id ASC"
+	rows, err := config.DB.Query(query, promoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []models.CommentRow
+	for rows.Next() {
+		var r models.CommentRow
+		if err := rows.Scan(&r.ID, &r.PromoID, &r.UserName, &r.Role, &r.CommentText, &r.CreatedAt); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []models.CommentRow{}
+	}
+	return results, nil
+}
+
+// InsertComment добавляет комментарий в tbl_PromoComments.
+func InsertComment(promoID int, userName string, role string, commentText string) error {
+	_, err := config.DB.Exec(
+		"INSERT INTO dbo.tbl_PromoComments (promo_id, user_name, role, comment_text) VALUES (?, ?, ?, ?)",
+		promoID, userName, role, commentText,
+	)
+	return err
 }
 
 // ─── Approval Filters ───────────────────────────────────────────────────────

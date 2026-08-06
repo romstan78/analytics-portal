@@ -96,8 +96,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
 
-  const [comments, setComments] = useState({}); // контролируемый стейт комментариев
-  const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '' });
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '', comment: '', warning: false, currentStatus: 'pending' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
@@ -149,7 +148,6 @@ export default function PromoApproval({ role, onDataChanged }) {
       });
       if (currentFetchId !== fetchIdRef.current) return;
 
-      setComments({});
       setApprovals(data.data || []);
       setTotal(data.total || 0);
       setSelectedIds(new Set()); // сбрасываем выделение при новой загрузке
@@ -189,22 +187,33 @@ export default function PromoApproval({ role, onDataChanged }) {
     setTotal(0);
   };
 
-  const handleCommentChange = useCallback((id, value) => {
-    setComments(prev => ({ ...prev, [id]: value }));
-  }, []);
-  const openConfirm = (id, status) => setConfirmDialog({ open: true, id, status });
+  const openConfirm = (id, status, comment) => {
+    const item = approvals.find(a => a.id === id);
+    const statusField = role === 'agreement2' ? 'agreement2_status' : 'agreement1_status';
+    const currentStatus = item?.[statusField] || 'pending';
+
+    // Предупреждение: если статус уже approved/rejected и меняем его на согласовано/отклонено
+    const needsWarning = (currentStatus === 'approved' || currentStatus === 'rejected') &&
+                         (status === 'согласовано' || status === 'отклонено');
+
+    setConfirmDialog({
+      open: true, id, status, comment: comment || '',
+      warning: needsWarning,
+      currentStatus,
+    });
+  };
 
   const handleConfirmedAction = async () => {
-    const { id, status } = confirmDialog;
-    setConfirmDialog({ open: false, id: null, status: '' });
+    const { id, status, comment } = confirmDialog;
+    setConfirmDialog({ open: false, id: null, status: '', comment: '', warning: false, currentStatus: 'pending' });
     if (!id) return;
-    const comment = comments[id] || '';
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
+      // Комментарий — карточка уходит из очереди согласующего
+      // Согласование/отклонение — тоже удаляем
       setApprovals(prev => prev.filter(a => a.id !== id));
-      setComments(prev => { const next = { ...prev }; delete next[id]; return next; });
-      setSnackbar({ open: true, message: '✅ Выполнено', severity: 'success' });
+      setSnackbar({ open: true, message: status === 'comment' ? '✅ Комментарий сохранён' : '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();
     } catch (err) {
@@ -214,10 +223,30 @@ export default function PromoApproval({ role, onDataChanged }) {
     }
   };
 
-  const handleCommentOnly = (id) => {
-    const comment = (comments[id] || '').trim();
-    if (!comment) return;
-    openConfirm(id, 'comment');
+  const handleCommentOnly = (id, comment) => {
+    if (!comment || !comment.trim()) return;
+    setConfirmDialog({ open: true, id, status: 'comment', comment });
+    // Сразу выполняем действие, т.к. для "comment" не нужен доп. диалог подтверждения
+    setConfirmDialog({ open: false, id: null, status: '', comment: '' });
+    handleQuickAction(id, 'comment', comment);
+  };
+
+  // Быстрое действие без диалога подтверждения (для comment-only)
+  // Комментарий не меняет статус согласования — промо остаётся в списке
+  const handleQuickAction = async (id, status, comment) => {
+    setSubmitting(prev => ({ ...prev, [id]: true }));
+    try {
+      await promoAPI.approve(id, status, comment);
+      // Карточка уходит из очереди — согласующий выполнил действие
+      setApprovals(prev => prev.filter(a => a.id !== id));
+      setSnackbar({ open: true, message: '✅ Комментарий сохранён', severity: 'success' });
+      setRefreshFilters(prev => prev + 1);
+      if (onDataChanged) onDataChanged();
+    } catch (err) {
+      setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+    } finally {
+      setSubmitting(prev => ({ ...prev, [id]: false }));
+    }
   };
   const toggleExpand = (id) => setExpandedCards(prev => ({ ...prev, [id]: !prev[id] }));
 
@@ -444,7 +473,6 @@ export default function PromoApproval({ role, onDataChanged }) {
                 <ApprovalCard key={a.id} item={a}
                   expanded={expandedCards[a.id] || false} submitting={submitting}
                   visibleFields={visibleFields}
-                  onCommentChange={handleCommentChange} comments={comments}
                   onToggleExpand={toggleExpand}
                   onOpenConfirm={openConfirm} onCommentOnly={handleCommentOnly} />
               ))}
@@ -515,9 +543,18 @@ export default function PromoApproval({ role, onDataChanged }) {
       )}
 
       {/* Диалог подтверждения (единичное действие) */}
-      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '' })}>
-        <DialogTitle>{confirmDialog.status === 'comment' ? 'Сохранить комментарий?' : 'Подтвердите действие'}</DialogTitle>
+      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '', warning: false, currentStatus: 'pending' })}>
+        <DialogTitle>
+          {confirmDialog.status === 'comment' ? 'Сохранить комментарий?' :
+           confirmDialog.warning ? '⚠️ Изменение статуса согласования' : 'Подтвердите действие'}
+        </DialogTitle>
         <DialogContent>
+          {confirmDialog.warning && (
+            <Alert severity="warning" sx={{ mb: 1.5 }}>
+              Текущий статус: <b>{confirmDialog.currentStatus === 'approved' ? 'Согласовано' : 'Отклонено'}</b>.
+              Вы меняете его на <b>{confirmDialog.status === 'согласовано' ? 'Согласовано' : 'Отклонено'}</b>.
+            </Alert>
+          )}
           <Typography>
             {confirmDialog.status === 'согласовано' && 'Вы уверены, что хотите СОГЛАСОВАТЬ это промо?'}
             {confirmDialog.status === 'отклонено' && 'Вы уверены, что хотите ОТКЛОНИТЬ это промо?'}
@@ -525,7 +562,7 @@ export default function PromoApproval({ role, onDataChanged }) {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmDialog({ open: false, id: null, status: '' })}>Отмена</Button>
+          <Button onClick={() => setConfirmDialog({ open: false, id: null, status: '', warning: false, currentStatus: 'pending' })}>Отмена</Button>
           <Button variant="contained"
             color={confirmDialog.status === 'отклонено' ? 'error' : confirmDialog.status === 'comment' ? 'primary' : 'success'}
             onClick={handleConfirmedAction}>

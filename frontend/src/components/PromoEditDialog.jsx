@@ -97,7 +97,16 @@ function parseComments(raw) {
   const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
   for (const line of lines) {
     const m = line.match(re);
-    if (m) messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
+    if (m) {
+      messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
+    } else {
+      // Неструктурированная строка — приклеиваем к последнему сообщению КАМ (старый формат)
+      if (messages.length > 0 && messages[messages.length - 1].role === 'КАМ') {
+        messages[messages.length - 1].text += '\n' + line;
+      } else {
+        messages.push({ date: '', role: 'КАМ', author: '', text: line });
+      }
+    }
   }
   return messages;
 }

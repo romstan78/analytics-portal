@@ -22,6 +22,14 @@ func ValInt(p *int) int {
 	return *p
 }
 
+// ValString возвращает значение по указателю или пустую строку.
+func ValString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 type Row struct {
 	ID          int     `json:"id"`
 	Year        int     `json:"year"`
@@ -102,6 +110,15 @@ type HistoryRow struct {
 	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
 	PlanROI                *float64 `json:"plan_roi"`
 	ActualROI              *float64 `json:"actual_roi"`
+}
+
+type CommentRow struct {
+	ID          int     `json:"id"`
+	PromoID     int     `json:"promo_id"`
+	UserName    string  `json:"user_name"`
+	Role        string  `json:"role"`
+	CommentText string  `json:"comment_text"`
+	CreatedAt   *string `json:"created_at"`
 }
 
 type DrilldownRow struct {
@@ -200,6 +217,16 @@ type PromoRowDB struct {
 	TurnoverPerPoint             *float64 `json:"turnover_per_point"`
 	TurnoverPerPointPromo        *float64 `json:"turnover_per_point_promo"`
 	UpdatedAt                    string   `json:"updated_at"`
+}
+
+type AuditLogRow struct {
+	ID            int     `json:"id"`
+	EntityType    string  `json:"entity_type"`
+	EntityID      int     `json:"entity_id"`
+	UserName      string  `json:"user_name"`
+	ActionType    string  `json:"action_type"`
+	ChangedFields *string `json:"changed_fields"` // JSON
+	CreatedAt     *string `json:"created_at"`
 }
 
 type ApprovalRow struct {

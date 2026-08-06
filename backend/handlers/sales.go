@@ -2,14 +2,17 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"backend/config"
 	"backend/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 )
 
 func GetFilterOptions(c *gin.Context) {
@@ -61,37 +64,44 @@ func GetFilterOptions(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func GetData(c *gin.Context) {
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	brandNames := c.QueryArray("brandName")
-	networkNames := c.QueryArray("networkName")
-	unRubs := c.QueryArray("un_rub")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
-	search := c.Query("search")
+// salesFilter — параметры фильтрации интернет-продаж.
+type salesFilter struct {
+	YearFromStr  string
+	YearToStr    string
+	Months       []string
+	BrandNames   []string // LIKE-фильтр (для GetData, ExportSalesExcel)
+	NetworkNames []string // LIKE-фильтр (для GetData, ExportSalesExcel)
+	UnRubs       []string
+	Segments     []string
+	Channels     []string
+	Search       string
+	// Точное совпадение (для Drilldown)
+	BrandExact   string
+	NetworkExact string
+}
 
+// buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
+// Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
+func buildSalesWhere(f salesFilter) (string, []interface{}) {
 	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
-	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
 	args := []interface{}{}
 
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
+	if f.YearFromStr != "" {
+		if y, err := strconv.Atoi(f.YearFromStr); err == nil {
 			baseWhere += " AND n.[year] >= ?"
 			args = append(args, y)
 		}
 	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
+	if f.YearToStr != "" {
+		if y, err := strconv.Atoi(f.YearToStr); err == nil {
 			baseWhere += " AND n.[year] <= ?"
 			args = append(args, y)
 		}
 	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
+	if len(f.Months) > 0 {
+		placeholders := make([]string, 0, len(f.Months))
+		for _, m := range f.Months {
+			if val, err := strconv.Atoi(m); err == nil {
 				placeholders = append(placeholders, "?")
 				args = append(args, val)
 			}
@@ -100,11 +110,12 @@ func GetData(c *gin.Context) {
 			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
 		}
 	}
-	if len(brandNames) > 0 {
-		conds := make([]string, 0, len(brandNames))
-		for _, v := range brandNames {
+
+	likeFilter := func(col string, values []string) {
+		conds := make([]string, 0, len(values))
+		for _, v := range values {
 			if v != "" {
-				conds = append(conds, "n.brandName LIKE ?")
+				conds = append(conds, "n."+col+" LIKE ?")
 				args = append(args, "%"+v+"%")
 			}
 		}
@@ -112,17 +123,17 @@ func GetData(c *gin.Context) {
 			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
 		}
 	}
-	if len(networkNames) > 0 {
-		conds := make([]string, 0, len(networkNames))
-		for _, v := range networkNames {
-			if v != "" {
-				conds = append(conds, "n.networkName LIKE ?")
-				args = append(args, "%"+v+"%")
-			}
-		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
-		}
+	likeFilter("brandName", f.BrandNames)
+	likeFilter("networkName", f.NetworkNames)
+
+	// Точное совпадение (приоритетнее LIKE, используется в Drilldown)
+	if f.BrandExact != "" {
+		baseWhere += " AND n.brandName = ?"
+		args = append(args, f.BrandExact)
+	}
+	if f.NetworkExact != "" {
+		baseWhere += " AND n.networkName = ?"
+		args = append(args, f.NetworkExact)
 	}
 
 	appendFilter := func(col string, values []string) {
@@ -139,15 +150,32 @@ func GetData(c *gin.Context) {
 			}
 		}
 	}
-	appendFilter("n.un_rub", unRubs)
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
+	appendFilter("n.un_rub", f.UnRubs)
+	appendFilter("n.segment", f.Segments)
+	appendFilter("n.channel", f.Channels)
 
-	if search != "" {
-		likeArg := "%" + search + "%"
+	if f.Search != "" {
+		likeArg := "%" + f.Search + "%"
 		baseWhere += " AND (n.brandName LIKE ? OR n.productName LIKE ? OR n.networkName LIKE ? OR n.metric_type LIKE ?)"
 		args = append(args, likeArg, likeArg, likeArg, likeArg)
 	}
+
+	return baseWhere, args
+}
+
+func GetData(c *gin.Context) {
+	baseWhere, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		BrandNames:   c.QueryArray("brandName"),
+		NetworkNames: c.QueryArray("networkName"),
+		UnRubs:       c.QueryArray("un_rub"),
+		Segments:     c.QueryArray("segment"),
+		Channels:     c.QueryArray("channel"),
+		Search:       c.Query("search"),
+	})
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
 
 	all := c.Query("all")
 
@@ -228,58 +256,18 @@ func GetDrilldown(c *gin.Context) {
 		return
 	}
 
-	yearFromStr := c.Query("yearFrom")
-	yearToStr := c.Query("yearTo")
-	months := c.QueryArray("months")
-	segments := c.QueryArray("segment")
-	channels := c.QueryArray("channel")
+	where, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		Segments:     c.QueryArray("segment"),
+		Channels:     c.QueryArray("channel"),
+		BrandExact:   brandName,
+		NetworkExact: networkName,
+	})
 
-	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 AND n.metric_value IS NOT NULL`
-	args := []interface{}{brandName, networkName}
-
-	if yearFromStr != "" {
-		if y, _ := strconv.Atoi(yearFromStr); true {
-			query += " AND n.[year] >= ?"
-			args = append(args, y)
-		}
-	}
-	if yearToStr != "" {
-		if y, _ := strconv.Atoi(yearToStr); true {
-			query += " AND n.[year] <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(months) > 0 {
-		placeholders := make([]string, 0, len(months))
-		for _, m := range months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-	appendFilter("n.segment", segments)
-	appendFilter("n.channel", channels)
-
-	query += " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) as total_value, n.un_rub, n.segment, n.channel FROM dbo.tbl_EcomSalesNormalized n` + where +
+		" GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
@@ -297,4 +285,97 @@ func GetDrilldown(c *gin.Context) {
 		results = append(results, r)
 	}
 	c.JSON(http.StatusOK, gin.H{"brandName": brandName, "networkName": networkName, "data": results})
+}
+
+// ─── Excel Export для интернет-продаж ──────────────────────────────────────
+func ExportSalesExcel(c *gin.Context) {
+	baseWhere, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		BrandNames:   c.QueryArray("brandName"),
+		NetworkNames: c.QueryArray("networkName"),
+		UnRubs:       c.QueryArray("un_rub"),
+		Segments:     c.QueryArray("segment"),
+		Channels:     c.QueryArray("channel"),
+		Search:       c.Query("search"),
+	})
+	baseSelect := "SELECT n.id, n.[year], n.[month], n.brandName, n.productName, n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at FROM dbo.tbl_EcomSalesNormalized n"
+
+	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
+		return
+	}
+	defer rows.Close()
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	sheet := "Интернет-продажи"
+	f.SetSheetName("Sheet1", sheet)
+
+	sw, err := f.NewStreamWriter(sheet)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "StreamWriter creation failed"})
+		return
+	}
+
+	// Заголовки через StreamWriter
+	headers := []interface{}{
+		"Год", "Месяц", "Бренд", "Продукт", "Сеть",
+		"Показатель", "Значение", "Уп/Руб", "Сегмент", "Канал", "Обновлено", "ID",
+	}
+	if err := sw.SetRow("A1", headers); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Header write failed"})
+		return
+	}
+
+	// Данные — пишем напрямую из курсора БД, строку за строкой
+	rowNum := 2
+	for rows.Next() {
+		var r models.Row
+		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+			continue
+		}
+		vals := []interface{}{
+			r.Year, r.Month,
+			r.BrandName, r.ProductName, r.NetworkName,
+			r.MetricType, r.MetricValue,
+			models.ValString(r.UnRub), models.ValString(r.Segment), models.ValString(r.Channel), models.ValString(r.UpdatedAt),
+			r.ID,
+		}
+		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, vals); err != nil {
+			continue
+		}
+		rowNum++
+	}
+
+	if err := sw.Flush(); err != nil {
+		config.Logger.Error("excel_stream_flush_failed", "error", err.Error())
+	}
+
+	// Стиль заголовка
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"6366F1"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	f.SetRowStyle(sheet, 1, 1, headerStyle)
+
+	// Ширина колонок
+	for i := 1; i <= len(headers); i++ {
+		col, _ := excelize.ColumnNumberToName(i)
+		f.SetColWidth(sheet, col, col, 18)
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=internet-sales_%s.xlsx", time.Now().Format("2006-01-02")))
+	c.Header("Content-Transfer-Encoding", "binary")
+
+	if err := f.Write(c.Writer); err != nil {
+		config.Logger.Error("excel_export_sales_failed", "error", err.Error())
+	}
 }

@@ -70,12 +70,12 @@ function parseComments(raw) {
 
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting,
-  onCommentChange, comments, onToggleExpand, onOpenConfirm, onCommentOnly,
+  onToggleExpand, onOpenConfirm, onCommentOnly,
   visibleFields,
 }) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
-  const localComment = comments[id] || '';
+  const [localComment, setLocalComment] = useState('');
 
   const visibleData = useMemo(() => {
     if (!visibleFields || visibleFields.length === 0) return [];
@@ -202,19 +202,19 @@ const ApprovalCard = memo(function ApprovalCard({
           <TextField size="small" fullWidth multiline minRows={1} maxRows={2}
             placeholder="Новый комментарий"
             value={localComment}
-            onChange={(e) => onCommentChange(id, e.target.value)}
+            onChange={(e) => setLocalComment(e.target.value)}
             sx={{ mb: 1 }} />
         </CardContent>
 
         <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
           <Button size="small" variant="outlined" startIcon={<CommentIcon />}
-            onClick={() => onCommentOnly(id)} disabled={isSubmitting || !localComment.trim()}
+            onClick={() => { onCommentOnly(id, localComment); setLocalComment(''); }} disabled={isSubmitting || !localComment.trim()}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
           <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
-            onClick={() => onOpenConfirm(id, 'согласовано')} disabled={isSubmitting}
+            onClick={() => onOpenConfirm(id, 'согласовано', localComment)} disabled={isSubmitting}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
           <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
-            onClick={() => onOpenConfirm(id, 'отклонено')} disabled={isSubmitting}
+            onClick={() => onOpenConfirm(id, 'отклонено', localComment)} disabled={isSubmitting}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
         </CardActions>
       </Card>
