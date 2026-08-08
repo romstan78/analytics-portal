@@ -1,6 +1,6 @@
 import { refreshToken, logout } from './auth';
 
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
 interface ApiError {
   status: number;
@@ -131,6 +131,10 @@ export const promoAPI = {
       }
       return r.json();
     }),
+
+  // Комментарии к промо
+  getComments: (promoId: number): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/comments/${promoId}`).then(r => r.json()),
 
   // SKU по бренду
   getSKUByBrand: (brand: string): Promise<unknown> =>

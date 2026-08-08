@@ -1,183 +1,270 @@
-Ниже представлен обновленный, максимально подробный аудит проекта, в который включены глубокий анализ системы логирования (Audit Trail) и состояния тестирования, а также рекомендации по их развитию.
+Вы проделали отличную работу! Переход на `squirrel` для `buildSalesWhere` и `buildPromoWhere`, внедрение `StreamWriter` для Excel и нормализация комментариев — это мощные архитектурные шаги. 
 
-Вы можете скопировать этот текст и сохранить его как `audit_report.md`.
+Однако, как вы сами заметили, остались неприятные "хвосты": фантомные удаленные записи и `setTimeout`. Обе эти проблемы имеют **одну общую причину — неправильная работа с кэшем на фронтенде**. Кроме того, при аудите бэкенда я нашел досадную оплошность: вы написали `squirrel`-билдер для страницы согласований, но забыли его применить!
 
----
-
-# 📊 Полный аудит проекта «Аналитический портал»
-
-**Дата аудита:** Текущая дата
-**Версия архитектуры:** v2.0 (React + Go + MSSQL, внедрение TS, серверная генерация Excel)
-
-## 📋 Оглавление
-1. [Резюме (Executive Summary)](#1-резюме-executive-summary)
-2. [Эволюция визуала и UI/UX](#2-эволюция-визуала-и-uiux)
-3. [Аудит Фронтенда (React, TypeScript)](#3-аудит-фронтенда)
-4. [Аудит Бэкенда (Go, MSSQL)](#4-аудит-бэкенда)
-5. [Безопасность и Авторизация](#5-безопасность-и-авторизация)
-6. [📝 Аудит системы логирования (Audit Trail)](#6--аудит-системы-логирования-audit-trail)
-7. [🧪 Аудит тестирования (QA)](#7--аудит-тестирования-qa)
-8. [🚨 Потенциальные баги и критические риски](#8--потенциальные-баги-и-критические-риски)
-9. [💡 Рекомендации и План действий (Roadmap)](#9--рекомендации-и-план-действий-roadmap)
+Ниже представлен детальный аудит и готовые куски кода для решения ваших задач. Вы можете скопировать этот ответ в ваш Markdown-отчет.
 
 ---
 
-## 1. Резюме (Executive Summary)
-Проект проделал огромный путь от базовых таблиц к полноценному enterprise-решению. Заметна глубокая проработка бизнес-логики: сложная ролевая модель согласований, расчет ROI/Uplift «на лету», работа с историческими данными.
+# 📊 Детальный аудит и решения (07.08.2026)
 
-**Ключевые достижения:**
-* Перенос тяжелого экспорта Excel на сервер (решило проблему с падением вкладки браузера).
-* Решение проблемы "шторма запросов" при протухании токена (Promise-lock для `refreshToken`).
-* Наличие интеграционных тестов на бэкенде.
-* Внедрение оптимистичной блокировки (Optimistic Locking) для защиты от перезаписи данных.
+## 🚨 1. Критический баг бэкенда: Забытый `squirrel` в `GetApprovals`
 
-**Зоны роста:** 
-Необходимо уйти от хранения истории переписки в текстовом поле, внедрить полноценный Audit Trail (кто, что, когда изменил с фиксацией старых/новых значений), покрыть фронтенд тестами и избавиться от "ручной" склейки SQL-запросов.
+**Проблема:** В файле `backend/repository/promo_repo.go` вы создали отличную функцию `buildApprovalsWhere(params)`, которая использует `squirrel` для безопасной сборки SQL. Но если посмотреть ниже, в саму функцию `GetApprovals`, вы увидите, что она **всё ещё использует старую ручную конкатенацию строк** (`query += " AND p.year = ?"`), полностью игнорируя созданный вами безопасный билдер!
 
----
+**Решение:** Переписать `GetApprovals`, чтобы она использовала `buildApprovalsWhere`.
 
-## 2. Эволюция визуала и UI/UX
+**Замените код `GetApprovals` в `backend/repository/promo_repo.go` на этот:**
+```go
+func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
+	whereClause, args := buildApprovalsWhere(params)
 
-Проект сильно эволюционировал визуально, превратившись из "сухой админки" в современный аналитический дашборд.
+	baseSelect := `
+		SELECT
+			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
+			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
+			p.plan_investments_rub, p.plan_roi, p.actual_roi,
+			p.conditions, p.comments,
+			p.agreement1, p.agreement2, p.status,
+			p.agreement1_status, p.agreement1_comment,
+			p.agreement2_status, p.agreement2_comment,
+			0 as historical_count,
+			CAST(NULL AS FLOAT) as avg_historical_roi
+		FROM dbo.tbl_PromoActivities p
+		WHERE ` + whereClause
 
-**Что изменилось:**
-1. **Главная страница (`Home.jsx`):** Переход на CSS-Grid карточки с иконками, тенями (`box-shadow`) и hover-эффектами. Использование фирменных цветов (`#6366f1`, `#10b981` и др.) делает навигацию интуитивной.
-2. **Цветовое кодирование:** Внедрена подсветка ROI (зеленый при `>0`, красный при `<0`), а также цветовая дифференциация ролей в комментариях (КАМ — фиолетовый, Согласующие — синий/зеленый, Админ — красный).
-3. **Модуль согласований (`PromoApproval.jsx`):**
-   * **Переключатель "Карточки / Таблица":** Отличное UX-решение через `ToggleButtonGroup` и `startTransition`. Позволяет быстро смотреть детали (в карточках) и делать массовые действия (в таблице).
-   * **Drawer для настройки полей:** Боковая панель с чекбоксами для настройки отображаемых полей на карточках. Данные сохраняются в `localStorage`. Это функционал уровня продвинутых BI-систем.
-   * **Sticky Header:** Панель фильтров «прилипает» к верху при скролле — критически важно для длинных списков.
-4. **Формы (`PromoForm.jsx`):** Визуальное разделение на логические блоки (Paper: "Основные данные", "Плановые", "Фактические" с разными оттенками фона). График `Recharts` встроен прямо в форму для сравнения плана и факта.
+	// 1. Считаем общее количество
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + whereClause
+	var total int
+	if err := config.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		total = 0
+	}
 
-**Рекомендации по визуалу:**
-* *Дашборды:* Разделы вроде "Анализ продаж" пока пустуют. Стоит внедрить библиотеку `MUI X Charts` для построения KPI-виджетов (Total Sales, YoY Growth).
-* *Тулбары таблиц:* В `DataTable.jsx` реализован кастомный тулбар (поиск, скрытие колонок). Использование нативного `GridToolbar` из Mui DataGrid сэкономило бы много кода и дало бы фильтрацию из коробки.
+	// 2. Пагинация и сортировка
+	query := baseSelect + " ORDER BY p.year DESC, p.month DESC, p.network_name"
+	if params.PageSize <= 0 {
+		params.PageSize = 50
+	}
+	if params.PageSize > 500 {
+		params.PageSize = 500
+	}
+	offset := params.Page * params.PageSize
+	query += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, params.PageSize)
 
----
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
 
-## 3. Аудит Фронтенда
-
-**Плюсы:**
-* Начат переход на TypeScript (API, хуки, утилиты уже на TS).
-* `usePromoData` использует React Query корректно (`staleTime`, интеграция `AbortController` для отмены "зависших" запросов при быстром изменении фильтров).
-* Разделение `draft` (черновик) и `applied` фильтров в `PromoApproval.jsx` — правильный подход для тяжелых запросов.
-
-**Проблемы и риски:**
-* **Гигантский компонент:** `PromoApproval.jsx` занимает >600 строк. Смешана логика загрузки, состояние 15+ фильтров, UI карточек, таблицы, диалогов.
-* **Стейт комментариев:** Вы вынесли `comments` в стейт (`setComments(prev => ({...prev, [id]: value}))`). При вводе каждого символа рендерится весь компонент `PromoApproval`. Это приведет к лагам при вводе текста, если на экране открыто 50 карточек.
-* **Мутации стейта React Query:** В `usePromoData.ts` оставлен костыль `setRows`, который напрямую мутирует кеш Query. Это антипаттерн. Если кэш инвалидируется сервером, локальные мутации исчезнут.
-
----
-
-## 4. Аудит Бэкенда
-
-**Плюсы:**
-* Горутины (`errgroup`) для параллельной загрузки фильтров (ускоряет отдачу данных).
-* Реализован Optimistic Locking (сверка `updated_at`). Сделан грамотный откат: если фронт не шлет `updated_at`, обновление идет принудительно (полезно для обратной совместимости).
-* Разделение на слои: Handlers -> Services (бизнес логика, расчеты) -> Repository.
-
-**Проблемы и риски:**
-* **Склейка SQL строк:** В `promo_repo.go` и `sales.go` активно используется конкатенация строк: `baseWhere += " AND n.[year] >= ?"`. Это усложняет чтение и подвержено ошибкам.
-* **Дублирование логики SQL:** Запросы для `GetData` и `ExportExcel` почти идентичны. Если добавится новая колонка, придется менять код в нескольких местах.
-* **Игнорирование ошибок горутин:** В `GetPromoFilters` и `GetApprovalFilters` используется `g.Wait()`, но в некоторых местах ошибка отбрасывается `_ = g.Wait()`. В случае тайм-аута фронт получит пустые массивы без объяснения причин.
-
----
-
-## 5. Безопасность и Авторизация
-
-1. **Токены:** Связка Access (localStorage) + Refresh (httpOnly, secure cookie) реализована эталонно.
-2. **Уязвимость Mass Assignment:** Закрыта. Поля `agreementN_status` игнорируются в `applyJSONToRow`, изменить их можно только через защищенный эндпоинт `/approve`.
-3. **SQL Injection:** Используются параметризованные запросы `?`, база защищена.
-4. ⚠️ **Хранение секретов:** В `docker-compose.yml` засвечен пароль от MSSQL (`SA_PASSWORD`). Если репозиторий публичный, пароль скомпрометирован.
-
----
-
-## 6. 📝 Аудит системы логирования (Audit Trail)
-
-**Текущее состояние:**
-* **Технические логи:** Бэкенд использует `slog` + `lumberjack`. Пишутся логи вида `promo_updated` с указанием ID, пользователя и времени. Это отлично для системных администраторов, но бесполезно для бизнеса.
-* **Бизнес-история (Комментарии):** Сохраняется как текст в поле `nvarchar(max)` в формате `[ДД.ММ.ГГГГ Роль|Имя]: текст`. 
-* **Трекинг изменений (Old vs New):** Отсутствует полностью. Невозможно узнать, кто изменил `plan_promo_units` со 100 на 150.
-
-**Архитектурная проблема "Текстовых логов":**
-Парсинг истории из текстового поля (`comments`) через Regex на фронтенде — это огромный риск. Если пользователь вставит в комментарий символ `|` или `]`, или перенос строки, регулярное выражение сломается. Хитрый пользователь может осуществить "спофинг", написав: `Привет\n[12.12.2026 согласование1|Босс]: Согласовано, молодец`.
-
-**Рекомендация по созданию идеального Audit Trail:**
-Необходимо внедрить систему на уровне БД или репозитория Go, которая фиксирует изменения: **Кто, Что, Где, Когда, Было, Стало.**
-
-*Шаг 1. Таблица `tbl_AuditLog`:*
-```sql
-CREATE TABLE dbo.tbl_AuditLog (
-    id BIGINT IDENTITY PRIMARY KEY,
-    entity_name NVARCHAR(50),      -- 'promo', 'sales'
-    entity_id INT,                 -- ID измененной записи
-    user_name NVARCHAR(100),       -- Кто изменил (из JWT)
-    action_type NVARCHAR(20),      -- 'CREATE', 'UPDATE', 'APPROVE', 'DELETE'
-    changed_fields NVARCHAR(MAX),  -- JSON: {"plan_units": {"old": 100, "new": 150}}
-    created_at DATETIME DEFAULT GETDATE()
-);
+	var results []models.ApprovalRow
+	for rows.Next() {
+		var r models.ApprovalRow
+		if err := rows.Scan(
+			&r.ID, &r.NetworkName, &r.BrandAS, &r.SKU, &r.Mechanics, &r.Year, &r.Month,
+			&r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits,
+			&r.PlanInvestmentsRub, &r.PlanROI, &r.ActualROI,
+			&r.Conditions, &r.Comments,
+			&r.Agreement1, &r.Agreement2, &r.Status,
+			&r.Agreement1Status, &r.Agreement1Comment,
+			&r.Agreement2Status, &r.Agreement2Comment,
+			&r.HistoricalCount, &r.AvgHistoricalROI,
+		); err == nil {
+			results = append(results, r)
+		}
+	}
+	if results == nil {
+		results = []models.ApprovalRow{}
+	}
+	return results, total, nil
+}
 ```
-*Шаг 2. Разделение комментариев:*
-Создать таблицу `tbl_PromoComments (id, promo_id, user_name, role, comment_text, created_at)`.
-Поле `comments` из таблицы промо — удалить.
-
-*Шаг 3. Логика в Go (Репозиторий):*
-При вызове `UpdatePromo`, сначала загружать старую версию `oldRow`. Сравнивать `oldRow` и `newRow` (через Reflection в Go или библиотеку `go-cmp`), формировать JSON изменений и записывать его в `tbl_AuditLog` в той же SQL-транзакции.
 
 ---
 
-## 7. 🧪 Аудит тестирования (QA)
+## 🛠 2. Решение проблемы Soft-Delete (Фантомные записи)
 
-**Бэкенд (Go):**
-* **Плюсы:** Есть `main_test.go` с хорошими интеграционными тестами (`TestSavePromo_OptimisticLocking`, `TestROICalculation`, `TestGetPromoFilters_Cascading`). Математика и API покрыты. Есть защита `cleanupTestData()`, которая не дает удалять данные, если база не тестовая (проверка на `_test` или `_dev`).
-* **Минусы:**
-  1. Тесты требуют *живой* базы данных. Это делает их зависимыми от окружения. Если CI/CD пайплайн не поднимет MSSQL, тесты упадут.
-  2. Нет unit-тестов с моками (Mocking). Слой репозитория намертво привязан к `config.DB`. 
+**Почему записи остаются в таблице после удаления?**
+Ваш хук `usePromoData.ts` использует `refreshTrigger`. Когда вы инкрементируете `refreshTrigger` после удаления, React Query делает запрос по *новому* ключу кэша `['promoData', filters, 2]`. Но компонент таблицы может всё ещё отрисовывать данные из старого ключа `['promoData', filters, 1]`, пока идет загрузка. Это классический антипаттерн React Query.
 
-*Рекомендация:* Использовать `testcontainers-go` для поднятия изолированного Docker-контейнера с MSSQL перед запуском тестов. Внедрить интерфейсы для БД (Dependency Injection).
+**Как правильно:** Нужно использовать фиксированный ключ и метод `invalidateQueries`.
 
-**Фронтенд (React):**
-* **Минусы:** Тесты отсутствуют полностью (нет Jest, Vitest, Cypress).
-* **Риски:** Математика фронтенда (`usePromoCalculations.ts`) дублирует математику бэкенда (`services/promo_service.go`). Если кто-то изменит формулу ROI на клиенте, но забудет на сервере (или наоборот), произойдет рассинхрон. Без тестов это выявится только в продакшене.
+**1. Исправьте `frontend/src/hooks/usePromoData.ts`:**
+```typescript
+import { useQuery } from '@tanstack/react-query';
+import { useRef } from 'react';
 
-*Рекомендация:*
-1. Настроить `Vitest`. Написать unit-тесты для `usePromoCalculations.ts` (подаем `baseline`, `contract_price`, ожидаем правильный `plan_promo_rub`).
-2. Внедрить E2E тесты на `Playwright` для проверки главного флоу: "Логин КАМ -> Создание промо -> Логин Менеджер 1 -> Согласование -> Проверка изменения статуса".
+export interface PromoDataResult {
+  rows: unknown[];
+  loading: boolean;
+  error: string | null;
+}
+
+export function usePromoData(filters: Record<string, unknown>): PromoDataResult {
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  // УБРАЛИ refreshTrigger из ключа. Теперь ключ стабилен!
+  const queryKey = ['promoData', filters];
+
+  const { data: rows = [], isLoading, error } = useQuery({
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const currentFilters = filtersRef.current;
+      const params = new URLSearchParams();
+      Object.entries(currentFilters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          params.set(key, String(value));
+        }
+      });
+
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/api/promo/data?all=true&${params}`,
+        { signal, headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const json = await response.json();
+      return json.data || [];
+    },
+  });
+
+  return {
+    rows: rows as unknown[],
+    loading: isLoading,
+    error: error ? (error as Error).message : null,
+  };
+}
+```
+
+**2. Обновите `PromoAnalysis.tsx`:**
+```typescript
+import { useQueryClient } from '@tanstack/react-query';
+// ... внутри компонента ...
+const queryClient = useQueryClient();
+const { rows, loading: dataLoading, error: dataError } = usePromoData(appliedFilters);
+
+const handleDataChanged = useCallback(() => {
+  // МАГИЯ ЗДЕСЬ: React Query мгновенно пометит данные как устаревшие
+  // и сделает фоновый запрос. Таблица обновится автоматически без морганий.
+  queryClient.invalidateQueries({ queryKey: ['promoData'] });
+  queryClient.invalidateQueries({ queryKey: ['approvals'] });
+}, [queryClient]);
+```
 
 ---
 
-## 8. 🚨 Потенциальные баги и критические риски
+## ⏱ 3. Избавляемся от `setTimeout` в комментариях
 
-1. **Уязвимая замена строк в SQL (Backend):**
-   Файл `sales.go`, функция `GetDrilldown`. Используется:
-   ```go
-   where = strings.Replace(where,
-       " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL",
-       " WHERE n.brandName = ? AND n.networkName = ? AND n.metric_value != 0 ...", 1)
-   ```
-   Если базовая строка `buildSalesWhere` хоть немного изменится, `strings.Replace` не сработает, `brandName = ?` не подставится, а аргументы всё равно уйдут в запрос. **Запрос упадет с ошибкой несовпадения количества плейсхолдеров и аргументов.**
-2. **Рассинхрон пагинации и Карточек (Frontend):**
-   В `PromoApproval.jsx` появилась серверная пагинация (`page`, `pageSize`).
-   Но в режиме карточек вы делаете: `const cardsToShow = approvals.slice(0, 50);`
-   Если пользователь выбрал в пагинаторе `pageSize: 100`, он получит с сервера 100 записей. При переключении на карточки 50 записей молча скроются.
-3. **Out of Memory при выгрузке Excel:**
-   Даже серверный экспорт (`ExportSalesExcel`) сейчас загружает *все* строки запроса в оперативную память слайсом `var results []models.Row`. Если строк будет 100 000, сервер может упасть по OOM (Out Of Memory).
+В файлах `ApprovalCard.tsx` и `PromoEditDialog.tsx` вы используете `setTimeout(() => setCommentsVersion(v => v + 1), 800)`. Это вызывает состояние гонки. 
+
+**Решение: React Query для комментариев.**
+
+**1. В `ApprovalCard.tsx` (и аналогично в `PromoEditDialog.tsx`) замените `useEffect` на `useQuery`:**
+```typescript
+import { useQuery } from '@tanstack/react-query';
+
+// Внутри ApprovalCard:
+const { data: comments = [], isLoading: commentsLoading } = useQuery({
+  queryKey: ['comments', item.id],
+  queryFn: async () => {
+    const res = await promoAPI.getComments(item.id);
+    return res.data || [];
+  },
+  enabled: !!item.id, // Запрашиваем только если есть ID
+});
+
+// УБЕРИТЕ wrappedCommentOnly и wrappedConfirm. 
+// Кнопки должны напрямую вызывать onOpenConfirm и onCommentOnly.
+```
+
+**2. В `PromoApproval.tsx` после успешного API-вызова инвалидируйте кэш:**
+```typescript
+import { useQueryClient } from '@tanstack/react-query';
+
+export default function PromoApproval({ role, onDataChanged }) {
+  const queryClient = useQueryClient();
+  
+  const handleConfirmedAction = async () => {
+    // ...
+    try {
+      await promoAPI.approve(id, status, comment);
+      
+      // СКАЖИТЕ REACT QUERY ОБНОВИТЬ КОММЕНТАРИИ ДЛЯ ЭТОЙ КАРТОЧКИ!
+      queryClient.invalidateQueries({ queryKey: ['comments', id] });
+      
+      if (status !== 'comment') {
+         // Удаляем карточку только если это финальное согласование
+         setApprovals(prev => prev.filter(a => a.id !== id));
+      }
+    // ...
+  };
+```
+*Теперь при сохранении комментария спиннер не появится, а новый комментарий мгновенно отрисуется, как только API ответит `200 OK`.*
 
 ---
 
-## 9. 💡 Рекомендации и План действий (Roadmap)
+## 🗂 4. Типизация `PromoEditDialog.tsx` (Пункт #6 из вашего плана)
 
-### Этап 1: Стабилизация и устранение рисков (1-2 недели)
-1. **Починить Drilldown SQL:** В `buildSalesWhere` передавать `brandName` и `networkName` параметрами структуры `salesFilter`, а не вклеивать их через `strings.Replace`.
-2. **Streaming для Excel:** Перевести `ExportSalesExcel` и `ExportPromoExcel` на `excelize.StreamWriter`. Это позволит писать данные из `rows.Next()` сразу в файл, минуя загрузку слайса `results` в память.
-3. **Оптимизация рендера карточек:** Вынести логику `ApprovalCard` и стейт `localComment` внутрь самой карточки, чтобы не рендерить всю страницу при вводе текста комментария.
+Чтобы избавиться от `any` и ошибок TS, добавьте интерфейс в `frontend/src/components/PromoEditDialog.tsx` (и переименуйте файл в `.tsx`):
 
-### Этап 2: Полноценный Audit Trail и Тестирование (2-3 недели)
-1. **Нормализация БД:** Создать таблицу `tbl_PromoComments` и перевести сохранение комментариев на неё (уйти от парсинга строк фронтендом).
-2. **Audit Trail (Трекинг изменений):** Создать таблицу `tbl_AuditLog`. Реализовать в `UpdatePromo` функцию `Diff` (сравнение старой и новой DTO) и запись изменений в формате JSON. Вывести историю изменений в интерфейс диалога промо.
-3. **Фронтенд-тесты:** Настроить Vitest. Покрыть 100% тестами хуки `usePromoCalculations.ts` и парсеры утилит.
+```typescript
+import type { PromoFormValues } from '../hooks/usePromoForm';
+import type { FilterMeta } from '../hooks/usePromoFilters';
 
-### Этап 3: Архитектурный рефакторинг (3-4 недели)
-1. **Переход на TypeScript:** Доперевести все `.jsx` компоненты (`PromoApproval`, `PromoEditDialog`) на `.tsx`.
-2. **Query Builder для Go:** Внедрить `Masterminds/squirrel` для сборки SQL-запросов. Это избавит код от конкатенации строк `where += " AND ..."` и сделает фильтры надежными.
-3. **React Query Refactor:** Заменить `setRows` в `usePromoData.ts` на вызовы `queryClient.invalidateQueries({ queryKey: ['promoData'] })` при успешных мутациях.
+interface PromoEditDialogProps {
+  open: boolean;
+  onClose: () => void;
+  form: PromoFormValues | null;
+  setForm: React.Dispatch<React.SetStateAction<PromoFormValues>>;
+  recalcPlan: (updates: Partial<PromoFormValues>) => Record<string, string>;
+  recalcActual: (updates: Partial<PromoFormValues>) => Record<string, string>;
+  onSave: (commentOverride?: string | null) => Promise<void> | void;
+  onDelete: () => void;
+  saving: boolean;
+  deleting: boolean;
+  meta: FilterMeta;
+  allSkuOptions: string[];
+  allNetworkOptions: string[];
+  investmentTypes: string[];
+  role: string | null;
+}
+
+export default function PromoEditDialog({
+  open, onClose, form, setForm, recalcPlan, recalcActual,
+  onSave, onDelete, saving, deleting,
+  meta, allSkuOptions, allNetworkOptions, investmentTypes,
+  role,
+}: PromoEditDialogProps) { ... }
+```
+
+---
+
+## 🗑 5. Как реализовать восстановление Soft-Deleted записей (Пункт #1 из плана)
+
+Для реализации восстановления удаленных промо-акций (Корзина) вам нужно:
+
+**1. Бэкенд (`repository/promo_repo.go`):**
+Добавить метод восстановления:
+```go
+func RestorePromo(id int) (int64, error) {
+	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = NULL, updated_at = GETDATE() WHERE id = ?", id)
+	return result.RowsAffected(), err
+}
+```
+**2. Бэкенд (`handlers/promo.go`):**
+Создать хендлер `POST /api/promo/restore/:id`. В нем вызывать `RestorePromo` и писать аудит-лог `InsertAuditLog(id, user, "RESTORE", "")`.
+
+**3. Фронтенд:**
+* Добавить в интерфейс `FilterPanel` чекбокс "Показывать удаленные" (передавать `include_deleted=true` в API).
+* В таблице `DataTable` добавить кнопку-иконку ♻️ (Restore), которая будет вызывать API и делать `queryClient.invalidateQueries(['promoData'])`.
+
+---
+
+## 🚀 Резюме: Что делать прямо сейчас?
+
+1. Скопируйте исправленный метод `GetApprovals` в `promo_repo.go`. Это устранит несоответствие логики.
+2. Переведите `usePromoData` и `PromoAnalysis` на чистый React Query (удалите `refreshTrigger`, используйте `invalidateQueries`). Это починит баг с фантомными удаленными записях в DataGrid.
+3. Уберите `setTimeout` из карточек и замените пропс `comments` на локальный `useQuery` внутри `ApprovalCard.tsx`.
+4. Переименуйте `PromoEditDialog.jsx` в `.tsx` и вставьте интерфейс `PromoEditDialogProps`.

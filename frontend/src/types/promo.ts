@@ -51,6 +51,15 @@ export interface PromoRow {
   updated_at: string | null;
 }
 
+export interface CommentRow {
+  id: number;
+  promo_id: number;
+  user_name: string;
+  role: string;
+  comment_text: string;
+  created_at: string;
+}
+
 export interface ApprovalRow {
   id: number;
   network_name: string | null;

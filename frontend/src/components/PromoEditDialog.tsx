@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
-  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip
+  DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip,
+  CircularProgress,
 } from '@mui/material';
 import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
+import type { CommentRow } from '../types/promo';
+import type { PromoFormValues } from '../hooks/usePromoForm';
+import type { FilterMeta } from '../hooks/usePromoFilters';
 
 // ─── Месяцы ────────────────────────────────────────────────────────────────
 const MONTH_OPTIONS = [
@@ -90,25 +95,22 @@ const ROLE_COLORS = {
 };
 const ROLE_ICONS = { 'admin': '👑', 'agreement1': '✅', 'agreement2': '✅', 'согласование1': '✅', 'согласование2': '✅', 'КАМ': '💬' };
 
-function parseComments(raw) {
-  if (!raw) return [];
-  const lines = raw.split('\n').filter(l => l.trim());
-  const messages = [];
-  const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
-  for (const line of lines) {
-    const m = line.match(re);
-    if (m) {
-      messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
-    } else {
-      // Неструктурированная строка — приклеиваем к последнему сообщению КАМ (старый формат)
-      if (messages.length > 0 && messages[messages.length - 1].role === 'КАМ') {
-        messages[messages.length - 1].text += '\n' + line;
-      } else {
-        messages.push({ date: '', role: 'КАМ', author: '', text: line });
-      }
-    }
-  }
-  return messages;
+interface PromoEditDialogProps {
+  open: boolean;
+  onClose: () => void;
+  form: PromoFormValues | null;
+  setForm: React.Dispatch<React.SetStateAction<PromoFormValues>>;
+  recalcPlan: (updates: Partial<PromoFormValues>) => Record<string, string>;
+  recalcActual: (updates: Partial<PromoFormValues>) => Record<string, string>;
+  onSave: (commentOverride?: string | null) => Promise<void> | void;
+  onDelete: () => void;
+  saving: boolean;
+  deleting: boolean;
+  meta: FilterMeta;
+  allSkuOptions: string[];
+  allNetworkOptions: string[];
+  investmentTypes: string[];
+  role: string | null;
 }
 
 export default function PromoEditDialog({
@@ -116,10 +118,22 @@ export default function PromoEditDialog({
   onSave, onDelete, saving, deleting,
   meta, allSkuOptions, allNetworkOptions, investmentTypes,
   role,
-}) {
+}: PromoEditDialogProps) {
+  const queryClient = useQueryClient();
   const [editingFields, setEditingFields] = useState({});
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [newComment, setNewComment] = useState(''); // отдельное поле для нового комментария КАМ
+  const [newComment, setNewComment] = useState('');
+
+  const { data: comments = [], isLoading: commentsLoading } = useQuery<CommentRow[]>({
+    queryKey: ['comments', form?.id],
+    queryFn: async () => {
+      if (!form?.id) return [];
+      const res = await promoAPI.getComments(form.id);
+      const list = (res as { data?: CommentRow[] })?.data;
+      return Array.isArray(list) ? list : [];
+    },
+    enabled: !!open && !!form?.id,
+  });
 
   const fetchSKUInfoForEdit = async (sku) => {
     try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
@@ -158,19 +172,21 @@ export default function PromoEditDialog({
 
   const isApprover = role === 'agreement1' || role === 'agreement2';
 
-  const handleSaveClick = () => {
+  const handleSaveClick = async () => {
     if (isApprover) {
       setConfirmOpen(true);
     } else {
-      onSave(newComment.trim() || null);
+      await onSave(newComment.trim() || null);
       setNewComment('');
+      queryClient.invalidateQueries({ queryKey: ['comments', form?.id] });
     }
   };
 
-  const handleConfirmSave = () => {
+  const handleConfirmSave = async () => {
     setConfirmOpen(false);
-    onSave(newComment.trim() || null);
+    await onSave(newComment.trim() || null);
     setNewComment('');
+    queryClient.invalidateQueries({ queryKey: ['comments', form?.id] });
   };
 
   return (
@@ -251,27 +267,29 @@ export default function PromoEditDialog({
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
                     <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
                       value={form.conditions || ''} onChange={updateField('conditions')} />
-                  {/* История комментариев (только чтение) */}
-                  {form.comments && (() => {
-                    const msgs = parseComments(form.comments);
-                    return msgs.length > 0 && (
-                      <Box sx={{ mt: 1.5, p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', maxHeight: 180, overflowY: 'auto' }}>
-                        <Typography variant="caption" sx={{ fontWeight: 600, color: '#64748b', fontSize: '0.7rem', mb: 1, display: 'block' }}>📝 История переписки</Typography>
-                        {msgs.map((msg, idx) => {
-                          const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
-                          return (
-                            <Box key={idx} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: style.bg, borderLeft: `3px solid ${style.dot}`, mb: 0.5 }}>
-                              <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.7rem' }}>
-                                {ROLE_ICONS[msg.role] || '💬'} {msg.role === 'КАМ' ? msg.author : msg.role}
-                                {msg.date && ` · ${msg.date}`}
-                              </Typography>
-                              <Typography sx={{ fontSize: '0.7rem', color: '#475569' }}>{msg.text}</Typography>
-                            </Box>
-                          );
-                        })}
-                      </Box>
-                    );
-                  })()}
+                   {/* История комментариев (только чтение) */}
+                   {commentsLoading ? (
+                     <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                       <CircularProgress size={14} />
+                       <Typography variant="caption" color="text.secondary">Загрузка комментариев...</Typography>
+                     </Box>
+                   ) : comments.length > 0 && (
+                     <Box sx={{ mt: 1.5, p: 1.5, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0', maxHeight: 180, overflowY: 'auto' }}>
+                       <Typography variant="caption" sx={{ fontWeight: 600, color: '#64748b', fontSize: '0.7rem', mb: 1, display: 'block' }}>📝 История переписки</Typography>
+                       {comments.map((msg) => {
+                         const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
+                         return (
+                           <Box key={msg.id} sx={{ px: 1, py: 0.5, borderRadius: 1, bgcolor: style.bg, borderLeft: `3px solid ${style.dot}`, mb: 0.5 }}>
+                             <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.7rem' }}>
+                               {ROLE_ICONS[msg.role] || '💬'} {msg.role === 'КАМ' ? msg.user_name : msg.role}
+                               {msg.created_at && ` · ${new Date(msg.created_at).toLocaleDateString('ru-RU')}`}
+                             </Typography>
+                             <Typography sx={{ fontSize: '0.7rem', color: '#475569' }}>{msg.comment_text}</Typography>
+                           </Box>
+                         );
+                       })}
+                     </Box>
+                   )}
                   {/* Поле для нового комментария КАМ */}
                   <TextField label="Новый комментарий" size="small" fullWidth multiline minRows={1} maxRows={3}
                     value={newComment} onChange={(e) => setNewComment(e.target.value)} />

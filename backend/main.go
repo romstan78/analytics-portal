@@ -15,69 +15,55 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"golang.org/x/time/rate"
 )
 
 // ─── Rate Limiter ───────────────────────────────────────────────────────────
 
-type RateLimiter struct {
-	mu       sync.RWMutex
-	visitors map[string][]time.Time
-	limit    int
-	window   time.Duration
+// IPRateLimiter — Token Bucket rate limiter на базе golang.org/x/time/rate.
+type IPRateLimiter struct {
+	limit rate.Limit
+	burst int
 }
 
-func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
-	rl := &RateLimiter{
-		visitors: make(map[string][]time.Time),
-		limit:    limit,
-		window:   window,
-	}
-	go rl.periodicCleanup(5 * time.Minute)
-	return rl
+func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
+	return &IPRateLimiter{limit: r, burst: b}
 }
 
-func (rl *RateLimiter) Allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-rl.window)
-
-	var valid []time.Time
-	for _, t := range rl.visitors[ip] {
-		if t.After(cutoff) {
-			valid = append(valid, t)
-		}
+func (rl *IPRateLimiter) RateLimitMiddleware() gin.HandlerFunc {
+	// Очистка старых лимитеров раз в 5 минут
+	type client struct {
+		limiter  *rate.Limiter
+		lastSeen time.Time
 	}
+	clients := make(map[string]*client)
+	var mu sync.Mutex
 
-	if len(valid) >= rl.limit {
-		rl.visitors[ip] = valid
-		return false
-	}
-
-	valid = append(valid, now)
-	rl.visitors[ip] = valid
-	return true
-}
-
-func (rl *RateLimiter) periodicCleanup(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		for ip, times := range rl.visitors {
-			if len(times) == 0 {
-				delete(rl.visitors, ip)
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			mu.Lock()
+			for ip, c := range clients {
+				if time.Since(c.lastSeen) > 5*time.Minute {
+					delete(clients, ip)
+				}
 			}
+			mu.Unlock()
 		}
-		rl.mu.Unlock()
-	}
-}
+	}()
 
-func RateLimitMiddleware(limiter *RateLimiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
-		if !limiter.Allow(ip) {
+		mu.Lock()
+		v, exists := clients[ip]
+		if !exists {
+			v = &client{limiter: rate.NewLimiter(rl.limit, rl.burst)}
+			clients[ip] = v
+		}
+		v.lastSeen = time.Now()
+		mu.Unlock()
+
+		if !v.limiter.Allow() {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
 			c.Abort()
 			return
@@ -96,7 +82,7 @@ func main() {
 	config.Init()
 	defer config.DB.Close()
 
-	limiter := NewRateLimiter(100, 1*time.Minute)
+	limiter := NewIPRateLimiter(100.0/60.0, 20) // 100 запросов в минуту, burst 20
 
 	r := gin.Default()
 	corsOrigins := []string{"http://localhost:5173"}
@@ -112,7 +98,7 @@ func main() {
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	}))
-	r.Use(RateLimitMiddleware(limiter))
+	r.Use(limiter.RateLimitMiddleware())
 
 	// ─── Публичный роут (без авторизации) ────────────────────────────────
 	r.POST("/api/auth/login", handlers.Login)

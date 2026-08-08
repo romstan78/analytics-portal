@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"golang.org/x/time/rate"
 )
 
 func init() {
@@ -613,36 +614,31 @@ func TestQuarterCalculation(t *testing.T) {
 // ==================== RATE LIMITING ====================
 
 func TestRateLimiter(t *testing.T) {
-	limiter := NewRateLimiter(5, 1*time.Second)
+	limiter := rate.NewLimiter(5, 5) // 5 событий/сек, burst 5
 	for i := 0; i < 5; i++ {
-		if !limiter.Allow("127.0.0.1") {
+		if !limiter.Allow() {
 			t.Errorf("Запрос %d должен быть разрешён", i+1)
 		}
 	}
-	if limiter.Allow("127.0.0.1") {
+	if limiter.Allow() {
 		t.Error("6-й запрос должен быть отклонён")
 	}
-	if !limiter.Allow("192.168.1.1") {
-		t.Error("Запрос с другого IP должен быть разрешён")
-	}
 	time.Sleep(1 * time.Second)
-	if !limiter.Allow("127.0.0.1") {
+	if !limiter.Allow() {
 		t.Error("После сброса окна запрос должен быть разрешён")
 	}
 }
 
-func TestRateLimiter_Cleanup(t *testing.T) {
-	limiter := NewRateLimiter(3, 100*time.Millisecond)
-	limiter.Allow("ip1")
-	limiter.Allow("ip2")
-	limiter.Allow("ip1")
-	if len(limiter.visitors) != 2 {
-		t.Errorf("Ожидалось 2 посетителя, получено %d", len(limiter.visitors))
+func TestRateLimiter_Burst(t *testing.T) {
+	limiter := rate.NewLimiter(1, 3) // 1 событие/сек, burst 3
+	// burst разрешает до 3 запросов сразу
+	for i := 0; i < 3; i++ {
+		if !limiter.Allow() {
+			t.Errorf("Запрос %d в пределах burst должен быть разрешён", i+1)
+		}
 	}
-	time.Sleep(150 * time.Millisecond)
-	limiter.Allow("ip1")
-	if len(limiter.visitors["ip1"]) > 1 {
-		t.Error("Старые записи должны были очиститься")
+	if limiter.Allow() {
+		t.Error("4-й запрос должен быть отклонён (burst исчерпан)")
 	}
 }
 

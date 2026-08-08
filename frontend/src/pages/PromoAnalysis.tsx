@@ -15,6 +15,7 @@ import {
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
+import { useQueryClient } from '@tanstack/react-query';
 import FilterPanel from '../components/FilterPanel';
 import PromoForm from './PromoForm';
 import PromoEditDialog from '../components/PromoEditDialog';
@@ -27,7 +28,7 @@ import { usePromoCalculations } from '../hooks/usePromoCalculations';
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const EXPORT_WARNING_THRESHOLD = 10000;
 
 const renderAgreement = (value) => {
@@ -118,8 +119,8 @@ const PROMO_VISIBLE_FILTERS = ['kam', 'brand', 'sku', 'network_name', 'mechanics
 // role — передаётся из App.jsx (admin / agreement1 / agreement2)
 export default function PromoAnalysis({ role }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState(0);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [allSkuOptions, setAllSkuOptions] = useState([]);
   const [allNetworkOptions, setAllNetworkOptions] = useState([]);
   const [investmentTypes, setInvestmentTypes] = useState([]);
@@ -141,12 +142,15 @@ export default function PromoAnalysis({ role }) {
   // ─── Фильтры и данные ─────────────────────────────────────────────────
   const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta } = 
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
-  const { rows, setRows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters, refreshTrigger);
+  const { rows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters);
 
-  // После редактирования/удаления/создания — инвалидируем кеш React Query
+  // После редактирования/удаления/создания — сбрасываем кеш и перезапрашиваем
   const handleDataChanged = useCallback(() => {
-    setRefreshTrigger(prev => prev + 1);
-  }, []);
+    // Удаляем все закэшированные данные промо, чтобы гарантировать свежий запрос
+    queryClient.removeQueries({ queryKey: ['promoData'] });
+    // Принудительный refetch всех запросов промо-данных
+    queryClient.refetchQueries({ queryKey: ['promoData'] });
+  }, [queryClient]);
 
   // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete, resetForm } = 
@@ -188,7 +192,7 @@ export default function PromoAnalysis({ role }) {
   };
 
   const handlePromoFormSave = () => {
-    setRefreshTrigger(prev => prev + 1);
+    queryClient.invalidateQueries({ queryKey: ['promoData'] });
     setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
   };
 
@@ -400,7 +404,7 @@ export default function PromoAnalysis({ role }) {
       {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
 
       {/* ─── Tab 2: Согласование ──────────────────────────────────────── */}
-      {tab === 2 && <PromoApproval role={role} onDataChanged={() => setRefreshTrigger(prev => prev + 1)} />}
+      {tab === 2 && <PromoApproval role={role} onDataChanged={() => queryClient.invalidateQueries({ queryKey: ['promoData'] })} />}
 
       {/* Снекбар уведомлений */}
       <Snackbar open={snackbar.open} autoHideDuration={3000} 

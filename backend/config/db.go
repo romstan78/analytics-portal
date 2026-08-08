@@ -26,6 +26,10 @@ func buildConnString() string {
 	)
 }
 
+func GetDBInfo() string {
+	return fmt.Sprintf("%s@%s/%s", os.Getenv("DB_USER"), os.Getenv("DB_SERVER"), os.Getenv("DB_NAME"))
+}
+
 func Init() {
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		log.Printf("Не удалось создать папку logs: %v", err)

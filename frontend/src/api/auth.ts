@@ -26,7 +26,7 @@ export const saveSession = (data: SessionData): void => {
 // Возвращает true если успешно
 export const refreshToken = async (): Promise<boolean> => {
   try {
-    const res = await fetch('http://localhost:8080/api/auth/refresh', {
+    const res = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/api/auth/refresh`, {
       method: 'POST',
       credentials: 'include', // отправляем httpOnly cookie
     });

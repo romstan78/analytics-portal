@@ -11,6 +11,7 @@ import (
 	"backend/config"
 	"backend/models"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/gin-gonic/gin"
 	"github.com/xuri/excelize/v2"
 )
@@ -82,85 +83,117 @@ type salesFilter struct {
 
 // buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
 // Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
+// buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
+// Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
+// Использует squirrel Query Builder для безопасного построения SQL.
 func buildSalesWhere(f salesFilter) (string, []interface{}) {
-	baseWhere := " WHERE n.metric_value != 0 AND n.metric_value IS NOT NULL"
-	args := []interface{}{}
+	q := sq.Select().PlaceholderFormat(sq.Question)
+
+	// Базовое условие
+	q = q.Where("n.metric_value != 0 AND n.metric_value IS NOT NULL")
 
 	if f.YearFromStr != "" {
 		if y, err := strconv.Atoi(f.YearFromStr); err == nil {
-			baseWhere += " AND n.[year] >= ?"
-			args = append(args, y)
+			q = q.Where("n.[year] >= ?", y)
 		}
 	}
 	if f.YearToStr != "" {
 		if y, err := strconv.Atoi(f.YearToStr); err == nil {
-			baseWhere += " AND n.[year] <= ?"
-			args = append(args, y)
+			q = q.Where("n.[year] <= ?", y)
 		}
 	}
 	if len(f.Months) > 0 {
-		placeholders := make([]string, 0, len(f.Months))
+		months := make([]interface{}, 0, len(f.Months))
 		for _, m := range f.Months {
 			if val, err := strconv.Atoi(m); err == nil {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
+				months = append(months, val)
 			}
 		}
-		if len(placeholders) > 0 {
-			baseWhere += " AND n.[month] IN (" + strings.Join(placeholders, ",") + ")"
+		if len(months) > 0 {
+			q = q.Where(sq.Eq{"n.[month]": months})
 		}
 	}
 
-	likeFilter := func(col string, values []string) {
-		conds := make([]string, 0, len(values))
-		for _, v := range values {
+	// LIKE-фильтры (OR между значениями внутри одного поля)
+	if len(f.BrandNames) > 0 {
+		orConds := sq.Or{}
+		for _, v := range f.BrandNames {
 			if v != "" {
-				conds = append(conds, "n."+col+" LIKE ?")
-				args = append(args, "%"+v+"%")
+				orConds = append(orConds, sq.Like{"n.brandName": "%" + v + "%"})
 			}
 		}
-		if len(conds) > 0 {
-			baseWhere += " AND (" + strings.Join(conds, " OR ") + ")"
+		if len(orConds) > 0 {
+			q = q.Where(orConds)
 		}
 	}
-	likeFilter("brandName", f.BrandNames)
-	likeFilter("networkName", f.NetworkNames)
+	if len(f.NetworkNames) > 0 {
+		orConds := sq.Or{}
+		for _, v := range f.NetworkNames {
+			if v != "" {
+				orConds = append(orConds, sq.Like{"n.networkName": "%" + v + "%"})
+			}
+		}
+		if len(orConds) > 0 {
+			q = q.Where(orConds)
+		}
+	}
 
 	// Точное совпадение (приоритетнее LIKE, используется в Drilldown)
 	if f.BrandExact != "" {
-		baseWhere += " AND n.brandName = ?"
-		args = append(args, f.BrandExact)
+		q = q.Where("n.brandName = ?", f.BrandExact)
 	}
 	if f.NetworkExact != "" {
-		baseWhere += " AND n.networkName = ?"
-		args = append(args, f.NetworkExact)
+		q = q.Where("n.networkName = ?", f.NetworkExact)
 	}
 
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				baseWhere += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
+	// IN-фильтры
+	if len(f.UnRubs) > 0 {
+		vals := filterNonEmpty(f.UnRubs)
+		if len(vals) > 0 {
+			q = q.Where(sq.Eq{"n.un_rub": vals})
 		}
 	}
-	appendFilter("n.un_rub", f.UnRubs)
-	appendFilter("n.segment", f.Segments)
-	appendFilter("n.channel", f.Channels)
+	if len(f.Segments) > 0 {
+		vals := filterNonEmpty(f.Segments)
+		if len(vals) > 0 {
+			q = q.Where(sq.Eq{"n.segment": vals})
+		}
+	}
+	if len(f.Channels) > 0 {
+		vals := filterNonEmpty(f.Channels)
+		if len(vals) > 0 {
+			q = q.Where(sq.Eq{"n.channel": vals})
+		}
+	}
 
 	if f.Search != "" {
 		likeArg := "%" + f.Search + "%"
-		baseWhere += " AND (n.brandName LIKE ? OR n.productName LIKE ? OR n.networkName LIKE ? OR n.metric_type LIKE ?)"
-		args = append(args, likeArg, likeArg, likeArg, likeArg)
+		q = q.Where(sq.Or{
+			sq.Like{"n.brandName": likeArg},
+			sq.Like{"n.productName": likeArg},
+			sq.Like{"n.networkName": likeArg},
+			sq.Like{"n.metric_type": likeArg},
+		})
 	}
 
-	return baseWhere, args
+	sql, args, _ := q.ToSql()
+	// squirrel генерирует "SELECT * WHERE ...", нам нужна только WHERE-часть
+	whereIdx := strings.Index(sql, "WHERE")
+	if whereIdx >= 0 {
+		return " " + sql[whereIdx:], args
+	}
+	return "", args
+}
+
+// filterNonEmpty возвращает слайс []interface{} без пустых строк.
+func filterNonEmpty(vals []string) []interface{} {
+	res := make([]interface{}, 0, len(vals))
+	for _, v := range vals {
+		if v != "" {
+			res = append(res, v)
+		}
+	}
+	return res
 }
 
 func GetData(c *gin.Context) {

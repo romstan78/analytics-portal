@@ -1,15 +1,19 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Box, Card, TextField, Button, Typography, Alert } from '@mui/material';
 import { Lock as LockIcon } from '@mui/icons-material';
-import { saveSession } from '../api/auth';
+import { saveSession, type SessionData } from '../api/auth';
 
-export default function Login({ onLogin }) {
+interface LoginProps {
+  onLogin: (data: SessionData) => void;
+}
+
+export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!username || !password) {
       setError('Заполните все поля');
@@ -17,20 +21,20 @@ export default function Login({ onLogin }) {
     }
     setLoading(true); setError('');
     try {
-      const response = await fetch('http://localhost:8080/api/auth/login', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
         credentials: 'include', // получаем httpOnly refresh cookie
       });
-      const data = await response.json();
+      const data: SessionData = await response.json();
       if (!response.ok) {
-        setError(data.error || 'Ошибка входа');
+        setError((data as Record<string, unknown>).error as string || 'Ошибка входа');
         return;
       }
       saveSession(data);
       onLogin(data);
-    } catch (err) {
+    } catch (_err) {
       setError('Сервер недоступен');
     } finally {
       setLoading(false);

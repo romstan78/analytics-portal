@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Box, Typography, CircularProgress, Alert, Snackbar,
   TextField, MenuItem, Dialog,
@@ -36,6 +37,7 @@ const APPROVAL_STATUSES = [
 ];
 
 export default function PromoApproval({ role, onDataChanged }) {
+  const queryClient = useQueryClient();
   // Вид: cards | table
   const [viewMode, setViewMode] = useState('cards');
 
@@ -210,8 +212,10 @@ export default function PromoApproval({ role, onDataChanged }) {
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
-      // Комментарий — карточка уходит из очереди согласующего
-      // Согласование/отклонение — тоже удаляем
+      // Инвалидируем кэш комментариев для этой карточки
+      queryClient.invalidateQueries({ queryKey: ['comments', id] });
+      // Инвалидируем approvals
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
       setApprovals(prev => prev.filter(a => a.id !== id));
       setSnackbar({ open: true, message: status === 'comment' ? '✅ Комментарий сохранён' : '✅ Выполнено', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
@@ -231,14 +235,16 @@ export default function PromoApproval({ role, onDataChanged }) {
     handleQuickAction(id, 'comment', comment);
   };
 
-  // Быстрое действие без диалога подтверждения (для comment-only)
-  // Комментарий не меняет статус согласования — промо остаётся в списке
+  // Быстрое действие без диалога подтверждения (comment-only).
+  // После сохранения инвалидируем кэш комментариев — карточка остаётся.
   const handleQuickAction = async (id, status, comment) => {
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
       await promoAPI.approve(id, status, comment);
-      // Карточка уходит из очереди — согласующий выполнил действие
-      setApprovals(prev => prev.filter(a => a.id !== id));
+      // Инвалидируем кэш комментариев — useQuery в ApprovalCard перезапросит
+      queryClient.invalidateQueries({ queryKey: ['comments', id] });
+      // Инвалидируем approvals
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
       setSnackbar({ open: true, message: '✅ Комментарий сохранён', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
       if (onDataChanged) onDataChanged();

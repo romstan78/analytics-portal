@@ -586,3 +586,141 @@ func DBRowToMap(r *models.PromoRowDB) map[string]interface{} {
 		"updated_at":                        r.UpdatedAt,
 	}
 }
+
+// MergeDTOIntoRow копирует значения из PromoInputDTO в PromoRowDB.
+// Заменяет applyJSONToRow: вместо switch по map[string]interface{} — прямое копирование из DTO.
+func MergeDTOIntoRow(r *models.PromoRowDB, dto *PromoInputDTO) {
+	if dto.NetworkName != "" {
+		r.NetworkName = dto.NetworkName
+	}
+	if dto.KAM != "" {
+		r.KAM = dto.KAM
+	}
+	if dto.Brand != "" {
+		r.Brand = dto.Brand
+	}
+	if dto.BrandAS != "" {
+		r.BrandAS = dto.BrandAS
+	}
+	if dto.SKU != "" {
+		r.SKU = dto.SKU
+	}
+	if dto.Year != 0 {
+		r.Year = dto.Year
+	}
+	if dto.Month != 0 {
+		r.Month = dto.Month
+	}
+	if dto.Mechanics != "" {
+		r.Mechanics = dto.Mechanics
+	}
+	if dto.GTNOpex != "" {
+		r.GTNOpex = dto.GTNOpex
+	}
+	if dto.IDDirectum != "" {
+		r.IDDirectum = dto.IDDirectum
+	}
+	if dto.DSNumber != "" {
+		r.DSNumber = dto.DSNumber
+	}
+	if dto.Conditions != "" {
+		r.Conditions = dto.Conditions
+	}
+	if dto.EcomSegment != "" {
+		r.EcomSegment = dto.EcomSegment
+	}
+	if dto.Status != "" {
+		r.Status = dto.Status
+	}
+	if dto.Date != "" {
+		r.Date = dto.Date
+	}
+	if dto.KeyRegion != "" {
+		r.KeyRegion = dto.KeyRegion
+	}
+	if dto.Top20Segment != "" {
+		r.Top20Segment = dto.Top20Segment
+	}
+	if dto.Agreement1 != "" {
+		r.Agreement1 = dto.Agreement1
+	}
+	if dto.Agreement2 != "" {
+		r.Agreement2 = dto.Agreement2
+	}
+
+	// Comments обрабатывается отдельно в SavePromo (накопление истории), не перезаписываем здесь
+
+	// Числовые поля: отличие от 0 означает "задано клиентом"
+	if dto.BaselineUnits != 0 {
+		v := dto.BaselineUnits
+		r.BaselineUnits = &v
+	}
+	if dto.BaselineRub != 0 {
+		v := dto.BaselineRub
+		r.BaselineRub = &v
+	}
+	if dto.PlanPromoUnits != 0 {
+		v := dto.PlanPromoUnits
+		r.PlanPromoUnits = &v
+	}
+	if dto.PlanPromoRub != 0 {
+		v := dto.PlanPromoRub
+		r.PlanPromoRub = &v
+	}
+	if dto.PlanInvestmentsRub != 0 {
+		v := dto.PlanInvestmentsRub
+		r.PlanInvestmentsRub = &v
+	}
+	if dto.ContractPrice != 0 {
+		v := dto.ContractPrice
+		r.ContractPrice = &v
+	}
+	if dto.GM != 0 {
+		v := dto.GM
+		r.GM = &v
+	}
+	if dto.DiscountAmount != 0 {
+		v := dto.DiscountAmount
+		r.DiscountAmount = &v
+	}
+	if dto.OlapPrice != 0 {
+		v := dto.OlapPrice
+		r.OlapPrice = &v
+	}
+	if dto.TotalPharmacies != 0 {
+		v := dto.TotalPharmacies
+		r.TotalPharmacies = &v
+	}
+	if dto.PromoPharmacies != 0 {
+		v := dto.PromoPharmacies
+		r.PromoPharmacies = &v
+	}
+	if dto.ActualPromoSalesUnits != 0 {
+		v := dto.ActualPromoSalesUnits
+		r.ActualPromoSalesUnits = &v
+	}
+	if dto.ActualPromoRub != 0 {
+		v := dto.ActualPromoRub
+		r.ActualPromoRub = &v
+	}
+	if dto.ActualInvestments != 0 {
+		v := dto.ActualInvestments
+		r.ActualInvestments = &v
+	}
+	if dto.ActualPromoUpliftUnits != 0 {
+		v := dto.ActualPromoUpliftUnits
+		r.ActualPromoUpliftUnits = &v
+	}
+	if dto.ActualPromoUpliftRub != 0 {
+		v := dto.ActualPromoUpliftRub
+		r.ActualPromoUpliftRub = &v
+	}
+	if dto.ActualExternalEcomUnits != 0 {
+		v := dto.ActualExternalEcomUnits
+		r.ActualExternalEcomUnits = &v
+	}
+	if dto.ActualCorrectedBaseline != 0 {
+		v := dto.ActualCorrectedBaseline
+		r.ActualCorrectedBaseline = &v
+	}
+}

@@ -8,14 +8,18 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var JWTSecret = []byte(getEnvOrDefault("JWT_SECRET", "change-me-in-production-32bytes!!"))
-
-func getEnvOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func requireSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		if os.Getenv("GO_ENV") == "production" {
+			panic("JWT_SECRET is required in production environment")
+		}
+		secret = "change-me-in-development-only"
 	}
-	return fallback
+	return []byte(secret)
 }
+
+var JWTSecret = requireSecret()
 
 type Claims struct {
 	Username string `json:"username"`

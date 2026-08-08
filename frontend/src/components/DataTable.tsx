@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { DataGrid } from '@mui/x-data-grid';
-import { 
-  Box, Alert, TextField, Button, Menu, MenuItem, 
+import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { DataGrid, type GridColDef, type GridPaginationModel, type GridRowParams } from '@mui/x-data-grid';
+import {
+  Box, Alert, TextField, Button, Menu, MenuItem,
   Checkbox, ListItemText, Typography, Divider, ButtonGroup,
 } from '@mui/material';
-import { 
+import {
   ViewColumn as ColumnsIcon,
   FileDownload as ExportIcon,
   Search as SearchIcon,
@@ -13,18 +13,30 @@ import { saveAs } from 'file-saver';
 
 const EXPORT_WARNING_THRESHOLD = 10000;
 
-export default function DataTable({ 
-  columns, apiUrl, filters = {}, defaultPageSize = 100, 
-  exportFileName = 'export', exportXlsxUrl = null, onDataLoaded = null, 
-  onRowClick = null, refreshKey 
-}) {
-  const [rawRows, setRawRows] = useState([]);
+interface DataTableProps {
+  columns: GridColDef[];
+  apiUrl: string;
+  filters?: Record<string, unknown>;
+  defaultPageSize?: number;
+  exportFileName?: string;
+  exportXlsxUrl?: string;
+  onDataLoaded?: (data: unknown[]) => void;
+  onRowClick?: (params: GridRowParams) => void;
+  refreshKey?: number;
+}
+
+export default function DataTable({
+  columns, apiUrl, filters = {}, defaultPageSize = 100,
+  exportFileName = 'export', exportXlsxUrl, onDataLoaded,
+  onRowClick, refreshKey,
+}: DataTableProps) {
+  const [rawRows, setRawRows] = useState<unknown[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   // Серверная пагинация
-  const [paginationModel, setPaginationModel] = useState({
+  const [paginationModel, setPaginationModel] = useState<GridPaginationModel>({
     page: 0,
     pageSize: defaultPageSize,
   });
@@ -33,9 +45,9 @@ export default function DataTable({
   // Тулбар
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [columnsAnchor, setColumnsAnchor] = useState(null);
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    const map = {};
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
     columns.forEach(c => { map[c.field] = true; });
     return map;
   });
@@ -44,12 +56,12 @@ export default function DataTable({
   // Уникальные ключи
   const rows = useMemo(() => {
     return rawRows.map((row, idx) => ({
-      ...row,
-      _rowId: `${row.id ?? 'row'}_${paginationModel.page}_${idx}`,
+      ...(row as Record<string, unknown>),
+      _rowId: `${(row as Record<string, unknown>).id ?? 'row'}_${paginationModel.page}_${idx}`,
     }));
   }, [rawRows, paginationModel.page]);
 
-  // Debounce поиска (400ms) — чтобы не дёргать API на каждый символ
+  // Debounce поиска (400ms)
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchText.trim());
@@ -67,34 +79,34 @@ export default function DataTable({
     [columns, visibleColumns]
   );
 
-  const toggleColumn = (field) => {
+  const toggleColumn = (field: string) => {
     setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
   };
 
   const showAllColumns = () => {
-    const map = {};
+    const map: Record<string, boolean> = {};
     columns.forEach(c => { map[c.field] = true; });
     setVisibleColumns(map);
   };
 
   const hideAllColumns = () => {
-    const map = {};
+    const map: Record<string, boolean> = {};
     columns.forEach(c => { map[c.field] = false; });
     setVisibleColumns(map);
   };
 
-  const fetchExportData = async () => {
+  const fetchExportData = async (): Promise<unknown[]> => {
     const params = new URLSearchParams();
     params.set('all', 'true');
     if (debouncedSearch) {
       params.set('search', debouncedSearch);
     }
-    Object.entries(filters).forEach(([key, value]) => { 
-      if (Array.isArray(value)) { 
-        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-      } else if (value !== '' && value != null) { 
-        params.set(key, String(value)); 
-      } 
+    Object.entries(filters).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+      } else if (value !== '' && value != null) {
+        params.set(key, String(value));
+      }
     });
     const url = `${apiUrl}?${params.toString()}`;
     const response = await fetch(url, {
@@ -104,7 +116,7 @@ export default function DataTable({
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const json = await response.json();
-    return json.data || [];
+    return (json.data || []) as unknown[];
   };
 
   const handleExportCSV = async () => {
@@ -126,10 +138,11 @@ export default function DataTable({
 
       let csv = '\uFEFF' + headers.join(';') + '\n';
       data.forEach(row => {
+        const record = row as Record<string, unknown>;
         const line = fields.map(f => {
-          let val = row[f];
-          if (val == null) return '';
-          val = String(val);
+          const raw = record[f];
+          if (raw == null) return '';
+          let val = String(raw);
           if (val.includes(';') || val.includes('"') || val.includes('\n')) {
             val = '"' + val.replace(/"/g, '""') + '"';
           }
@@ -148,7 +161,7 @@ export default function DataTable({
     }
   };
 
-  // Выгрузка в Excel через серверный эндпоинт (отдаёт готовый .xlsx)
+  // Выгрузка в Excel через серверный эндпоинт
   const handleExportXLSX = async () => {
     if (!exportXlsxUrl) {
       window.alert('Экспорт в Excel не настроен для этой страницы.');
@@ -192,7 +205,6 @@ export default function DataTable({
     }
   };
 
-
   // Загрузка данных с пагинацией
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null);
@@ -203,13 +215,13 @@ export default function DataTable({
       if (debouncedSearch) {
         params.set('search', debouncedSearch);
       }
-      
-      Object.entries(filters).forEach(([key, value]) => { 
-        if (Array.isArray(value)) { 
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); }); 
-        } else if (value !== '' && value != null) { 
-          params.set(key, String(value)); 
-        } 
+
+      Object.entries(filters).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
+        } else if (value !== '' && value != null) {
+          params.set(key, String(value));
+        }
       });
       const qs = params.toString();
       const url = `${apiUrl}?${qs}`;
@@ -220,11 +232,11 @@ export default function DataTable({
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json();
-      const data = json.data || [];
+      const data = (json.data || []) as unknown[];
       setRawRows(data);
-      setTotalRows(json.totalRows || data.length);
+      setTotalRows((json.totalRows || data.length) as number);
       if (onDataLoaded) onDataLoaded(data);
-    } catch (err) { setError(err.message); } finally { setLoading(false); }
+    } catch (err) { setError((err as Error).message); } finally { setLoading(false); }
   }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
 
   // Сброс страницы при смене фильтров
@@ -238,16 +250,15 @@ export default function DataTable({
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-      
       {/* Тулбар */}
-      <Box sx={{ 
-        display: 'flex', alignItems: 'center', gap: 1, 
-        px: 2, py: 1, bgcolor: '#f1f5f9', 
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 1,
+        px: 2, py: 1, bgcolor: '#f1f5f9',
         borderRadius: '12px 12px 0 0',
         border: '1px solid #e2e8f0', borderBottom: 'none',
       }}>
         <Button size="small" startIcon={<ColumnsIcon />}
-          onClick={(e) => setColumnsAnchor(e.currentTarget)}
+          onClick={(e: MouseEvent<HTMLButtonElement>) => setColumnsAnchor(e.currentTarget)}
           sx={{ color: '#475569', fontWeight: 500 }}>Колонки</Button>
         <Menu anchorEl={columnsAnchor} open={Boolean(columnsAnchor)}
           onClose={() => setColumnsAnchor(null)}
@@ -260,14 +271,14 @@ export default function DataTable({
           {columns.map(col => (
             <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
               <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
-              <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
+              <ListItemText primary={col.headerName || col.field} slotProps={{ primary: { sx: { fontSize: 13 } } }} />
             </MenuItem>
           ))}
         </Menu>
 
         <TextField size="small" placeholder="Поиск..." value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
-          InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
+          slotProps={{ input: { startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> } }}
           sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
 
         <Box sx={{ flex: 1 }} />
@@ -289,12 +300,12 @@ export default function DataTable({
       </Box>
 
       {/* Таблица */}
-      <DataGrid 
+      <DataGrid
         apiRef={apiRef}
-        rows={rows} 
+        rows={rows}
         columns={visibleCols}
-        getRowId={(row) => row._rowId}
-        loading={loading} 
+        getRowId={(row) => row._rowId as string}
+        loading={loading}
         sortingMode="server"
         paginationMode="server"
         rowCount={totalRows}
@@ -302,14 +313,14 @@ export default function DataTable({
         onPaginationModelChange={setPaginationModel}
         disableColumnFilter
         onRowClick={onRowClick}
-        pageSizeOptions={[25, 50, 100]} 
+        pageSizeOptions={[25, 50, 100]}
         disableRowSelectionOnClick
-        sx={{ 
+        sx={{
           flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
           borderRadius: '0 0 12px 12px',
           '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
-          '& .MuiDataGrid-row': { cursor: onRowClick ? 'pointer' : 'default' } 
-        }} 
+          '& .MuiDataGrid-row': { cursor: onRowClick != null ? 'pointer' : 'default' }
+        }}
       />
     </Box>
   );

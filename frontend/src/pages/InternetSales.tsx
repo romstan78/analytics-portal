@@ -7,7 +7,7 @@ import DataTable from '../components/DataTable';
 import DrilldownModal from '../components/DrilldownModal';
 import { salesAPI } from '../api/promo';
 
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const FILTERS_STORAGE_KEY = 'internet_sales_filters_v7';
 const PERSIST_FLAG_KEY = 'internet_sales_persist_v7';
 

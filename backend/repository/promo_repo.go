@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -123,115 +124,85 @@ func GetChannelFilterValues(baseWhere string, baseArgs []interface{}, filters ma
 
 // ─── Promo Data ─────────────────────────────────────────────────────────────
 
+// buildPromoWhere строит WHERE-условие для dbo.tbl_PromoActivities (алиас p).
+// Собирает WHERE вручную с плейсхолдерами ? для надёжности.
+func buildPromoWhere(params PromoFilterParams, channels []string) (string, []interface{}) {
+	where := "p.deleted_at IS NULL"
+	args := []interface{}{}
+
+	if params.YearFromStr != "" {
+		if y, err := strconv.Atoi(params.YearFromStr); err == nil {
+			where += " AND p.year >= ?"
+			args = append(args, y)
+		}
+	}
+	if params.YearToStr != "" {
+		if y, err := strconv.Atoi(params.YearToStr); err == nil {
+			where += " AND p.year <= ?"
+			args = append(args, y)
+		}
+	}
+	if len(params.Months) > 0 {
+		months := make([]interface{}, 0, len(params.Months))
+		for _, m := range params.Months {
+			if val, err := strconv.Atoi(m); err == nil {
+				months = append(months, val)
+			}
+		}
+		if len(months) > 0 {
+			placeholders := make([]string, len(months))
+			for i := range months {
+				placeholders[i] = "?"
+			}
+			where += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
+			args = append(args, months...)
+		}
+	}
+
+	addInFilter := func(col string, values []string) {
+		vals := make([]interface{}, 0, len(values))
+		for _, v := range values {
+			if v != "" {
+				vals = append(vals, v)
+			}
+		}
+		if len(vals) > 0 {
+			placeholders := make([]string, len(vals))
+			for i := range vals {
+				placeholders[i] = "?"
+			}
+			where += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
+			args = append(args, vals...)
+		}
+	}
+
+	addInFilter("p.kam", params.Kams)
+	addInFilter("p.brand_as", params.Brands)
+	addInFilter("p.sku", params.SKUs)
+	addInFilter("p.network_name", params.Networks)
+	addInFilter("p.mechanics", params.Mechanics)
+	addInFilter("p.status", params.Statuses)
+	addInFilter("m.channel", channels)
+
+	return " WHERE " + where, args
+}
+
+// promoRowsColumns — общий список колонок для GetPromoRowsStream и GetPromoRows.
+const promoRowsColumns = `p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel`
+
 // GetPromoRowsStream возвращает sql.Rows для потокового чтения (Excel export).
 // Вызывающая сторона обязана закрыть rows (defer rows.Close()).
 func GetPromoRowsStream(params PromoFilterParams, channels []string) (*sql.Rows, error) {
-	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
-	args := []interface{}{}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-
-	if params.YearFromStr != "" {
-		if y, _ := strconv.Atoi(params.YearFromStr); true {
-			query += " AND p.year >= ?"
-			args = append(args, y)
-		}
-	}
-	if params.YearToStr != "" {
-		if y, _ := strconv.Atoi(params.YearToStr); true {
-			query += " AND p.year <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(params.Months) > 0 {
-		placeholders := make([]string, 0, len(params.Months))
-		for _, m := range params.Months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter("p.kam", params.Kams)
-	appendFilter("p.brand_as", params.Brands)
-	appendFilter("p.sku", params.SKUs)
-	appendFilter("p.network_name", params.Networks)
-	appendFilter("p.mechanics", params.Mechanics)
-	appendFilter("p.status", params.Statuses)
-	appendFilter("m.channel", channels)
-
-	query += " ORDER BY p.year DESC, p.month DESC"
-	return config.DB.Query(query, args...)
+	where, whereArgs := buildPromoWhere(params, channels)
+	query := "SELECT " + promoRowsColumns + " FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics" + where + " ORDER BY p.year DESC, p.month DESC"
+	return config.DB.Query(query, whereArgs...)
 }
 
 func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize int, getAll bool) ([]models.PromoRow, error) {
-	query := `SELECT p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.deleted_at IS NULL`
-	args := []interface{}{}
-
-	appendFilter := func(col string, values []string) {
-		if len(values) > 0 {
-			placeholders := make([]string, 0, len(values))
-			for _, v := range values {
-				if v != "" {
-					placeholders = append(placeholders, "?")
-					args = append(args, v)
-				}
-			}
-			if len(placeholders) > 0 {
-				query += " AND " + col + " IN (" + strings.Join(placeholders, ",") + ")"
-			}
-		}
-	}
-
-	if params.YearFromStr != "" {
-		if y, _ := strconv.Atoi(params.YearFromStr); true {
-			query += " AND p.year >= ?"
-			args = append(args, y)
-		}
-	}
-	if params.YearToStr != "" {
-		if y, _ := strconv.Atoi(params.YearToStr); true {
-			query += " AND p.year <= ?"
-			args = append(args, y)
-		}
-	}
-	if len(params.Months) > 0 {
-		placeholders := make([]string, 0, len(params.Months))
-		for _, m := range params.Months {
-			if val, _ := strconv.Atoi(m); true {
-				placeholders = append(placeholders, "?")
-				args = append(args, val)
-			}
-		}
-		if len(placeholders) > 0 {
-			query += " AND p.month IN (" + strings.Join(placeholders, ",") + ")"
-		}
-	}
-
-	appendFilter("p.kam", params.Kams)
-	appendFilter("p.brand_as", params.Brands)
-	appendFilter("p.sku", params.SKUs)
-	appendFilter("p.network_name", params.Networks)
-	appendFilter("p.mechanics", params.Mechanics)
-	appendFilter("p.status", params.Statuses)
-	appendFilter("m.channel", channels)
+	where, whereArgs := buildPromoWhere(params, channels)
+	query := "SELECT " + promoRowsColumns + " FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics" + where
+	args := make([]interface{}, len(whereArgs))
+	copy(args, whereArgs)
 
 	if getAll {
 		query += " ORDER BY p.year DESC, p.month DESC"
@@ -440,8 +411,8 @@ func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 			"total_pharmacies, promo_pharmacies, "+
 			"status, date, "+
 			"key_region, top20_segment, olap_price, "+
-			"plan_promo_cip_olap, fact_promo_cip_olap, "+
-			"plan_promo_uplift_cip_olap, fact_promo_uplift_cip_olap, "+
+			"NULL as plan_promo_cip_olap, NULL as fact_promo_cip_olap, "+
+			"NULL as plan_promo_uplift_cip_olap, NULL as fact_promo_uplift_cip_olap, "+
 			"actual_promo_sales_units, actual_investments, "+
 			"actual_promo_rub, actual_promo_uplift_units, actual_promo_uplift_rub, "+
 			"actual_external_ecom_units, actual_corrected_baseline, "+
@@ -909,11 +880,78 @@ type ApprovalParams struct {
 	PageSize          int
 }
 
-func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
+// buildApprovalsWhere строит WHERE для страницы согласования.
+// Возвращает строку "p.deleted_at IS NULL AND ..." и слайс аргументов.
+// Собирает WHERE вручную с плейсхолдерами ? для безопасности.
+func buildApprovalsWhere(params ApprovalParams) (string, []interface{}) {
 	currentYear := time.Now().Year()
 	currentMonth := int(time.Now().Month())
 
-	query := `
+	where := "p.deleted_at IS NULL"
+	args := []interface{}{}
+
+	if params.YearStr != "" {
+		if y, err := strconv.Atoi(params.YearStr); err == nil {
+			where += " AND p.year = ?"
+			args = append(args, y)
+		}
+	} else if params.MonthStr != "" {
+		where += " AND p.year >= ?"
+		args = append(args, currentYear)
+	} else {
+		where += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
+		args = append(args, currentYear, currentYear, currentMonth)
+	}
+
+	if params.MonthStr != "" {
+		if m, err := strconv.Atoi(params.MonthStr); err == nil {
+			where += " AND p.month = ?"
+			args = append(args, m)
+		}
+	}
+
+	if params.KAM != "" {
+		where += " AND p.kam = ?"
+		args = append(args, params.KAM)
+	}
+	if params.Network != "" {
+		where += " AND p.network_name = ?"
+		args = append(args, params.Network)
+	}
+	if params.Brand != "" {
+		where += " AND p.brand_as = ?"
+		args = append(args, params.Brand)
+	}
+	if params.Mechanics != "" {
+		where += " AND p.mechanics = ?"
+		args = append(args, params.Mechanics)
+	}
+	if params.HasComments {
+		where += " AND p.comments IS NOT NULL AND p.comments != ''"
+	}
+
+	statusField := "p.agreement1_status"
+	if params.Role == "agreement2" {
+		statusField = "p.agreement2_status"
+	}
+	switch params.ApprovalStatus {
+	case "pending":
+		where += " AND " + statusField + " IS NULL"
+	case "commented":
+		where += " AND " + statusField + " = 'commented'"
+	case "approved":
+		where += " AND " + statusField + " = 'approved'"
+	case "rejected":
+		where += " AND " + statusField + " = 'rejected'"
+	}
+
+	return where, args
+}
+
+func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
+	whereClause, args := buildApprovalsWhere(params)
+
+	baseSelect := `
 		SELECT
 			p.id, p.network_name, p.brand_as, p.sku, p.mechanics, p.year, p.month,
 			p.baseline_units, p.plan_promo_units, p.actual_promo_sales_units,
@@ -925,81 +963,17 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 			0 as historical_count,
 			CAST(NULL AS FLOAT) as avg_historical_roi
 		FROM dbo.tbl_PromoActivities p
-		WHERE p.deleted_at IS NULL
-	`
+		WHERE ` + whereClause
 
-	args := []interface{}{}
-
-	if params.YearStr != "" {
-		y, _ := strconv.Atoi(params.YearStr)
-		query += " AND p.year = ?"
-		args = append(args, y)
-	} else if params.MonthStr != "" {
-		query += " AND p.year >= ?"
-		args = append(args, currentYear)
-	} else {
-		query += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
-		args = append(args, currentYear, currentYear, currentMonth)
-	}
-
-	if params.MonthStr != "" {
-		m, _ := strconv.Atoi(params.MonthStr)
-		query += " AND p.month = ?"
-		args = append(args, m)
-	}
-
-	if params.KAM != "" {
-		query += " AND p.kam = ?"
-		args = append(args, params.KAM)
-	}
-
-	if params.Network != "" {
-		query += " AND p.network_name = ?"
-		args = append(args, params.Network)
-	}
-
-	if params.Brand != "" {
-		query += " AND p.brand_as = ?"
-		args = append(args, params.Brand)
-	}
-
-	if params.Mechanics != "" {
-		query += " AND p.mechanics = ?"
-		args = append(args, params.Mechanics)
-	}
-
-	if params.HasComments {
-		query += " AND p.comments IS NOT NULL AND p.comments != ''"
-	}
-
-	// Используем agreement1_status/agreement2_status вместо CHARINDEX-парсинга
-	statusField := "p.agreement1_status"
-	if params.Role == "agreement2" {
-		statusField = "p.agreement2_status"
-	}
-
-	switch params.ApprovalStatus {
-	case "pending":
-		query += fmt.Sprintf(" AND %s IS NULL", statusField)
-	case "commented":
-		query += fmt.Sprintf(" AND %s = 'commented'", statusField)
-	case "approved":
-		query += fmt.Sprintf(" AND %s = 'approved'", statusField)
-	case "rejected":
-		query += fmt.Sprintf(" AND %s = 'rejected'", statusField)
-	}
-
-	// Сначала считаем общее количество (без пагинации)
-	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + query[strings.Index(query, "WHERE")+6:]
-	countRow := config.DB.QueryRow(countQuery, args...)
+	// 1. Считаем общее количество
+	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + whereClause
 	var total int
-	if err := countRow.Scan(&total); err != nil {
+	if err := config.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		total = 0
 	}
 
-	query += " ORDER BY p.year DESC, p.month DESC, p.network_name"
-
-	// Пагинация
+	// 2. Пагинация и сортировка
+	query := baseSelect + " ORDER BY p.year DESC, p.month DESC, p.network_name"
 	if params.PageSize <= 0 {
 		params.PageSize = 50
 	}
@@ -1027,10 +1001,9 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 			&r.Agreement1Status, &r.Agreement1Comment,
 			&r.Agreement2Status, &r.Agreement2Comment,
 			&r.HistoricalCount, &r.AvgHistoricalROI,
-		); err != nil {
-			continue
+		); err == nil {
+			results = append(results, r)
 		}
-		results = append(results, r)
 	}
 	if results == nil {
 		results = []models.ApprovalRow{}
@@ -1354,6 +1327,49 @@ func GetPromoComments(promoID int) ([]models.CommentRow, error) {
 		results = []models.CommentRow{}
 	}
 	return results, nil
+}
+
+// FetchPromoCommentsFallback парсит текстовое поле comments для старых записей,
+// где комментарии ещё не мигрированы в tbl_PromoComments.
+func FetchPromoCommentsFallback(promoID int) []models.CommentRow {
+	var raw sql.NullString
+	if err := config.DB.QueryRow(
+		"SELECT comments FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", promoID,
+	).Scan(&raw); err != nil || !raw.Valid || raw.String == "" {
+		return []models.CommentRow{}
+	}
+
+	// Формат: [DD.MM.YYYY роль|автор]: текст
+	re := regexp.MustCompile(`^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$`)
+	lines := strings.Split(raw.String, "\n")
+	result := make([]models.CommentRow, 0, len(lines))
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		m := re.FindStringSubmatch(line)
+		if m != nil {
+			// Парсим DD.MM.YYYY в ISO (RFC3339) для корректного отображения на фронтенде
+			isoDate := m[1]
+			if t, err := time.Parse("02.01.2006", m[1]); err == nil {
+				isoDate = t.Format(time.RFC3339)
+			}
+
+			result = append(result, models.CommentRow{
+				PromoID:     promoID,
+				UserName:    m[3],
+				Role:        m[2],
+				CommentText: m[4],
+				CreatedAt:   models.PtrString(isoDate),
+			})
+		} else if len(result) > 0 {
+			// Неструктурированная строка — приклеиваем к последнему сообщению
+			result[len(result)-1].CommentText += "\n" + line
+		}
+	}
+	return result
 }
 
 // InsertComment добавляет комментарий в tbl_PromoComments.

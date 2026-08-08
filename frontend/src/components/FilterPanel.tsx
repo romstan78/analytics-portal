@@ -12,6 +12,27 @@ const DEFAULT_MONTH_OPTIONS = [
   { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
 ];
 
+interface ExtraFilter {
+  type: 'year' | 'months';
+  field: string;
+  label: string;
+  options?: Array<{ label: string; value: number }>;
+}
+
+interface FilterPanelProps {
+  filters: Record<string, unknown>;
+  filterOptions?: Record<string, string[]>;
+  onFiltersChange: (filters: Record<string, unknown>) => void;
+  onSearch: () => void;
+  onReset: () => void;
+  loading?: boolean;
+  extraFilters?: ExtraFilter[];
+  persistFilters?: boolean;
+  onPersistChange?: ((checked: boolean) => void) | null;
+  visibleFilters?: string[] | null;
+  labels?: Record<string, string>;
+}
+
 export default function FilterPanel({
   filters,
   filterOptions = {},
@@ -24,7 +45,7 @@ export default function FilterPanel({
   onPersistChange = null,
   visibleFilters = null,
   labels = {},
-}) {
+}: FilterPanelProps) {
 
   const handleTextChange = (field) => (e) => onFiltersChange({ ...filters, [field]: e.target.value });
   const handleArrayChange = (field) => (_, newValue) => onFiltersChange({ ...filters, [field]: newValue });

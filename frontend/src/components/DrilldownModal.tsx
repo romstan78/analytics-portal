@@ -10,7 +10,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
 const COLORS = [
   '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c',
@@ -18,7 +18,27 @@ const COLORS = [
   '#d0ed57', '#ffc658', '#ff7300', '#8884d8', '#83a6ed',
 ];
 
-export default function DrilldownModal({ open, onClose, rowData, appliedFilters = {} }) {
+interface DrilldownRowData {
+  brandName?: string;
+  networkName?: string;
+}
+
+interface AppliedFilters {
+  yearFrom?: string;
+  yearTo?: string;
+  months?: number[];
+  segment?: string[];
+  channel?: string[];
+}
+
+interface DrilldownModalProps {
+  open: boolean;
+  onClose: () => void;
+  rowData: DrilldownRowData | null;
+  appliedFilters?: AppliedFilters;
+}
+
+export default function DrilldownModal({ open, onClose, rowData, appliedFilters = {} }: DrilldownModalProps) {
   const [tab, setTab] = useState(0);
   const [viewType, setViewType] = useState('total');
   const [data, setData] = useState([]);

@@ -6,6 +6,9 @@ func PtrFloat(v float64) *float64 { return &v }
 // PtrInt возвращает указатель на int.
 func PtrInt(v int) *int { return &v }
 
+// PtrString возвращает указатель на string.
+func PtrString(v string) *string { return &v }
+
 // ValFloat возвращает значение по указателю или 0.
 func ValFloat(p *float64) float64 {
 	if p == nil {

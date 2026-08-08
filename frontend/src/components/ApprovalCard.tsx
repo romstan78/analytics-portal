@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Box, Typography, Card, CardContent, CardActions,
   Button, Chip, Collapse, Grid, TextField,
@@ -11,6 +12,8 @@ import {
   Comment as CommentIcon,
 } from '@mui/icons-material';
 import { ALL_FIELDS_FLAT } from '../utils/cardFields';
+import { promoAPI } from '../api/promo';
+import type { CommentRow } from '../types/promo';
 
 const fmtNum = (v, decimals = 0) => {
   if (v == null) return '—';
@@ -49,24 +52,6 @@ const ROLE_ICONS = {
   'КАМ': '💬',
 };
 
-function parseComments(raw) {
-  if (!raw) return [];
-  const lines = raw.split('\n').filter(l => l.trim());
-  const messages = [];
-  const re = /^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$/;
-  for (const line of lines) {
-    const m = line.match(re);
-    if (m) messages.push({ date: m[1], role: m[2], author: m[3], text: m[4] });
-    else {
-      if (messages.length > 0 && messages[messages.length - 1].role === 'КАМ') {
-        messages[messages.length - 1].text += '\n' + line;
-      } else {
-        messages.push({ date: '', role: 'КАМ', author: '', text: line });
-      }
-    }
-  }
-  return messages;
-}
 
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting,
@@ -82,7 +67,15 @@ const ApprovalCard = memo(function ApprovalCard({
     return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !SIDEBAR_FIELDS.has(f.id));
   }, [visibleFields]);
 
-  const parsedComments = useMemo(() => parseComments(item.comments), [item.comments]);
+  const { data: comments = [], isLoading: commentsLoading } = useQuery<CommentRow[]>({
+    queryKey: ['comments', id],
+    queryFn: async () => {
+      const res = await promoAPI.getComments(id);
+      const list = (res as { data?: CommentRow[] })?.data;
+      return Array.isArray(list) ? list : [];
+    },
+    enabled: !!id,
+  });
 
   const [historyAnchor, setHistoryAnchor] = useState(null);
 
@@ -190,11 +183,13 @@ const ApprovalCard = memo(function ApprovalCard({
           )}
 
           {/* Кнопка просмотра истории (только если есть комментарии) */}
-          {parsedComments.length > 0 && (
+          {commentsLoading ? (
+            <CircularProgress size={14} sx={{ mb: 1 }} />
+          ) : comments.length > 0 && (
             <Button size="small"
               onClick={(e) => setHistoryAnchor(e.currentTarget)}
               sx={{ color: '#6366f1', textTransform: 'none', p: 0, mb: 1, justifyContent: 'flex-start', fontSize: '0.75rem' }}>
-              📝 История ({parsedComments.length})
+              📝 История ({comments.length})
             </Button>
           )}
 
@@ -211,10 +206,10 @@ const ApprovalCard = memo(function ApprovalCard({
             onClick={() => { onCommentOnly(id, localComment); setLocalComment(''); }} disabled={isSubmitting || !localComment.trim()}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
           <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
-            onClick={() => onOpenConfirm(id, 'согласовано', localComment)} disabled={isSubmitting}
+            onClick={() => { onOpenConfirm(id, 'согласовано', localComment); }} disabled={isSubmitting}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
           <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
-            onClick={() => onOpenConfirm(id, 'отклонено', localComment)} disabled={isSubmitting}
+            onClick={() => { onOpenConfirm(id, 'отклонено', localComment); }} disabled={isSubmitting}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
         </CardActions>
       </Card>
@@ -229,21 +224,21 @@ const ApprovalCard = memo(function ApprovalCard({
       >
         <Box sx={{ p: 2, maxWidth: 420, maxHeight: 360, overflowY: 'auto' }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>📝 История переписки</Typography>
-          {parsedComments.map((msg, idx) => {
+          {comments.map((msg) => {
             const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
             const icon = ROLE_ICONS[msg.role] || '💬';
             return (
-              <Box key={idx} sx={{
+              <Box key={msg.id} sx={{
                 px: 1.5, py: 1, borderRadius: 1.5, bgcolor: style.bg,
                 borderLeft: `3px solid ${style.dot}`,
                 mb: 0.75,
               }}>
                 <Typography sx={{ fontWeight: 600, color: style.text, fontSize: '0.72rem', mb: 0.25 }}>
-                  {icon} {msg.role === 'КАМ' ? msg.author : msg.role}
-                  {msg.date && ` · ${msg.date}`}
+                  {icon} {msg.role === 'КАМ' ? msg.user_name : msg.role}
+                  {msg.created_at && ` · ${new Date(msg.created_at).toLocaleDateString('ru-RU')}`}
                 </Typography>
                 <Typography sx={{ fontSize: '0.75rem', color: '#475569', whiteSpace: 'pre-wrap' }}>
-                  {msg.text}
+                  {msg.comment_text}
                 </Typography>
               </Box>
             );

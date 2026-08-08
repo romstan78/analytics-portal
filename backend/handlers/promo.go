@@ -212,12 +212,25 @@ func GetPromoCommentsHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный ID"})
 		return
 	}
-	comments, err := repository.GetPromoComments(promoID)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []models.CommentRow{}})
+
+	dbComments, _ := repository.GetPromoComments(promoID)
+	legacyComments := repository.FetchPromoCommentsFallback(promoID)
+
+	if len(dbComments) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": legacyComments})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": comments})
+
+	// Склеиваем историю: legacyComments содержит ВСЮ историю из текстового поля,
+	// dbComments содержит только новые записи из таблицы.
+	diff := len(legacyComments) - len(dbComments)
+	if diff > 0 {
+		combined := append(legacyComments[:diff], dbComments...)
+		c.JSON(http.StatusOK, gin.H{"data": combined})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": dbComments})
 }
 
 func GetPromoHistoryFiltered(c *gin.Context) {
@@ -275,6 +288,8 @@ func GetLastSKUData(c *gin.Context) {
 
 // ─── Save / Delete ─────────────────────────────────────────────────────────
 
+// applyJSONToRow — применяет входящий map[string]interface{} поверх существующей строки БД.
+// Поля id, deleted_at, updated_at, agreement*_status/comment, comments — пропускаются.
 func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	for k, v := range input {
 		if k == "id" || k == "deleted_at" || k == "updated_at" ||
@@ -284,8 +299,6 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 			continue
 		}
 
-		// Если значение nil или строка "<nil>" — пропускаем, чтобы не затирать поле мусором.
-		// Пустую строку обрабатываем ниже — она должна очищать строковые поля.
 		if v == nil {
 			continue
 		}
@@ -355,8 +368,6 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 			}
 		case "conditions":
 			r.Conditions = fmt.Sprint(v)
-		case "comments":
-			r.Comments = fmt.Sprint(v)
 		case "ecom_segment":
 			r.EcomSegment = fmt.Sprint(v)
 		case "status":
@@ -425,8 +436,18 @@ func SavePromo(c *gin.Context) {
 		if idInt > 0 {
 			row, err := repository.FetchExistingRow(idInt)
 			if err != nil {
-				config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Запись не найдена"})
+				if strings.Contains(err.Error(), "no rows") {
+					// Проверяем, существует ли запись вообще (без deleted_at)
+					var exists int
+					if err2 := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_PromoActivities WHERE id = ?", idInt).Scan(&exists); err2 == nil && exists > 0 {
+						c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Запись удалена (soft-delete). ID=%d", idInt)})
+					} else {
+						c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Запись ID=%d не найдена в БД %s", idInt, config.GetDBInfo())})
+					}
+				} else {
+					config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка чтения записи: " + err.Error()})
+				}
 				return
 			}
 
@@ -468,9 +489,9 @@ func SavePromo(c *gin.Context) {
 			}
 
 			// Пересчитываем вычисляемые поля
-			dto := services.DBRowToDTO(row)
-			calcCtx := services.EnrichFromRepo(&dto)
-			calc := services.CalculateFields(&dto, calcCtx)
+			recalcDTO := services.DBRowToDTO(row)
+			calcCtx := services.EnrichFromRepo(&recalcDTO)
+			calc := services.CalculateFields(&recalcDTO, calcCtx)
 			services.MergeCalculatedIntoDBRow(row, calc)
 
 			rowsAffected, err := repository.UpdatePromo(idInt, row, clientUpdatedAt)
@@ -609,6 +630,7 @@ func GetApprovals(c *gin.Context) {
 
 	results, total, err := repository.GetApprovals(params)
 	if err != nil {
+		config.Logger.Error("promo_approvals_failed", "error", err.Error(), "role", roleStr, "status", params.ApprovalStatus)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
 		return
 	}

@@ -18,7 +18,8 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
