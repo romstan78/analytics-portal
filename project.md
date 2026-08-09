@@ -101,3 +101,14 @@ frontend/           backend/
 - `backend/migrations/embed.go` — embedded FS (`//go:embed 0*.sql`)
 - `backend/migrations/001-004_*.sql` — goose-аннотации Up/Down, идемпотентность 003/004, убраны `GO`
 - `backend/config/db.go` — `ensureTables()` удалён → `goose.NewProvider(...).Up(...)`
+
+### Файлы за #4 (TS cleanup) + fix кэша фильтров
+- `frontend/tsconfig.json` — `noUnusedLocals: true`, `noUnusedParameters: true`
+- `frontend/src/*` — убраны неиспользуемые импорты/переменные (FilterPanel, PromoEditDialog, main, Home, PromoAnalysis, PromoApproval, calcUtils.test)
+- `backend/handlers/promo.go` — кэш фильтров только для дефолтной страницы
+
+### Fix: Internet Sales фильтры + #5 индекс + #6 Grid2
+- `backend/handlers/sales.go` — `sq.Select("1")` вместо `sq.Select()` (фильтры не применялись)
+- `backend/migrations/005_add_filter_index.sql` — индекс IX_PromoActivities_Filters
+- `frontend/src/components/ApprovalCard.tsx` — Grid item → size
+- `frontend/src/pages/PromoForm.tsx` — Grid item → size
