@@ -81,8 +81,10 @@ frontend/           backend/
 - [x] **#4:** TS: включить noUnusedLocals, noUnusedParameters после чистки
   - исправлено 15 TS6133-ошибок (неиспользуемые импорты, переменные, параметры) в 7 файлах
   - `tsconfig.json`: `noUnusedLocals: true`, `noUnusedParameters: true`
-- [ ] **#5:** Покрывающий индекс `IX_PromoActivities_Filters` на tbl_PromoActivities
-- [ ] **#6:** MUI Grid item → Grid2 (deprecation)
+- [x] **#5:** Покрывающий индекс `IX_PromoActivities_Filters` на tbl_PromoActivities
+  - Миграция 005: индекс на (deleted_at, year, month, kam, network_name, brand_as) + INCLUDE
+- [x] **#6:** MUI Grid item → Grid2 (deprecation)
+  - `ApprovalCard.tsx`, `PromoForm.tsx`: `<Grid item xs={N}>` → `<Grid size={N}>` / `<Grid size={{ xs: N, md: M }}>`
 
 ## Файлы, изменённые в последней сессии (09-10.08.2026)
 - `backend/repository/promo_repo.go` — DeletedFilter, RestorePromo, pending=IS NULL OR commented

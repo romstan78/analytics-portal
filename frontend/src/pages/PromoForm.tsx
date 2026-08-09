@@ -230,11 +230,11 @@ export default function PromoForm({ onSave }) {
   return (
     <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <Grid container spacing={2} sx={{ flex: 1, overflow: 'hidden' }}>
-        <Grid item xs={12} md={6} sx={{ height: '100%', overflow: 'auto' }}>
+        <Grid size={{ xs: 12, md: 6 }} sx={{ height: '100%', overflow: 'auto' }}>
           <Paper sx={{ p: 2, height: '100%' }}>
             <Typography variant="h6" sx={{ mb: 1 }}>Новое промо</Typography>
             <Grid container spacing={1.5}>
-              <Grid item xs={6}>
+              <Grid size={6}>
                 <Stack spacing={1.5}>
                   <Autocomplete size="small" freeSolo options={allNetworkOptions} value={form.network_name || ''}
                     onChange={(_, v) => setForm(prev => ({ ...prev, network_name: v || '', kam: '' }))}
@@ -272,7 +272,7 @@ export default function PromoForm({ onSave }) {
                   <NumberField label={requiredLabel('Цена контракта')} value={form.contract_price} onChange={updateForm('contract_price')} />
                 </Stack>
               </Grid>
-              <Grid item xs={6}>
+              <Grid size={6}>
                 <Stack spacing={1.5}>
                   <TextField label={requiredLabel('Условия')} size="small" fullWidth multiline rows={4} value={form.conditions}
                     onChange={(e) => setForm(prev => ({ ...prev, conditions: e.target.value }))} />
@@ -301,7 +301,7 @@ export default function PromoForm({ onSave }) {
             </Grid>
           </Paper>
         </Grid>
-        <Grid item xs={12} md={6} sx={{ height: '100%' }}>
+        <Grid size={{ xs: 12, md: 6 }} sx={{ height: '100%' }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 1 }}>
             <Paper sx={{ p: 2, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>

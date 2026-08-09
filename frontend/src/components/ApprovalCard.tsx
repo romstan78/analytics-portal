@@ -114,7 +114,7 @@ const ApprovalCard = memo(function ApprovalCard({
           {visibleData.length > 0 && (
             <Grid container spacing={1.5} sx={{ mb: 1 }}>
               {visibleData.map(fieldConfig => (
-                <Grid item xs={6} key={fieldConfig.id}>
+                <Grid size={6} key={fieldConfig.id}>
                   <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
                   <Typography variant="body2" sx={{
                     fontWeight: 600,
