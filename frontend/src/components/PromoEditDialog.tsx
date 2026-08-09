@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Button, Box, Typography, TextField, Grid, Paper, Dialog, DialogTitle,
+  Button, Box, Typography, TextField, Paper, Dialog, DialogTitle,
   DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip,
   CircularProgress,
 } from '@mui/material';
@@ -63,26 +63,6 @@ const AgreementChip = ({ label, value }) => {
   );
 };
 
-// ─── Подсветка согласований ────────────────────────────────────────────────
-const renderAgreementSx = (value) => {
-  if (value == null || value === '' || value === '0') return {};
-  const v = String(value).toLowerCase();
-  if (v.startsWith('согласовано')) return { 
-    '& .MuiOutlinedInput-input': { color: '#16a34a', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#16a34a' },
-    '& .MuiInputBase-root': { bgcolor: '#f0fdf4' },
-  };
-  if (v.startsWith('отклонено')) return { 
-    '& .MuiOutlinedInput-input': { color: '#dc2626', fontWeight: 600 },
-    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#dc2626' },
-    '& .MuiInputBase-root': { bgcolor: '#fef2f2' },
-  };
-  return { 
-    '& .MuiOutlinedInput-input': { color: '#6366f1', fontStyle: 'italic' },
-    '& .MuiInputBase-root': { bgcolor: '#eef2ff' },
-  };
-};
-
 // ─── Компонент ─────────────────────────────────────────────────────────────
 // Цвета по ролям (для отображения истории)
 const ROLE_COLORS = {
@@ -115,8 +95,8 @@ interface PromoEditDialogProps {
 
 export default function PromoEditDialog({
   open, onClose, form, setForm, recalcPlan, recalcActual,
-  onSave, onDelete, saving, deleting,
-  meta, allSkuOptions, allNetworkOptions, investmentTypes,
+  onSave, onDelete, saving,
+  meta, allSkuOptions, investmentTypes,
   role,
 }: PromoEditDialogProps) {
   const queryClient = useQueryClient();

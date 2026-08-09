@@ -1,6 +1,6 @@
 import {
   TextField, Stack, Autocomplete,
-  FormControlLabel, Checkbox, ListItemText, Button, Box
+  FormControlLabel, Checkbox, ListItemText, Button
 } from '@mui/material';
 
 const DEFAULT_MONTH_OPTIONS = [

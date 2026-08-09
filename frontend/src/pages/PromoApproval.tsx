@@ -8,7 +8,7 @@ import {
   Checkbox, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination,
   Drawer, Accordion, AccordionSummary, AccordionDetails,
-  FormControlLabel, InputAdornment, IconButton,
+  FormControlLabel, InputAdornment,
 } from '@mui/material';
 import {
   ViewModule as CardIcon,

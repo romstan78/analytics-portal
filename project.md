@@ -78,7 +78,9 @@ frontend/           backend/
   - `backend/migrations/embed.go` — embedded FS (`//go:embed 0*.sql`, seed_users.sql исключён)
   - `ensureTables()` удалён, миграции через `goose.NewProvider(...).Up(...)` на временном соединении
   - проверки: `go build ./...` ✅, `go vet ./...` ✅, `go test` ✅ (27/30 PASS, 3 FAIL — предсуществующие ожидания 500→404)
-- [ ] **#4:** TS: включить noUnusedLocals, noUnusedParameters после чистки
+- [x] **#4:** TS: включить noUnusedLocals, noUnusedParameters после чистки
+  - исправлено 15 TS6133-ошибок (неиспользуемые импорты, переменные, параметры) в 7 файлах
+  - `tsconfig.json`: `noUnusedLocals: true`, `noUnusedParameters: true`
 - [ ] **#5:** Покрывающий индекс `IX_PromoActivities_Filters` на tbl_PromoActivities
 - [ ] **#6:** MUI Grid item → Grid2 (deprecation)
 

@@ -36,11 +36,15 @@ func GetPromoFilters(c *gin.Context) {
 		Statuses:    c.QueryArray("status"),
 	}
 
-	// Кэшируем только если фильтры по году/месяцу не заданы (дефолтная страница)
+	// Кэшируем только дефолтную страницу (без фильтров, кроме года/месяца)
+	hasContentFilters := len(params.Kams) > 0 || len(params.Brands) > 0 || len(params.SKUs) > 0 ||
+		len(params.Networks) > 0 || len(params.Mechanics) > 0 || len(params.Statuses) > 0
 	cacheKey := "filters:" + params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
-	if cached, ok := config.FiltersCache.Get(cacheKey); ok {
-		c.JSON(http.StatusOK, cached)
-		return
+	if !hasContentFilters {
+		if cached, ok := config.FiltersCache.Get(cacheKey); ok {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
 	}
 
 	baseWhere, baseArgs := repository.BuildBaseWhere(params)
@@ -101,7 +105,9 @@ func GetPromoFilters(c *gin.Context) {
 		"channel":      resChannel,
 	}
 
-	config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
+	if !hasContentFilters {
+		config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
+	}
 
 	c.JSON(http.StatusOK, result)
 }

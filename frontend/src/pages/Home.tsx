@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Card, CardActionArea, CardContent, Button } from '@mui/material';
+import { Box, Typography, Card, CardActionArea, Button } from '@mui/material';
 import { 
   BarChart as BarChartIcon, 
   ListAlt as ListAltIcon, 

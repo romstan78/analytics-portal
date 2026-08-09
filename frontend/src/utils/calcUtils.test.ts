@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calcPlan, calcActual, type PlanInput, type ActualInput } from './calcUtils';
+import { calcPlan, calcActual } from './calcUtils';
 
 describe('calcPlan', () => {
   it('рассчитывает plan_promo_rub = units * price', () => {
