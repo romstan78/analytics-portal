@@ -1,5 +1,6 @@
--- Migration: разделение agreement1/agreement2 на status + comment
--- Заменить CHARINDEX-парсинг на нормальные колонки.
+-- +goose Up
+-- Migration: разделение agreement1/agreement2 на status + comment.
+-- Заменяет CHARINDEX-парсинг на нормальные колонки.
 
 -- Добавляем новые колонки (если ещё не добавлены)
 IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement1_status') IS NULL
@@ -10,7 +11,6 @@ IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_status') IS NULL
     ALTER TABLE dbo.tbl_PromoActivities ADD agreement2_status NVARCHAR(20) NULL;
 IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_comment') IS NULL
     ALTER TABLE dbo.tbl_PromoActivities ADD agreement2_comment NVARCHAR(MAX) NULL;
-GO
 
 -- Миграция существующих данных: парсим старые текстовые поля
 -- approved: начинается с "согласовано"
@@ -67,3 +67,15 @@ WHERE agreement2 IS NOT NULL
 
 -- После миграции старые колонки можно оставить для обратной совместимости,
 -- но бэкенд должен писать в новые поля.
+
+-- +goose Down
+-- Необратимая миграция данных: старые колонки agreement1/agreement2
+-- остаются в таблице для обратной совместимости, новые — можно удалить.
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement1_status') IS NOT NULL
+    ALTER TABLE dbo.tbl_PromoActivities DROP COLUMN agreement1_status;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement1_comment') IS NOT NULL
+    ALTER TABLE dbo.tbl_PromoActivities DROP COLUMN agreement1_comment;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_status') IS NOT NULL
+    ALTER TABLE dbo.tbl_PromoActivities DROP COLUMN agreement2_status;
+IF COL_LENGTH('dbo.tbl_PromoActivities', 'agreement2_comment') IS NOT NULL
+    ALTER TABLE dbo.tbl_PromoActivities DROP COLUMN agreement2_comment;

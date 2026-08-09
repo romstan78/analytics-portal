@@ -48,7 +48,6 @@ frontend/           backend/
 
 ## Известные проблемы
 1. **`npx tsc --noEmit`** — предсуществующие TS-ошибки (implicit any, MUI Grid deprecated props)
-2. **ensureTables()** — ручная инициализация таблиц, нужно заменить на goose/golang-migrate
 
 ## Выполненные изменения (10.08.2026)
 
@@ -71,7 +70,14 @@ frontend/           backend/
 ## План действий (приоритет)
 - [x] **#1:** Кнопка восстановления soft-deleted записей в таблице
 - [x] **#2:** Проверить обновление комментариев КАМ после сохранения в PromoEditDialog
-- [ ] **#3:** goose/golang-migrate вместо ensureTables()
+- [x] **#3:** goose/golang-migrate вместо ensureTables()
+  - установлен `github.com/pressly/goose/v3` (go 1.25.0 → 1.25.7 в go.mod)
+  - заменён драйвер: `denisenkom/go-mssqldb` → `microsoft/go-mssqldb` v1.10.0
+  - два соединения: `"sqlserver"` (goose, @pN-плейсхолдеры) и `"mssql"` (squirrel, ?-плейсхолдеры)
+  - миграции 001-004: goose-аннотации `-- +goose Up/Down`, `;` на внешних стейтментах, без `;` внутри `BEGIN...END`
+  - `backend/migrations/embed.go` — embedded FS (`//go:embed 0*.sql`, seed_users.sql исключён)
+  - `ensureTables()` удалён, миграции через `goose.NewProvider(...).Up(...)` на временном соединении
+  - проверки: `go build ./...` ✅, `go vet ./...` ✅, `go test` ✅ (27/30 PASS, 3 FAIL — предсуществующие ожидания 500→404)
 - [ ] **#4:** TS: включить noUnusedLocals, noUnusedParameters после чистки
 - [ ] **#5:** Покрывающий индекс `IX_PromoActivities_Filters` на tbl_PromoActivities
 - [ ] **#6:** MUI Grid item → Grid2 (deprecation)
@@ -85,3 +91,9 @@ frontend/           backend/
 - `frontend/src/pages/PromoAnalysis.tsx` — селект "Состояние" (admin only), подсветка deleted строк
 - `frontend/src/components/PromoEditDialog.tsx` — кнопка восстановления, refetchQueries для комментариев
 - `frontend/src/hooks/usePromoForm.ts` — deleted_at в PromoFormValues
+
+### Файлы за #3 (goose-миграции)
+- `backend/go.mod` / `backend/go.sum` — добавлен `github.com/pressly/goose/v3`, go 1.25.0 → 1.25.7
+- `backend/migrations/embed.go` — embedded FS (`//go:embed 0*.sql`)
+- `backend/migrations/001-004_*.sql` — goose-аннотации Up/Down, идемпотентность 003/004, убраны `GO`
+- `backend/config/db.go` — `ensureTables()` удалён → `goose.NewProvider(...).Up(...)`

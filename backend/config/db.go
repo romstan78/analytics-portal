@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -8,7 +9,10 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	"backend/migrations"
+
+	_ "github.com/microsoft/go-mssqldb"
+	"github.com/pressly/goose/v3"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -46,6 +50,30 @@ func Init() {
 	slog.SetDefault(Logger)
 
 	var err error
+
+	// ── Миграции goose (временное соединение "sqlserver") ───────────
+	// Драйвер microsoft/go-mssqldb регистрирует два имени:
+	//   - "mssql":     авто-конвертация ? и :N → @pN (для squirrel)
+	//   - "sqlserver": ожидает готовые @pN (используется goose)
+	migrateDB, err := sql.Open("sqlserver", buildConnString())
+	if err != nil {
+		Logger.Error("migrations_db_failed", "error", err.Error())
+		log.Fatalf("Ошибка подключения БД для миграций: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectMSSQL, migrateDB, migrations.FS)
+	if err != nil {
+		migrateDB.Close()
+		Logger.Error("migrations_provider_failed", "error", err.Error())
+		log.Fatalf("Ошибка инициализации миграций: %v", err)
+	}
+	if _, err := provider.Up(context.Background()); err != nil {
+		migrateDB.Close()
+		Logger.Error("migrations_up_failed", "error", err.Error())
+		log.Fatalf("Ошибка применения миграций: %v", err)
+	}
+	migrateDB.Close()
+
+	// ── Основной пул соединений (squirrel, бизнес-логика) ────────────
 	DB, err = sql.Open("mssql", buildConnString())
 	if err != nil {
 		Logger.Error("db_connection_failed", "error", err.Error())
@@ -62,47 +90,5 @@ func Init() {
 		log.Fatalf("Нет соединения с БД: %v", err)
 	}
 
-	// Авто-создание таблиц, если их нет (миграции без отдельного тула)
-	ensureTables()
-
 	Logger.Info("db_connected", "host", os.Getenv("DB_SERVER"), "database", os.Getenv("DB_NAME"))
-}
-
-// ensureTables создаёт таблицы, если они ещё не существуют в БД.
-func ensureTables() {
-	execDDL := func(query string) {
-		if _, err := DB.Exec(query); err != nil {
-			Logger.Warn("ddl_exec_warning", "error", err.Error())
-		}
-	}
-
-	// Таблица комментариев
-	execDDL(`IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'tbl_PromoComments' AND TABLE_SCHEMA = 'dbo')
-		CREATE TABLE dbo.tbl_PromoComments (
-			id BIGINT IDENTITY PRIMARY KEY,
-			promo_id INT NOT NULL,
-			user_name NVARCHAR(100) NOT NULL,
-			role NVARCHAR(50) NOT NULL,
-			comment_text NVARCHAR(MAX) NOT NULL,
-			created_at DATETIME DEFAULT GETDATE(),
-			CONSTRAINT FK_PromoComments_Promo FOREIGN KEY (promo_id) REFERENCES dbo.tbl_PromoActivities(id)
-		)`)
-	execDDL(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PromoComments_promo_id')
-		CREATE INDEX IX_PromoComments_promo_id ON dbo.tbl_PromoComments(promo_id)`)
-
-	// Таблица аудита
-	execDDL(`IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'tbl_AuditLog' AND TABLE_SCHEMA = 'dbo')
-		CREATE TABLE dbo.tbl_AuditLog (
-			id BIGINT IDENTITY PRIMARY KEY,
-			entity_type NVARCHAR(50) NOT NULL DEFAULT 'promo',
-			entity_id INT NOT NULL,
-			user_name NVARCHAR(100) NOT NULL,
-			action_type NVARCHAR(20) NOT NULL,
-			changed_fields NVARCHAR(MAX),
-			created_at DATETIME DEFAULT GETDATE()
-		)`)
-	execDDL(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AuditLog_entity')
-		CREATE INDEX IX_AuditLog_entity ON dbo.tbl_AuditLog(entity_type, entity_id)`)
-	execDDL(`IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AuditLog_created')
-		CREATE INDEX IX_AuditLog_created ON dbo.tbl_AuditLog(created_at DESC)`)
 }
