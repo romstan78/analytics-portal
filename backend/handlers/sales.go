@@ -87,7 +87,7 @@ type salesFilter struct {
 // Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
 // Использует squirrel Query Builder для безопасного построения SQL.
 func buildSalesWhere(f salesFilter) (string, []interface{}) {
-	q := sq.Select().PlaceholderFormat(sq.Question)
+	q := sq.Select("1").PlaceholderFormat(sq.Question)
 
 	// Базовое условие
 	q = q.Where("n.metric_value != 0 AND n.metric_value IS NOT NULL")
@@ -176,8 +176,12 @@ func buildSalesWhere(f salesFilter) (string, []interface{}) {
 		})
 	}
 
-	sql, args, _ := q.ToSql()
-	// squirrel генерирует "SELECT * WHERE ...", нам нужна только WHERE-часть
+	sql, args, err := q.ToSql()
+	if err != nil {
+		config.Logger.Error("buildSalesWhere_ToSql_failed", "error", err.Error())
+		return "", nil
+	}
+	// squirrel генерирует "SELECT 1 WHERE ...", нам нужна только WHERE-часть
 	whereIdx := strings.Index(sql, "WHERE")
 	if whereIdx >= 0 {
 		return " " + sql[whereIdx:], args
