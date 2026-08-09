@@ -108,15 +108,16 @@ func GetPromoFilters(c *gin.Context) {
 
 func GetPromoData(c *gin.Context) {
 	params := repository.PromoFilterParams{
-		YearFromStr: c.Query("yearFrom"),
-		YearToStr:   c.Query("yearTo"),
-		Months:      c.QueryArray("months"),
-		Kams:        c.QueryArray("kam"),
-		Brands:      c.QueryArray("brand"),
-		SKUs:        c.QueryArray("sku"),
-		Networks:    c.QueryArray("network_name"),
-		Mechanics:   c.QueryArray("mechanics"),
-		Statuses:    c.QueryArray("status"),
+		YearFromStr:   c.Query("yearFrom"),
+		YearToStr:     c.Query("yearTo"),
+		Months:        c.QueryArray("months"),
+		Kams:          c.QueryArray("kam"),
+		Brands:        c.QueryArray("brand"),
+		SKUs:          c.QueryArray("sku"),
+		Networks:      c.QueryArray("network_name"),
+		Mechanics:     c.QueryArray("mechanics"),
+		Statuses:      c.QueryArray("status"),
+		DeletedFilter: c.DefaultQuery("deletedFilter", ""),
 	}
 	channels := c.QueryArray("channel")
 
@@ -605,6 +606,32 @@ func DeletePromo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }
 
+func RestorePromo(c *gin.Context) {
+	id := c.Param("id")
+
+	if _, err := strconv.Atoi(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный ID"})
+		return
+	}
+
+	idInt, _ := strconv.Atoi(id)
+	rows, err := repository.RestorePromo(idInt)
+	if err != nil {
+		config.Logger.Error("promo_restore_failed", "id", id, "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Restore failed"})
+		return
+	}
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Запись не найдена или не была удалена"})
+		return
+	}
+
+	usernameVal, _ := c.Get("username")
+	_ = repository.InsertAuditLog(idInt, fmt.Sprint(usernameVal), "RESTORE", "")
+	config.Logger.Info("promo_restored", "id", id, "user", fmt.Sprint(usernameVal), "timestamp", time.Now().Format(time.RFC3339))
+	c.JSON(http.StatusOK, gin.H{"message": "Restored"})
+}
+
 // ─── Approvals ─────────────────────────────────────────────────────────────
 
 func GetApprovals(c *gin.Context) {
@@ -934,7 +961,7 @@ func ExportPromoExcel(c *gin.Context) {
 			&r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline,
 			&r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments,
 			&r.PromoChannel, &r.Agreement1, &r.Agreement2,
-			&r.Date, &r.CreatedAt, &r.UpdatedAt,
+			&r.Date, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt,
 		); err != nil {
 			continue
 		}

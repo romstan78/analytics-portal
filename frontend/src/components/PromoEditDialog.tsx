@@ -5,7 +5,7 @@ import {
   DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip,
   CircularProgress,
 } from '@mui/material';
-import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon, RestoreOutlined as RestoreIcon } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
 import type { CommentRow } from '../types/promo';
 import type { PromoFormValues } from '../hooks/usePromoForm';
@@ -123,6 +123,7 @@ export default function PromoEditDialog({
   const [editingFields, setEditingFields] = useState({});
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [newComment, setNewComment] = useState('');
+  const [restoring, setRestoring] = useState(false);
 
   const { data: comments = [], isLoading: commentsLoading } = useQuery<CommentRow[]>({
     queryKey: ['comments', form?.id],
@@ -178,7 +179,7 @@ export default function PromoEditDialog({
     } else {
       await onSave(newComment.trim() || null);
       setNewComment('');
-      queryClient.invalidateQueries({ queryKey: ['comments', form?.id] });
+      queryClient.refetchQueries({ queryKey: ['comments', form?.id] });
     }
   };
 
@@ -186,7 +187,22 @@ export default function PromoEditDialog({
     setConfirmOpen(false);
     await onSave(newComment.trim() || null);
     setNewComment('');
-    queryClient.invalidateQueries({ queryKey: ['comments', form?.id] });
+    queryClient.refetchQueries({ queryKey: ['comments', form?.id] });
+  };
+
+  const handleRestore = async () => {
+    if (!form?.id) return;
+    setRestoring(true);
+    try {
+      await promoAPI.restore(form.id);
+      queryClient.invalidateQueries({ queryKey: ['promoData'] });
+      onClose();
+      window.location.reload(); // перезагружаем страницу для корректного обновления всех данных
+    } catch (err) {
+      alert('Ошибка восстановления: ' + ((err as { message?: string })?.message || String(err)));
+    } finally {
+      setRestoring(false);
+    }
   };
 
   return (
@@ -358,7 +374,15 @@ export default function PromoEditDialog({
   
       {/* Уменьшили отступы в подвале (py: 1.5) */}
       <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
-        <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {form?.deleted_at ? (
+            <Button color="warning" variant="contained" startIcon={<RestoreIcon />} onClick={handleRestore} disabled={restoring}>
+              {restoring ? 'Восстановление...' : 'Восстановить (отмена удаления)'}
+            </Button>
+          ) : (
+            <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
+          )}
+        </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button variant="outlined" onClick={onClose}>Закрыть</Button>
           <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving}>

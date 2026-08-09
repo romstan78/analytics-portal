@@ -22,10 +22,19 @@ type PromoFilterParams struct {
 	YearFromStr, YearToStr                            string
 	Months                                            []string
 	Kams, Brands, SKUs, Networks, Mechanics, Statuses []string
+	DeletedFilter                                     string // "" = active only, "deleted" = deleted only, "all" = both
 }
 
 func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
-	where := "WHERE deleted_at IS NULL"
+	where := "WHERE 1=1"
+	switch params.DeletedFilter {
+	case "deleted":
+		where += " AND deleted_at IS NOT NULL"
+	case "all":
+		// no filter
+	default:
+		where += " AND deleted_at IS NULL"
+	}
 	args := []interface{}{}
 	if params.YearFromStr != "" {
 		if y, _ := strconv.Atoi(params.YearFromStr); true {
@@ -127,7 +136,15 @@ func GetChannelFilterValues(baseWhere string, baseArgs []interface{}, filters ma
 // buildPromoWhere строит WHERE-условие для dbo.tbl_PromoActivities (алиас p).
 // Собирает WHERE вручную с плейсхолдерами ? для надёжности.
 func buildPromoWhere(params PromoFilterParams, channels []string) (string, []interface{}) {
-	where := "p.deleted_at IS NULL"
+	where := "1=1"
+	switch params.DeletedFilter {
+	case "deleted":
+		where += " AND p.deleted_at IS NOT NULL"
+	case "all":
+		// no filter
+	default:
+		where += " AND p.deleted_at IS NULL"
+	}
 	args := []interface{}{}
 
 	if params.YearFromStr != "" {
@@ -188,7 +205,7 @@ func buildPromoWhere(params PromoFilterParams, channels []string) (string, []int
 }
 
 // promoRowsColumns — общий список колонок для GetPromoRowsStream и GetPromoRows.
-const promoRowsColumns = `p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, m.channel`
+const promoRowsColumns = `p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, p.deleted_at, m.channel`
 
 // GetPromoRowsStream возвращает sql.Rows для потокового чтения (Excel export).
 // Вызывающая сторона обязана закрыть rows (defer rows.Close()).
@@ -227,7 +244,7 @@ func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize in
 	var results []models.PromoRow
 	for rows.Next() {
 		var r models.PromoRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.PromoChannel); err != nil {
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.PromoChannel); err != nil {
 			continue
 		}
 		results = append(results, r)
@@ -865,6 +882,14 @@ func SoftDeletePromo(id int) (int64, error) {
 	return result.RowsAffected()
 }
 
+func RestorePromo(id int) (int64, error) {
+	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = NULL, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NOT NULL", id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // ─── Approvals ──────────────────────────────────────────────────────────────
 
 type ApprovalParams struct {
@@ -936,7 +961,7 @@ func buildApprovalsWhere(params ApprovalParams) (string, []interface{}) {
 	}
 	switch params.ApprovalStatus {
 	case "pending":
-		where += " AND " + statusField + " IS NULL"
+		where += " AND (" + statusField + " IS NULL OR " + statusField + " = 'commented')"
 	case "commented":
 		where += " AND " + statusField + " = 'commented'"
 	case "approved":
@@ -1438,7 +1463,7 @@ func buildApprovalWhere(params ApprovalFilterParams, excludeCol string) (string,
 
 	switch params.ApprovalStatus {
 	case "pending":
-		where += fmt.Sprintf(" AND %s IS NULL", filterStatusField)
+		where += fmt.Sprintf(" AND (%s IS NULL OR %s = 'commented')", filterStatusField, filterStatusField)
 	case "commented":
 		where += fmt.Sprintf(" AND %s = 'commented'", filterStatusField)
 	case "approved":
@@ -1494,9 +1519,9 @@ func GetApprovalKAMs(field string) ([]string, error) {
 	query := fmt.Sprintf(`
 		SELECT DISTINCT p.kam 
 		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL AND %s IS NULL AND p.kam IS NOT NULL
+		WHERE p.deleted_at IS NULL AND (%s IS NULL OR %s = 'commented') AND p.kam IS NOT NULL
 		ORDER BY p.kam
-	`, field)
+	`, field, field)
 
 	rows, err := config.DB.Query(query)
 	if err != nil {
@@ -1522,11 +1547,11 @@ func GetApprovalNetworks(field, kam string) ([]string, error) {
 		SELECT DISTINCT p.network_name 
 		FROM dbo.tbl_PromoActivities p 
 		WHERE p.deleted_at IS NULL 
-		  AND %s IS NULL 
+		  AND (%s IS NULL OR %s = 'commented') 
 		  AND p.kam = ? 
 		  AND p.network_name IS NOT NULL
 		ORDER BY p.network_name
-	`, field)
+	`, field, field)
 
 	rows, err := config.DB.Query(query, kam)
 	if err != nil {
@@ -1552,10 +1577,10 @@ func GetApprovalBrands(field, kam, network string) ([]string, error) {
 		SELECT DISTINCT p.brand_as 
 		FROM dbo.tbl_PromoActivities p 
 		WHERE p.deleted_at IS NULL 
-		  AND %s IS NULL 
+		  AND (%s IS NULL OR %s = 'commented') 
 		  AND p.kam = ? 
 		  AND p.brand_as IS NOT NULL
-	`, field)
+	`, field, field)
 	args := []interface{}{kam}
 
 	if network != "" {

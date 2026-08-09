@@ -94,7 +94,7 @@ func main() {
 	}
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     corsOrigins,
-		AllowMethods:     []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	}))
@@ -139,8 +139,9 @@ func main() {
 		api.POST("/promo/approve", handlers.ApprovePromo)
 		api.POST("/promo/approve/batch", handlers.BatchApprovePromo)
 
-		// Промо — удаление (только admin)
+		// Промо — удаление/восстановление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)
+		api.PATCH("/promo/:id/restore", middleware.RoleRequired("admin"), handlers.RestorePromo)
 	}
 
 	config.Logger.Info("server_starting", "port", "8080")

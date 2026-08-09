@@ -41,6 +41,7 @@ export interface PromoFormValues {
   status: string;
   ecom_segment?: string;
   updated_at: string | null;
+  deleted_at: string | null;
 }
 
 // ─── Пустая форма ──────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@ export const EMPTY_FORM: PromoFormValues = {
   total_pharmacies: '', promo_pharmacies: '',
   status: '',
   updated_at: null, // ← для optimistic locking
+  deleted_at: null,
 };
 
 interface SaveResult {
@@ -121,6 +123,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
       ds_number: (row.ds_number as string) ?? '',
       status: (row.status as string) ?? '',
       updated_at: (row.updated_at as string) ?? null,
+      deleted_at: (row.deleted_at as string) ?? null,
     });
     setEditMode(true);
   }, []);

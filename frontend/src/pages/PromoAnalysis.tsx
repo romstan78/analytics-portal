@@ -4,7 +4,7 @@ import {
   Button, Stack, Box, Typography, CircularProgress, Tabs, Tab, 
   Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Menu, MenuItem, Checkbox, ListItemText, Divider,
-  Tooltip, Chip,
+  Tooltip, Chip, FormControlLabel,
 } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { 
@@ -127,6 +127,8 @@ export default function PromoAnalysis({ role }) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [deletedFilter, setDeletedFilter] = useState(''); // "" = active, "deleted" = only deleted, "all" = both
+  const [restoringId, setRestoringId] = useState<number | null>(null);
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
@@ -142,7 +144,12 @@ export default function PromoAnalysis({ role }) {
   // ─── Фильтры и данные ─────────────────────────────────────────────────
   const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta } = 
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
-  const { rows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedFilters);
+  const appliedWithDeleted = useMemo(() => ({
+    ...appliedFilters,
+    ...(deletedFilter ? { deletedFilter } : {}),
+  }), [appliedFilters, deletedFilter]);
+
+  const { rows, loading: dataLoading, error: dataError, refetch } = usePromoData(appliedWithDeleted);
 
   // После редактирования/удаления/создания — сбрасываем кеш и перезапрашиваем
   const handleDataChanged = useCallback(() => {
@@ -221,6 +228,26 @@ export default function PromoAnalysis({ role }) {
   );
 
   const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
+
+  const getRowClassName = (params) => {
+    const row = params.row as Record<string, unknown>;
+    return row.deleted_at != null ? 'deleted-row' : '';
+  };
+
+  const handleRestoreFromDialog = async () => {
+    if (!form?.id) return;
+    setRestoringId(form.id);
+    try {
+      await promoAPI.restore(form.id);
+      setEditDialogOpen(false);
+      handleDataChanged();
+      setSnackbar({ open: true, message: 'Запись восстановлена', severity: 'success' });
+    } catch (err: any) {
+      setSnackbar({ open: true, message: 'Ошибка восстановления: ' + (err?.message || String(err)), severity: 'error' });
+    } finally {
+      setRestoringId(null);
+    }
+  };
 
   // ─── Экспорт CSV (клиентский — выгружаем отфильтрованные строки) ─────
   const handleExportCSV = () => {
@@ -340,6 +367,20 @@ export default function PromoAnalysis({ role }) {
               InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
               sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
             <Box sx={{ flex: 1 }} />
+            {role === 'admin' && (
+              <TextField
+                select
+                size="small"
+                value={deletedFilter}
+                onChange={(e) => setDeletedFilter(e.target.value)}
+                label="Состояние"
+                sx={{ width: 140, mr: 1, '& .MuiInputBase-input': { fontSize: '0.8rem', py: 0.75 }, '& .MuiInputLabel-root': { fontSize: '0.8rem' } }}
+              >
+                <MenuItem value="">Актуальные</MenuItem>
+                <MenuItem value="all">Все</MenuItem>
+                <MenuItem value="deleted">Удалённые</MenuItem>
+              </TextField>
+            )}
             {rows.length > 0 && (
               <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
                 {rows.length.toLocaleString('ru-RU')} строк
@@ -367,11 +408,13 @@ export default function PromoAnalysis({ role }) {
             }}
             pageSizeOptions={[25, 50, 100]} 
             disableRowSelectionOnClick 
+            getRowClassName={getRowClassName}
             sx={{ 
               flex: 1, border: '1px solid #e2e8f0', borderTop: 'none',
               borderRadius: '0 0 12px 12px',
               '& .MuiDataGrid-columnHeaders': { borderRadius: 0 },
-              '& .MuiDataGrid-row': { cursor: 'pointer' } 
+              '& .MuiDataGrid-row': { cursor: 'pointer' },
+              '& .deleted-row': { bgcolor: '#f1f5f9', opacity: 0.7 },
             }} 
           />
         </Box>

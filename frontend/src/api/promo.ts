@@ -132,6 +132,14 @@ export const promoAPI = {
       return r.json();
     }),
 
+  // Восстановление soft-deleted записи
+  restore: (id: number): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/${id}/restore`, { method: 'PATCH' }).then(async r => {
+      const json = await r.json();
+      if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка восстановления' } as ApiError;
+      return json;
+    }),
+
   // Комментарии к промо
   getComments: (promoId: number): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/comments/${promoId}`).then(r => r.json()),
