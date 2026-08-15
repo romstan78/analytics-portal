@@ -649,12 +649,22 @@ func RestorePromo(c *gin.Context) {
 
 // ─── Approvals ─────────────────────────────────────────────────────────────
 
-func agreementNumberForRole(role string) (int, bool) {
+func agreementNumberForRole(role, requestedRole string) (int, bool) {
 	switch role {
 	case "agreement1":
 		return 1, true
 	case "agreement2":
 		return 2, true
+	case "admin":
+		// Администратор может работать на любом этапе, но обязан явно
+		// передать выбранный этап. Это исключает неявное изменение agreement1.
+		switch requestedRole {
+		case "agreement1":
+			return 1, true
+		case "agreement2":
+			return 2, true
+		}
+		return 0, false
 	default:
 		return 0, false
 	}
@@ -663,16 +673,18 @@ func agreementNumberForRole(role string) (int, bool) {
 func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	if _, ok := agreementNumberForRole(roleStr); !ok {
+	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
+	effectiveRole := fmt.Sprintf("agreement%d", agreementNum)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
 
 	params := repository.ApprovalParams{
-		Role:           roleStr,
+		Role:           effectiveRole,
 		KAM:            c.Query("kam"),
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		YearStr:        c.Query("year"),
@@ -697,22 +709,23 @@ func GetApprovals(c *gin.Context) {
 func ApprovePromo(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr)
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
-		return
-	}
-	field := fmt.Sprintf("agreement%d", agreementNum)
 
 	var req struct {
-		ID      int    `json:"id"`
-		Status  string `json:"status"`
-		Comment string `json:"comment"`
+		ID           int    `json:"id"`
+		Status       string `json:"status"`
+		Comment      string `json:"comment"`
+		ApprovalRole string `json:"approval_role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
 		return
 	}
+	agreementNum, ok := agreementNumberForRole(roleStr, req.ApprovalRole)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
+	field := fmt.Sprintf("agreement%d", agreementNum)
 
 	var status string
 	var comment string
@@ -768,10 +781,12 @@ func ApprovePromo(c *gin.Context) {
 func GetApprovalFilters(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	if _, ok := agreementNumberForRole(roleStr); !ok {
+	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
+	effectiveRole := fmt.Sprintf("agreement%d", agreementNum)
 
 	params := repository.ApprovalFilterParams{
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
@@ -781,7 +796,7 @@ func GetApprovalFilters(c *gin.Context) {
 		MechFilter:     c.Query("mechanics"),
 		YearStr:        c.Query("year"),
 		MonthStr:       c.Query("month"),
-		Role:           roleStr,
+		Role:           effectiveRole,
 	}
 
 	networks, brands, mechanics, kams, err := repository.GetApprovalFilters(params)
@@ -795,7 +810,7 @@ func GetApprovalFilters(c *gin.Context) {
 func GetApprovalKAMs(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr)
+	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
@@ -813,7 +828,7 @@ func GetApprovalKAMs(c *gin.Context) {
 func GetApprovalNetworks(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr)
+	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
@@ -837,7 +852,7 @@ func GetApprovalNetworks(c *gin.Context) {
 func GetApprovalBrands(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr)
+	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
@@ -864,19 +879,20 @@ func GetApprovalBrands(c *gin.Context) {
 func BatchApprovePromo(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr)
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
-		return
-	}
 
 	var req struct {
-		IDs     []int  `json:"ids"`
-		Status  string `json:"status"`
-		Comment string `json:"comment"`
+		IDs          []int  `json:"ids"`
+		Status       string `json:"status"`
+		Comment      string `json:"comment"`
+		ApprovalRole string `json:"approval_role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+	agreementNum, ok := agreementNumberForRole(roleStr, req.ApprovalRole)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
 	if len(req.IDs) == 0 {

@@ -62,6 +62,17 @@ async function fetchWithAuth(url: string, options: RequestInit = {}, timeout = 1
   return res;
 }
 
+async function parseJSONResponse(response: Response, fallbackMessage: string): Promise<unknown> {
+  const json = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    throw {
+      status: response.status,
+      message: typeof json.error === 'string' ? json.error : fallbackMessage,
+    } as ApiError;
+  }
+  return json;
+}
+
 // ─── Утилита: построение query string ──────────────────────────────────────
 function buildParams(filters: Record<string, unknown>): string {
   const params = new URLSearchParams();
@@ -77,6 +88,7 @@ function buildParams(filters: Record<string, unknown>): string {
 
 // ─── Типы для параметров API ───────────────────────────────────────────────
 export interface ApprovalParams {
+  approval_role?: 'agreement1' | 'agreement2';
   kam?: string;
   approval_status?: string;
   year?: string;
@@ -88,6 +100,7 @@ export interface ApprovalParams {
 }
 
 export interface ApprovalFiltersParams {
+  approval_role?: 'agreement1' | 'agreement2';
   approval_status?: string;
   kam?: string;
   network_name?: string;
@@ -179,20 +192,21 @@ export const promoAPI = {
   // ─── Согласование ──────────────────────────────────────────────────────
 
   // Список KAM'ов с промо на согласовании
-  getApprovalKAMs: (): Promise<unknown> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-kams`).then(r => r.json()),
+  getApprovalKAMs: (approvalRole?: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-kams?approval_role=${encodeURIComponent(approvalRole || '')}`).then(r => r.json()),
 
   // Сети для выбранного KAM (в согласовании)
-  getApprovalNetworks: (kam: string): Promise<unknown> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-networks?kam=${encodeURIComponent(kam)}`).then(r => r.json()),
+  getApprovalNetworks: (kam: string, approvalRole?: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-networks?kam=${encodeURIComponent(kam)}&approval_role=${encodeURIComponent(approvalRole || '')}`).then(r => r.json()),
 
   // Бренды для KAM + сети (в согласовании)
-  getApprovalBrands: (kam: string, network = ''): Promise<unknown> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}`).then(r => r.json()),
+  getApprovalBrands: (kam: string, network = '', approvalRole?: string): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}&approval_role=${encodeURIComponent(approvalRole || '')}`).then(r => r.json()),
 
   // Список промо на согласование
   getApprovals: (params: ApprovalParams & { page?: number; pageSize?: number } = {}): Promise<unknown> => {
     const qs = new URLSearchParams();
+    if (params.approval_role) qs.set('approval_role', params.approval_role);
     if (params.kam) qs.set('kam', params.kam);
     if (params.approval_status) qs.set('approval_status', params.approval_status);
     else qs.set('approval_status', 'pending');
@@ -204,12 +218,14 @@ export const promoAPI = {
     if (params.has_comments) qs.set('has_comments', '1');
     if (params.page !== undefined) qs.set('page', String(params.page));
     if (params.pageSize !== undefined) qs.set('pageSize', String(params.pageSize));
-    return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`).then(r => r.json());
+    return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`)
+      .then(r => parseJSONResponse(r, 'Ошибка загрузки промо на согласование'));
   },
 
   // Справочники сетей/брендов/механик для страницы согласования
   getApprovalFilters: (params: ApprovalFiltersParams = {}): Promise<unknown> => {
     const qs = new URLSearchParams();
+    if (params.approval_role) qs.set('approval_role', params.approval_role);
     qs.set('approval_status', params.approval_status || 'pending');
     if (params.kam) qs.set('kam', params.kam);
     if (params.network_name) qs.set('network_name', params.network_name);
@@ -217,14 +233,15 @@ export const promoAPI = {
     if (params.mechanics) qs.set('mechanics', params.mechanics);
     if (params.year) qs.set('year', params.year);
     if (params.month) qs.set('month', params.month);
-    return fetchWithAuth(`${API_BASE}/api/promo/approval-filters?${qs}`).then(r => r.json());
+    return fetchWithAuth(`${API_BASE}/api/promo/approval-filters?${qs}`)
+      .then(r => parseJSONResponse(r, 'Ошибка загрузки фильтров согласования'));
   },
 
   // Действие согласования: comment / согласовано / отклонено
-  approve: (id: number, status: string, comment = ''): Promise<unknown> =>
+  approve: (id: number, status: string, comment = '', approvalRole?: string): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/approve`, {
       method: 'POST',
-      body: JSON.stringify({ id, status, comment }),
+      body: JSON.stringify({ id, status, comment, approval_role: approvalRole }),
     }).then(async r => {
       const json = await r.json();
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;
@@ -232,10 +249,10 @@ export const promoAPI = {
     }),
 
   // Массовое согласование
-  batchApprove: (ids: number[], status: string, comment = ''): Promise<unknown> =>
+  batchApprove: (ids: number[], status: string, comment = '', approvalRole?: string): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
       method: 'POST',
-      body: JSON.stringify({ ids, status, comment }),
+      body: JSON.stringify({ ids, status, comment, approval_role: approvalRole }),
     }).then(async r => {
       const json = await r.json();
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;

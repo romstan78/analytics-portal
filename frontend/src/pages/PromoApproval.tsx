@@ -38,6 +38,8 @@ const APPROVAL_STATUSES = [
 
 export default function PromoApproval({ role, onDataChanged }) {
   const queryClient = useQueryClient();
+  const [adminApprovalRole, setAdminApprovalRole] = useState('agreement1');
+  const approvalRole = role === 'admin' ? adminApprovalRole : role;
   // Вид: cards | table
   const [viewMode, setViewMode] = useState('cards');
 
@@ -111,6 +113,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   // Загрузка справочников
   useEffect(() => {
     promoAPI.getApprovalFilters({
+      approval_role: approvalRole,
       approval_status: appliedStatus,
       kam: appliedKam,
       network_name: appliedNetwork,
@@ -126,7 +129,7 @@ export default function PromoApproval({ role, onDataChanged }) {
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
+  }, [approvalRole, appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
   // Загрузка данных
   const fetchApprovals = useCallback(async () => {
@@ -137,6 +140,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
     try {
       const data = await promoAPI.getApprovals({
+        approval_role: approvalRole,
         kam: appliedKam || undefined,
         approval_status: appliedStatus,
         year: appliedYear,
@@ -159,7 +163,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     } finally {
       if (currentFetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments, page, pageSize]);
+  }, [approvalRole, hasApplied, appliedKam, appliedStatus, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, appliedHasComments, page, pageSize]);
 
   useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
@@ -191,7 +195,7 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   const openConfirm = (id, status, comment) => {
     const item = approvals.find(a => a.id === id);
-    const statusField = role === 'agreement2' ? 'agreement2_status' : 'agreement1_status';
+    const statusField = approvalRole === 'agreement2' ? 'agreement2_status' : 'agreement1_status';
     const currentStatus = item?.[statusField] || 'pending';
 
     // Предупреждение: если статус уже approved/rejected и меняем его на согласовано/отклонено
@@ -211,7 +215,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     if (!id) return;
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
-      await promoAPI.approve(id, status, comment);
+      await promoAPI.approve(id, status, comment, approvalRole);
       // Инвалидируем кэш комментариев для этой карточки
       queryClient.invalidateQueries({ queryKey: ['comments', id] });
       // Инвалидируем approvals
@@ -240,7 +244,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const handleQuickAction = async (id, status, comment) => {
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
-      await promoAPI.approve(id, status, comment);
+      await promoAPI.approve(id, status, comment, approvalRole);
       // Инвалидируем кэш комментариев — useQuery в ApprovalCard перезапросит
       queryClient.invalidateQueries({ queryKey: ['comments', id] });
       // Инвалидируем approvals
@@ -288,7 +292,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       return next;
     });
     try {
-      await promoAPI.batchApprove(ids, status, '');
+      await promoAPI.batchApprove(ids, status, '', approvalRole);
       setApprovals(prev => prev.filter(a => !selectedIds.has(a.id)));
       setSelectedIds(new Set());
       setSnackbar({ open: true, message: `✅ ${ids.length} промо обновлено`, severity: 'success' });
@@ -323,6 +327,30 @@ export default function PromoApproval({ role, onDataChanged }) {
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
       {/* Sticky: фильтры + переключатель вида — закреплены при скролле */}
       <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: '#f5f7fa', pb: 2, pt: 2 }}>
+      {role === 'admin' && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Этап согласования:</Typography>
+            <ToggleButtonGroup
+              value={adminApprovalRole}
+              exclusive
+              size="small"
+              onChange={(_, nextRole) => {
+                if (!nextRole) return;
+                setAdminApprovalRole(nextRole);
+                setApprovals([]);
+                setSelectedIds(new Set());
+                setHasApplied(false);
+                setTotal(0);
+                setPage(0);
+              }}
+            >
+              <ToggleButton value="agreement1">Согласование 1</ToggleButton>
+              <ToggleButton value="agreement2">Согласование 2</ToggleButton>
+            </ToggleButtonGroup>
+          </Stack>
+        </Paper>
+      )}
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>🔍 Фильтры</Typography>
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center">

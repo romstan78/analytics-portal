@@ -303,7 +303,7 @@ export default function PromoAnalysis({ role }) {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Просмотр данных" />
         <Tab label="Новое промо" />
-        {(role === 'agreement1' || role === 'agreement2') && (
+        {(role === 'admin' || role === 'agreement1' || role === 'agreement2') && (
           <Tab label="Согласование" />
         )}
       </Tabs>
