@@ -2,6 +2,7 @@ package repository
 
 import (
 	"backend/config"
+	"database/sql"
 )
 
 // UserRecord — запись из tbl_Users.
@@ -20,9 +21,11 @@ func GetUserByUsername(username string) (*UserRecord, error) {
 		"SELECT id, username, password_hash, role FROM dbo.tbl_Users WHERE username = ? AND deleted_at IS NULL",
 		username,
 	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role)
-	if err != nil {
-		// sql.ErrNoRows — не ошибка, просто пользователь не найден
+	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &u, nil
 }

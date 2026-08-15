@@ -78,6 +78,9 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println(".env файл не найден")
 	}
+	if err := config.InitAuth(); err != nil {
+		log.Fatalf("Ошибка конфигурации авторизации: %v", err)
+	}
 
 	config.Init()
 	defer config.DB.Close()
@@ -103,6 +106,7 @@ func main() {
 	// ─── Публичный роут (без авторизации) ────────────────────────────────
 	r.POST("/api/auth/login", handlers.Login)
 	r.POST("/api/auth/refresh", handlers.RefreshToken)
+	r.POST("/api/auth/logout", handlers.Logout)
 
 	// ─── Защищённые роуты (требуется JWT) ────────────────────────────────
 	api := r.Group("/api")
@@ -131,13 +135,13 @@ func main() {
 
 		// Промо — запись (agreement1, agreement2, admin)
 		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
-		api.GET("/promo/approvals", handlers.GetApprovals)
-		api.GET("/promo/approval-filters", handlers.GetApprovalFilters)
-		api.GET("/promo/approval-kams", handlers.GetApprovalKAMs)
-		api.GET("/promo/approval-networks", handlers.GetApprovalNetworks)
-		api.GET("/promo/approval-brands", handlers.GetApprovalBrands)
-		api.POST("/promo/approve", handlers.ApprovePromo)
-		api.POST("/promo/approve/batch", handlers.BatchApprovePromo)
+		api.GET("/promo/approvals", middleware.RoleRequired("agreement1", "agreement2"), handlers.GetApprovals)
+		api.GET("/promo/approval-filters", middleware.RoleRequired("agreement1", "agreement2"), handlers.GetApprovalFilters)
+		api.GET("/promo/approval-kams", middleware.RoleRequired("agreement1", "agreement2"), handlers.GetApprovalKAMs)
+		api.GET("/promo/approval-networks", middleware.RoleRequired("agreement1", "agreement2"), handlers.GetApprovalNetworks)
+		api.GET("/promo/approval-brands", middleware.RoleRequired("agreement1", "agreement2"), handlers.GetApprovalBrands)
+		api.POST("/promo/approve", middleware.RoleRequired("agreement1", "agreement2"), handlers.ApprovePromo)
+		api.POST("/promo/approve/batch", middleware.RoleRequired("agreement1", "agreement2"), handlers.BatchApprovePromo)
 
 		// Промо — удаление/восстановление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)

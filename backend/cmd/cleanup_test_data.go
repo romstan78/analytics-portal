@@ -6,12 +6,18 @@ import (
 	"backend/config"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	godotenv.Load()
+	_ = godotenv.Load()
+	dbName := strings.ToLower(strings.TrimSpace(os.Getenv("DB_NAME")))
+	if !strings.HasSuffix(dbName, "_test") {
+		log.Fatalf("ОТКАЗ: очистка разрешена только для DB_NAME с суффиксом _test, получено %q", dbName)
+	}
 	config.Init()
 	defer config.DB.Close()
 

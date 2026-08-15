@@ -19,11 +19,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-func init() {
-	godotenv.Load()
-	config.Init()
-}
-
 func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.Default()
@@ -41,17 +36,27 @@ func setupRouter() *gin.Engine {
 // cleanupTestData удаляет тестовые записи после прогона.
 // Защита: выполняется только если имя БД содержит _test или _dev.
 func cleanupTestData() {
-	dbName := os.Getenv("DB_NAME")
-	if !strings.Contains(dbName, "_test") && !strings.Contains(dbName, "_dev") {
-		fmt.Println("[WARN] cleanupTestData: БД не тестовая, пропускаем DELETE")
+	dbName := strings.ToLower(strings.TrimSpace(os.Getenv("DB_NAME")))
+	if !strings.HasSuffix(dbName, "_test") {
+		fmt.Println("[WARN] cleanupTestData: БД не оканчивается на _test, пропускаем DELETE")
 		return
 	}
 	config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'")
 }
 
 func TestMain(m *testing.M) {
+	_ = godotenv.Load()
+	dbName := strings.ToLower(strings.TrimSpace(os.Getenv("DB_NAME")))
+	if !strings.HasSuffix(dbName, "_test") {
+		fmt.Fprintf(os.Stderr, "ОТКАЗ: интеграционные тесты разрешены только для DB_NAME с суффиксом _test, получено %q\n", dbName)
+		os.Exit(2)
+	}
+	config.Init()
 	code := m.Run()
 	cleanupTestData()
+	if config.DB != nil {
+		_ = config.DB.Close()
+	}
 	os.Exit(code)
 }
 

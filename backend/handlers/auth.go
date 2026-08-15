@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"os"
 	"time"
 
 	"backend/config"
@@ -47,15 +46,16 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Refresh token в httpOnly secure cookie
+	// Refresh token в httpOnly cookie. SameSite явно задан для защиты refresh endpoint.
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		"refresh_token",
 		refreshToken,
-		int(7*24*time.Hour.Seconds()),    // 7 дней
-		"/api/auth",                      // доступен только для /api/auth/*
-		"",                               // domain (текущий)
-		os.Getenv("ENV") == "production", // secure (true только на проде)
-		true,                             // httpOnly
+		int(7*24*time.Hour.Seconds()), // 7 дней
+		"/api/auth",                   // доступен только для /api/auth/*
+		"",                            // domain (текущий)
+		config.IsProduction(),         // secure (true только на проде)
+		true,                          // httpOnly
 	)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -77,33 +77,65 @@ func RefreshToken(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
 		return
 	}
+	user, err := repository.GetUserByUsername(claims.Username)
+	if err != nil {
+		config.Logger.Error("refresh_user_lookup_failed", "error", err.Error(), "username", claims.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+	if user == nil {
+		clearRefreshCookie(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "пользователь деактивирован"})
+		return
+	}
 
-	newAccessToken, err := config.GenerateAccessToken(claims.Username, claims.Role)
+	newAccessToken, err := config.GenerateAccessToken(user.Username, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
 		return
 	}
 
-	newRefreshToken, err := config.GenerateRefreshToken(claims.Username, claims.Role)
+	newRefreshToken, err := config.GenerateRefreshToken(user.Username, user.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
 		return
 	}
 
 	// Обновляем refresh cookie
+	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		"refresh_token",
 		newRefreshToken,
 		int(7*24*time.Hour.Seconds()),
 		"/api/auth",
 		"",
-		os.Getenv("ENV") == "production",
+		config.IsProduction(),
 		true,
 	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":    newAccessToken,
-		"username": claims.Username,
-		"role":     claims.Role,
+		"username": user.Username,
+		"role":     user.Role,
 	})
+}
+
+func clearRefreshCookie(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(
+		"refresh_token",
+		"",
+		-1,
+		"/api/auth",
+		"",
+		config.IsProduction(),
+		true,
+	)
+}
+
+// Logout очищает refresh cookie. Серверное хранение и отзыв refresh-сессий
+// будут добавлены отдельным этапом; текущий endpoint закрывает браузерную сессию.
+func Logout(c *gin.Context) {
+	clearRefreshCookie(c)
+	c.Status(http.StatusNoContent)
 }

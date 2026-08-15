@@ -9,7 +9,13 @@ export const getUsername = (): string | null => localStorage.getItem('username')
 export const getRole = (): string | null => localStorage.getItem('role');
 
 export const logout = (): void => {
-  localStorage.removeItem('token');
+	void fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8080'}/api/auth/logout`, {
+		method: 'POST',
+		credentials: 'include',
+	}).catch(() => {
+		// Локальный logout не должен зависеть от доступности backend.
+	});
+	localStorage.removeItem('token');
   localStorage.removeItem('username');
   localStorage.removeItem('role');
   window.dispatchEvent(new CustomEvent('auth:logout'));

@@ -12,6 +12,14 @@ LOCAL_DATABASE = os.getenv('LOCAL_DATABASE', 'local_project_db')
 LOCAL_UID = os.getenv('LOCAL_UID')
 LOCAL_PWD = os.getenv('LOCAL_PWD')
 
+# Текущая реализация импорта небезопасна для данных: она отключена до перехода
+# на staging-таблицу и одну атомарную MERGE-транзакцию.
+if os.getenv('ALLOW_UNSAFE_PROMO_IMPORT') != 'I_UNDERSTAND_THIS_IMPORT_IS_UNSAFE':
+    raise SystemExit(
+        'Импорт промо временно отключён: текущий алгоритм может удалить активные записи. '
+        'Используйте восстановленную безопасную версию со staging-таблицей.'
+    )
+
 EXCEL_FILE = input("Введите путь к Excel-файлу с данными промо: ").strip().strip("'\"")
 
 COLUMN_MAPPING = {

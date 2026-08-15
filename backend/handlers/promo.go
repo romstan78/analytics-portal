@@ -113,6 +113,15 @@ func GetPromoFilters(c *gin.Context) {
 }
 
 func GetPromoData(c *gin.Context) {
+	deletedFilter := c.DefaultQuery("deletedFilter", "")
+	if deletedFilter != "" {
+		role, _ := c.Get("role")
+		if fmt.Sprint(role) != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "просмотр удалённых записей доступен только администратору"})
+			return
+		}
+	}
+
 	params := repository.PromoFilterParams{
 		YearFromStr:   c.Query("yearFrom"),
 		YearToStr:     c.Query("yearTo"),
@@ -123,7 +132,7 @@ func GetPromoData(c *gin.Context) {
 		Networks:      c.QueryArray("network_name"),
 		Mechanics:     c.QueryArray("mechanics"),
 		Statuses:      c.QueryArray("status"),
-		DeletedFilter: c.DefaultQuery("deletedFilter", ""),
+		DeletedFilter: deletedFilter,
 	}
 	channels := c.QueryArray("channel")
 
@@ -640,9 +649,24 @@ func RestorePromo(c *gin.Context) {
 
 // ─── Approvals ─────────────────────────────────────────────────────────────
 
+func agreementNumberForRole(role string) (int, bool) {
+	switch role {
+	case "agreement1":
+		return 1, true
+	case "agreement2":
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
 func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
+	if _, ok := agreementNumberForRole(roleStr); !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
@@ -673,11 +697,12 @@ func GetApprovals(c *gin.Context) {
 func ApprovePromo(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-
-	field := "agreement1"
-	if roleStr == "agreement2" {
-		field = "agreement2"
+	agreementNum, ok := agreementNumberForRole(roleStr)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
 	}
+	field := fmt.Sprintf("agreement%d", agreementNum)
 
 	var req struct {
 		ID      int    `json:"id"`
@@ -720,11 +745,6 @@ func ApprovePromo(c *gin.Context) {
 		return
 	}
 
-	agreementNum := 1
-	if roleStr == "agreement2" {
-		agreementNum = 2
-	}
-
 	usernameVal, _ := c.Get("username")
 	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue, fmt.Sprint(usernameVal)); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
@@ -748,6 +768,10 @@ func ApprovePromo(c *gin.Context) {
 func GetApprovalFilters(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
+	if _, ok := agreementNumberForRole(roleStr); !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
 
 	params := repository.ApprovalFilterParams{
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
@@ -771,10 +795,12 @@ func GetApprovalFilters(c *gin.Context) {
 func GetApprovalKAMs(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	field := "agreement1"
-	if roleStr == "agreement2" {
-		field = "agreement2"
+	agreementNum, ok := agreementNumberForRole(roleStr)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
 	}
+	field := fmt.Sprintf("agreement%d", agreementNum)
 
 	kams, err := repository.GetApprovalKAMs(field)
 	if err != nil {
@@ -787,16 +813,18 @@ func GetApprovalKAMs(c *gin.Context) {
 func GetApprovalNetworks(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
+	agreementNum, ok := agreementNumberForRole(roleStr)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
 	kam := c.Query("kam")
 	if kam == "" {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
 	}
 
-	field := "p.agreement1"
-	if roleStr == "agreement2" {
-		field = "p.agreement2"
-	}
+	field := fmt.Sprintf("p.agreement%d", agreementNum)
 
 	networks, err := repository.GetApprovalNetworks(field, kam)
 	if err != nil {
@@ -809,6 +837,11 @@ func GetApprovalNetworks(c *gin.Context) {
 func GetApprovalBrands(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
+	agreementNum, ok := agreementNumberForRole(roleStr)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
 	kam := c.Query("kam")
 	network := c.Query("network_name")
 	if kam == "" {
@@ -816,10 +849,7 @@ func GetApprovalBrands(c *gin.Context) {
 		return
 	}
 
-	field := "p.agreement1"
-	if roleStr == "agreement2" {
-		field = "p.agreement2"
-	}
+	field := fmt.Sprintf("p.agreement%d", agreementNum)
 
 	brands, err := repository.GetApprovalBrands(field, kam, network)
 	if err != nil {
@@ -834,10 +864,10 @@ func GetApprovalBrands(c *gin.Context) {
 func BatchApprovePromo(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-
-	agreementNum := 1
-	if roleStr == "agreement2" {
-		agreementNum = 2
+	agreementNum, ok := agreementNumberForRole(roleStr)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
 	}
 
 	var req struct {

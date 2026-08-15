@@ -25,7 +25,7 @@ func AuthRequired() gin.HandlerFunc {
 			return
 		}
 
-		claims, err := config.ValidateToken(parts[1])
+		claims, err := config.ValidateAccessToken(parts[1])
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "токен недействителен"})
 			c.Abort()

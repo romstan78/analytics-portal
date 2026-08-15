@@ -1,12 +1,27 @@
+import os
+
 import pyodbc
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- ДАННЫЕ ЛОКАЛЬНОЙ БАЗЫ ---
-LOCAL_SERVER = 'localhost' # Потому что Docker запущен локально
-LOCAL_DATABASE = 'local_project_db'  # Имя новой БД, куда были скопированы данные
-LOCAL_UID = 'sa'           # Стандартный суперпользователь MSSQL
-LOCAL_PWD = '$#Pfchfytw_0378' # Пароль, который ты указал в docker-compose.yml
+LOCAL_SERVER = os.getenv('LOCAL_SERVER')
+LOCAL_DATABASE = os.getenv('LOCAL_DATABASE', 'local_project_db')
+LOCAL_UID = os.getenv('LOCAL_UID')
+LOCAL_PWD = os.getenv('LOCAL_PWD')
 LOCAL_TABLE_NAME = 'dbo.tbl_EcomSalesConsolidated' # Имя таблицы в локальной БД
 # ---------------------------------------------
+
+missing_env = [
+    name for name, value in {
+        'LOCAL_SERVER': LOCAL_SERVER,
+        'LOCAL_UID': LOCAL_UID,
+        'LOCAL_PWD': LOCAL_PWD,
+    }.items() if not value
+]
+if missing_env:
+    raise SystemExit(f"Не заданы обязательные переменные окружения: {', '.join(missing_env)}")
 
 def connect_to_mssql(server, database, uid, pwd):
     """Функция для подключения к MSSQL"""
