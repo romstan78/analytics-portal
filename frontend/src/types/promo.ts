@@ -84,6 +84,7 @@ export interface ApprovalRow {
   status: string | null;
   historical_count: number;
   avg_historical_roi: number | null;
+  updated_at: string;
 }
 
 export interface FilterOptions {

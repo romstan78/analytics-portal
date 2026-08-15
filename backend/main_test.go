@@ -4,6 +4,7 @@ import (
 	"backend/config"
 	"backend/handlers"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -30,6 +31,19 @@ func setupRouter() *gin.Engine {
 	// Интернет-продажи
 	r.GET("/api/data", handlers.GetData)
 	r.GET("/api/filters", handlers.GetFilterOptions)
+	return r
+}
+
+func setupApprovalRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("role", "agreement1")
+		c.Set("username", "stage4-test")
+		c.Next()
+	})
+	r.POST("/api/promo/approve", handlers.ApprovePromo)
+	r.POST("/api/promo/approve/batch", handlers.BatchApprovePromo)
 	return r
 }
 
@@ -740,5 +754,129 @@ func TestSavePromo_OptimisticLocking(t *testing.T) {
 		t.Errorf("Ожидался 409 Conflict, получен %d. Ответ: %s", w2.Code, w2.Body.String())
 	} else {
 		t.Logf("✅ Optimistic locking работает: первый OK с новым updated_at=%v, второй 409 со старым=%v", newUpdatedAt, updatedAt)
+	}
+}
+
+func TestApprovePromoRejectsStaleVersion(t *testing.T) {
+	router := setupApprovalRouter()
+	id, updatedAt := saveTestPromoWithMeta(t, setupRouter(), "TEST-APPROVAL-LOCK-001")
+
+	payload := map[string]interface{}{
+		"id": id, "updated_at": updatedAt, "status": "согласовано",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/approve", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("первое согласование: ожидался 200, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	var approvedVersion string
+	if err := config.DB.QueryRow(
+		"SELECT CONVERT(NVARCHAR(23), updated_at, 121) FROM dbo.tbl_PromoActivities WHERE id = ?", id,
+	).Scan(&approvedVersion); err != nil {
+		t.Fatalf("не удалось прочитать updated_at: %v", err)
+	}
+	if _, err := config.DB.Exec(
+		"UPDATE dbo.tbl_PromoActivities SET updated_at = DATEADD(second, 1, updated_at) WHERE id = ?", id,
+	); err != nil {
+		t.Fatalf("не удалось имитировать конкурентное изменение: %v", err)
+	}
+
+	payload["updated_at"] = approvedVersion
+	payload["status"] = "отклонено"
+	body, _ = json.Marshal(payload)
+	req, _ = http.NewRequest("POST", "/api/promo/approve", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("устаревшая версия: ожидался 409, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	var status sql.NullString
+	if err := config.DB.QueryRow(
+		"SELECT agreement1_status FROM dbo.tbl_PromoActivities WHERE id = ?", id,
+	).Scan(&status); err != nil {
+		t.Fatalf("не удалось прочитать статус: %v", err)
+	}
+	if status.String != "approved" {
+		t.Fatalf("статус после конфликта = %q, ожидался approved", status.String)
+	}
+}
+
+func TestBatchApproveRollsBackEntireBatchOnConflict(t *testing.T) {
+	router := setupApprovalRouter()
+	createRouter := setupRouter()
+	id1, version1 := saveTestPromoWithMeta(t, createRouter, "TEST-BATCH-LOCK-001")
+	id2, version2 := saveTestPromoWithMeta(t, createRouter, "TEST-BATCH-LOCK-002")
+
+	if _, err := config.DB.Exec(
+		"UPDATE dbo.tbl_PromoActivities SET updated_at = DATEADD(second, 1, updated_at) WHERE id = ?", id2,
+	); err != nil {
+		t.Fatalf("не удалось имитировать конкурентное изменение: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"id": id1, "updated_at": version1},
+			{"id": id2, "updated_at": version2},
+		},
+		"status": "согласовано",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/approve/batch", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("пакет с конфликтом: ожидался 409, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	var changed int
+	if err := config.DB.QueryRow(
+		"SELECT COUNT(*) FROM dbo.tbl_PromoActivities WHERE id IN (?, ?) AND agreement1_status IS NOT NULL",
+		id1, id2,
+	).Scan(&changed); err != nil {
+		t.Fatalf("не удалось проверить откат пакета: %v", err)
+	}
+	if changed != 0 {
+		t.Fatalf("после конфликта обновлено записей: %d, ожидался полный откат", changed)
+	}
+}
+
+func TestBatchApproveUpdatesEntireValidBatch(t *testing.T) {
+	router := setupApprovalRouter()
+	createRouter := setupRouter()
+	id1, version1 := saveTestPromoWithMeta(t, createRouter, "TEST-BATCH-SUCCESS-001")
+	id2, version2 := saveTestPromoWithMeta(t, createRouter, "TEST-BATCH-SUCCESS-002")
+
+	payload := map[string]interface{}{
+		"items": []map[string]interface{}{
+			{"id": id1, "updated_at": version1},
+			{"id": id2, "updated_at": version2},
+		},
+		"status": "согласовано",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/promo/approve/batch", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("валидный пакет: ожидался 200, получен %d: %s", w.Code, w.Body.String())
+	}
+
+	var approved int
+	if err := config.DB.QueryRow(
+		"SELECT COUNT(*) FROM dbo.tbl_PromoActivities WHERE id IN (?, ?) AND agreement1_status = 'approved'",
+		id1, id2,
+	).Scan(&approved); err != nil {
+		t.Fatalf("не удалось проверить пакет: %v", err)
+	}
+	if approved != 2 {
+		t.Fatalf("согласовано записей: %d, ожидалось 2", approved)
 	}
 }

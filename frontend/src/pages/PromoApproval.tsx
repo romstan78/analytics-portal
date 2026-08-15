@@ -100,7 +100,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchDialog, setBatchDialog] = useState({ open: false, status: '' });
 
-  const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, status: '', comment: '', warning: false, currentStatus: 'pending' });
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, id: null, updatedAt: '', status: '', comment: '', warning: false, currentStatus: 'pending' });
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [refreshFilters, setRefreshFilters] = useState(0);
   const fetchIdRef = useRef(0);
@@ -203,19 +203,19 @@ export default function PromoApproval({ role, onDataChanged }) {
                          (status === 'согласовано' || status === 'отклонено');
 
     setConfirmDialog({
-      open: true, id, status, comment: comment || '',
+      open: true, id, updatedAt: item?.updated_at || '', status, comment: comment || '',
       warning: needsWarning,
       currentStatus,
     });
   };
 
   const handleConfirmedAction = async () => {
-    const { id, status, comment } = confirmDialog;
-    setConfirmDialog({ open: false, id: null, status: '', comment: '', warning: false, currentStatus: 'pending' });
+    const { id, updatedAt, status, comment } = confirmDialog;
+    setConfirmDialog({ open: false, id: null, updatedAt: '', status: '', comment: '', warning: false, currentStatus: 'pending' });
     if (!id) return;
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
-      await promoAPI.approve(id, status, comment, approvalRole);
+      await promoAPI.approve(id, updatedAt, status, comment, approvalRole);
       // Инвалидируем кэш комментариев для этой карточки
       queryClient.invalidateQueries({ queryKey: ['comments', id] });
       // Инвалидируем approvals
@@ -226,6 +226,9 @@ export default function PromoApproval({ role, onDataChanged }) {
       if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+      if (err?.status === 409 || err?.status === 404) {
+        await fetchApprovals();
+      }
     } finally {
       setSubmitting(prev => ({ ...prev, [id]: false }));
     }
@@ -233,9 +236,6 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   const handleCommentOnly = (id, comment) => {
     if (!comment || !comment.trim()) return;
-    setConfirmDialog({ open: true, id, status: 'comment', comment });
-    // Сразу выполняем действие, т.к. для "comment" не нужен доп. диалог подтверждения
-    setConfirmDialog({ open: false, id: null, status: '', comment: '' });
     handleQuickAction(id, 'comment', comment);
   };
 
@@ -244,16 +244,21 @@ export default function PromoApproval({ role, onDataChanged }) {
   const handleQuickAction = async (id, status, comment) => {
     setSubmitting(prev => ({ ...prev, [id]: true }));
     try {
-      await promoAPI.approve(id, status, comment, approvalRole);
+      const item = approvals.find(a => a.id === id);
+      await promoAPI.approve(id, item?.updated_at || '', status, comment, approvalRole);
       // Инвалидируем кэш комментариев — useQuery в ApprovalCard перезапросит
       queryClient.invalidateQueries({ queryKey: ['comments', id] });
       // Инвалидируем approvals
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       setSnackbar({ open: true, message: '✅ Комментарий сохранён', severity: 'success' });
       setRefreshFilters(prev => prev + 1);
+      await fetchApprovals();
       if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+      if (err?.status === 409 || err?.status === 404) {
+        await fetchApprovals();
+      }
     } finally {
       setSubmitting(prev => ({ ...prev, [id]: false }));
     }
@@ -284,6 +289,16 @@ export default function PromoApproval({ role, onDataChanged }) {
   };
   const handleBatchAction = async () => {
     const ids = Array.from(selectedIds);
+    const items = ids.map(id => {
+      const approval = approvals.find(a => a.id === id);
+      return { id, updated_at: approval?.updated_at || '' };
+    });
+    if (items.some(item => !item.updated_at)) {
+      setBatchDialog({ open: false, status: '' });
+      setSnackbar({ open: true, message: '❌ Версия одной из карточек не определена. Обновите список', severity: 'error' });
+      await fetchApprovals();
+      return;
+    }
     const status = batchDialog.status;
     setBatchDialog({ open: false, status: '' });
     setSubmitting(prev => {
@@ -292,7 +307,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       return next;
     });
     try {
-      await promoAPI.batchApprove(ids, status, '', approvalRole);
+      await promoAPI.batchApprove(items, status, '', approvalRole);
       setApprovals(prev => prev.filter(a => !selectedIds.has(a.id)));
       setSelectedIds(new Set());
       setSnackbar({ open: true, message: `✅ ${ids.length} промо обновлено`, severity: 'success' });
@@ -300,6 +315,10 @@ export default function PromoApproval({ role, onDataChanged }) {
       if (onDataChanged) onDataChanged();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
+      if (err?.status === 409) {
+        setSelectedIds(new Set());
+        await fetchApprovals();
+      }
     } finally {
       setSubmitting(prev => {
         const next = { ...prev };
@@ -577,7 +596,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       )}
 
       {/* Диалог подтверждения (единичное действие) */}
-      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, status: '', warning: false, currentStatus: 'pending' })}>
+      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, id: null, updatedAt: '', status: '', warning: false, currentStatus: 'pending' })}>
         <DialogTitle>
           {confirmDialog.status === 'comment' ? 'Сохранить комментарий?' :
            confirmDialog.warning ? '⚠️ Изменение статуса согласования' : 'Подтвердите действие'}
@@ -596,7 +615,7 @@ export default function PromoApproval({ role, onDataChanged }) {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmDialog({ open: false, id: null, status: '', warning: false, currentStatus: 'pending' })}>Отмена</Button>
+          <Button onClick={() => setConfirmDialog({ open: false, id: null, updatedAt: '', status: '', warning: false, currentStatus: 'pending' })}>Отмена</Button>
           <Button variant="contained"
             color={confirmDialog.status === 'отклонено' ? 'error' : confirmDialog.status === 'comment' ? 'primary' : 'success'}
             onClick={handleConfirmedAction}>

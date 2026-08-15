@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -712,12 +713,17 @@ func ApprovePromo(c *gin.Context) {
 
 	var req struct {
 		ID           int    `json:"id"`
+		UpdatedAt    string `json:"updated_at"`
 		Status       string `json:"status"`
 		Comment      string `json:"comment"`
 		ApprovalRole string `json:"approval_role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+	if req.ID <= 0 || strings.TrimSpace(req.UpdatedAt) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id и updated_at обязательны"})
 		return
 	}
 	agreementNum, ok := agreementNumberForRole(roleStr, req.ApprovalRole)
@@ -759,8 +765,22 @@ func ApprovePromo(c *gin.Context) {
 	}
 
 	usernameVal, _ := c.Get("username")
-	if err := repository.ApprovePromoWithStatus(agreementNum, req.ID, status, comment, legacyValue, fmt.Sprint(usernameVal)); err != nil {
+	if err := repository.ApprovePromoWithStatus(
+		agreementNum, req.ID, req.UpdatedAt, status, comment, legacyValue, fmt.Sprint(usernameVal),
+	); err != nil {
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
+		var conflictErr *repository.ApprovalConflictError
+		if errors.As(err, &conflictErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "Карточка была изменена. Обновите список и повторите действие",
+				"conflict_ids": conflictErr.IDs,
+			})
+			return
+		}
+		if errors.Is(err, repository.ErrPromoNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Промо не найдено или удалено"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
 	}
@@ -881,7 +901,10 @@ func BatchApprovePromo(c *gin.Context) {
 	roleStr := fmt.Sprint(role)
 
 	var req struct {
-		IDs          []int  `json:"ids"`
+		Items []struct {
+			ID        int    `json:"id"`
+			UpdatedAt string `json:"updated_at"`
+		} `json:"items"`
 		Status       string `json:"status"`
 		Comment      string `json:"comment"`
 		ApprovalRole string `json:"approval_role"`
@@ -895,9 +918,27 @@ func BatchApprovePromo(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
-	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "ids не может быть пустым"})
+	if len(req.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "items не может быть пустым"})
 		return
+	}
+	if len(req.Items) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "за один запрос можно согласовать не более 500 промо"})
+		return
+	}
+	items := make([]repository.BatchApproveItem, 0, len(req.Items))
+	seenIDs := make(map[int]struct{}, len(req.Items))
+	for _, item := range req.Items {
+		if item.ID <= 0 || strings.TrimSpace(item.UpdatedAt) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "каждый элемент должен содержать id и updated_at"})
+			return
+		}
+		if _, exists := seenIDs[item.ID]; exists {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "id в пакете не должны повторяться"})
+			return
+		}
+		seenIDs[item.ID] = struct{}{}
+		items = append(items, repository.BatchApproveItem{ID: item.ID, UpdatedAt: item.UpdatedAt})
 	}
 
 	var status string
@@ -931,16 +972,26 @@ func BatchApprovePromo(c *gin.Context) {
 		return
 	}
 
-	rowsAffected, err := repository.BatchApprove(agreementNum, req.IDs, status, comment, legacyValue)
+	usernameVal, _ := c.Get("username")
+	rowsAffected, err := repository.BatchApprove(
+		agreementNum, items, status, comment, legacyValue, fmt.Sprint(usernameVal),
+	)
 	if err != nil {
-		config.Logger.Error("batch_approve_failed", "error", err.Error(), "count", len(req.IDs))
+		config.Logger.Error("batch_approve_failed", "error", err.Error(), "count", len(req.Items))
+		var conflictErr *repository.ApprovalConflictError
+		if errors.As(err, &conflictErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "Часть карточек была изменена или удалена. Пакет не применён",
+				"conflict_ids": conflictErr.IDs,
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
 	}
 
-	usernameVal, _ := c.Get("username")
 	config.Logger.Info("batch_approved",
-		"count", len(req.IDs),
+		"count", len(req.Items),
 		"affected", rowsAffected,
 		"status", status,
 		"user", fmt.Sprint(usernameVal),

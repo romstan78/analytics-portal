@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,36 @@ func TestScanPromoRowReturnsScanError(t *testing.T) {
 	}))
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ScanPromoRow() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestNormalizeBatchApproveItemsSortsAndRejectsDuplicates(t *testing.T) {
+	items, err := normalizeBatchApproveItems([]BatchApproveItem{
+		{ID: 20, UpdatedAt: "2026-08-16 01:00:00.000"},
+		{ID: 10, UpdatedAt: "2026-08-16 01:00:00.000"},
+	})
+	if err != nil {
+		t.Fatalf("normalizeBatchApproveItems() error = %v", err)
+	}
+	if items[0].ID != 10 || items[1].ID != 20 {
+		t.Fatalf("items are not sorted: %+v", items)
+	}
+
+	_, err = normalizeBatchApproveItems([]BatchApproveItem{
+		{ID: 10, UpdatedAt: "2026-08-16 01:00:00.000"},
+		{ID: 10, UpdatedAt: "2026-08-16 01:00:00.000"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate promo ID") {
+		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestAppendApprovalCommentPreservesHistoryAndAuthor(t *testing.T) {
+	got := appendApprovalComment("старый комментарий", "новый комментарий", "admin", 2)
+	if !strings.HasPrefix(got, "старый комментарий\n[") {
+		t.Fatalf("previous history was not preserved: %q", got)
+	}
+	if !strings.Contains(got, "согласование2|admin]: новый комментарий") {
+		t.Fatalf("author or approval level is missing: %q", got)
 	}
 }

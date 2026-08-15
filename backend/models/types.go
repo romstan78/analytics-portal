@@ -258,4 +258,5 @@ type ApprovalRow struct {
 	Status                *string  `json:"status"`
 	HistoricalCount       int      `json:"historical_count"`
 	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
+	UpdatedAt             string   `json:"updated_at"`
 }

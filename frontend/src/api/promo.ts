@@ -110,6 +110,11 @@ export interface ApprovalFiltersParams {
   month?: string;
 }
 
+export interface ApprovalItemVersion {
+  id: number;
+  updated_at: string;
+}
+
 // ─── API: Промо ────────────────────────────────────────────────────────────
 export const promoAPI = {
   // Справочники фильтров
@@ -238,10 +243,10 @@ export const promoAPI = {
   },
 
   // Действие согласования: comment / согласовано / отклонено
-  approve: (id: number, status: string, comment = '', approvalRole?: string): Promise<unknown> =>
+  approve: (id: number, updatedAt: string, status: string, comment = '', approvalRole?: string): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/approve`, {
       method: 'POST',
-      body: JSON.stringify({ id, status, comment, approval_role: approvalRole }),
+      body: JSON.stringify({ id, updated_at: updatedAt, status, comment, approval_role: approvalRole }),
     }).then(async r => {
       const json = await r.json();
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;
@@ -249,10 +254,10 @@ export const promoAPI = {
     }),
 
   // Массовое согласование
-  batchApprove: (ids: number[], status: string, comment = '', approvalRole?: string): Promise<unknown> =>
+  batchApprove: (items: ApprovalItemVersion[], status: string, comment = '', approvalRole?: string): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/approve/batch`, {
       method: 'POST',
-      body: JSON.stringify({ ids, status, comment, approval_role: approvalRole }),
+      body: JSON.stringify({ items, status, comment, approval_role: approvalRole }),
     }).then(async r => {
       const json = await r.json();
       if (!r.ok) throw { status: r.status, message: json.error || 'Ошибка' } as ApiError;

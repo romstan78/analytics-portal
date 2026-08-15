@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1019,7 +1021,8 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 			p.agreement1_status, p.agreement1_comment,
 			p.agreement2_status, p.agreement2_comment,
 			0 as historical_count,
-			CAST(NULL AS FLOAT) as avg_historical_roi
+			CAST(NULL AS FLOAT) as avg_historical_roi,
+			CONVERT(NVARCHAR(23), p.updated_at, 121) as updated_at
 		FROM dbo.tbl_PromoActivities p
 		WHERE ` + whereClause
 
@@ -1027,7 +1030,7 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	countQuery := "SELECT COUNT(*) FROM dbo.tbl_PromoActivities p WHERE " + whereClause
 	var total int
 	if err := config.DB.QueryRow(countQuery, args...).Scan(&total); err != nil {
-		total = 0
+		return nil, 0, fmt.Errorf("count approvals: %w", err)
 	}
 
 	// 2. Пагинация и сортировка
@@ -1058,10 +1061,14 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 			&r.Agreement1, &r.Agreement2, &r.Status,
 			&r.Agreement1Status, &r.Agreement1Comment,
 			&r.Agreement2Status, &r.Agreement2Comment,
-			&r.HistoricalCount, &r.AvgHistoricalROI,
-		); err == nil {
-			results = append(results, r)
+			&r.HistoricalCount, &r.AvgHistoricalROI, &r.UpdatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan approval row: %w", err)
 		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate approval rows: %w", err)
 	}
 	if results == nil {
 		results = []models.ApprovalRow{}
@@ -1069,156 +1076,239 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	return results, total, nil
 }
 
-// ApprovePromoWithStatus — обновляет agreement1/agreement2, _status/_comment,
-// и добавляет комментарий в поле comments с пометкой автора (не затирает историю).
-// Если отправлен только комментарий (status="commented") и промо уже approved/rejected,
-// то статус не меняется — только добавляется комментарий в историю.
-func ApprovePromoWithStatus(agreementNum int, id int, status string, comment string, legacyValue string, username string) error {
-	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
-	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
-	agreementField := fmt.Sprintf("agreement%d", agreementNum)
+var ErrPromoNotFound = errors.New("promo not found")
 
-	// Читаем текущие comments и статус согласования
-	var currentComments sql.NullString
-	var currentStatus sql.NullString
-	if err := config.DB.QueryRow(
-		"SELECT comments, "+statusField+" FROM dbo.tbl_PromoActivities WHERE id = ? AND deleted_at IS NULL", id,
-	).Scan(&currentComments, &currentStatus); err != nil {
-		return err
-	}
-
-	// Если отправлен только комментарий на уже утверждённом/отклонённом промо —
-	// не сбрасываем статус, только дописываем в историю
-	preserveStatus := false
-	if status == "commented" && (currentStatus.String == "approved" || currentStatus.String == "rejected") {
-		preserveStatus = true
-	}
-
-	// Добавляем новый комментарий с пометкой автора, даты и роли
-	newComments := currentComments.String
-	if comment != "" {
-		// Гарантируем перенос строки перед новым комментарием
-		if len(newComments) > 0 && !strings.HasSuffix(newComments, "\n") {
-			newComments += "\n"
-		}
-		timestamp := time.Now().Format("02.01.2006")
-		roleLabel := fmt.Sprintf("согласование%d", agreementNum)
-		commentLine := fmt.Sprintf("[%s %s|%s]: %s", timestamp, roleLabel, username, comment)
-		newComments += commentLine
-	}
-
-	// Определяем роль для записи в tbl_PromoComments
-	commentRole := fmt.Sprintf("согласование%d", agreementNum)
-
-	if preserveStatus {
-		// Только обновляем comments, не трогаем agreementN / _status / _comment
-		_, err := config.DB.Exec(
-			"UPDATE dbo.tbl_PromoActivities SET comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
-			newComments, id,
-		)
-		if err != nil {
-			return err
-		}
-		// Запись в новую таблицу комментариев
-		_ = InsertComment(id, username, commentRole, comment)
-		return nil
-	}
-
-	query := fmt.Sprintf(
-		"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
-		agreementField, statusField, commentField,
-	)
-	_, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
-	if err != nil {
-		return err
-	}
-	// Запись в новую таблицу комментариев
-	if comment != "" {
-		_ = InsertComment(id, username, commentRole, comment)
-	}
-	return nil
+// ApprovalConflictError означает, что карточки изменились после загрузки клиентом.
+// IDs можно безопасно вернуть клиенту, чтобы он обновил только конфликтующие карточки.
+type ApprovalConflictError struct {
+	IDs []int
 }
 
-// BatchApprove — массовое согласование массива ID с дописыванием комментария в историю
-func BatchApprove(agreementNum int, ids []int, status string, comment string, legacyValue string) (int64, error) {
-	if len(ids) == 0 {
-		return 0, nil
+func (e *ApprovalConflictError) Error() string {
+	return fmt.Sprintf("approval version conflict for promo IDs %v", e.IDs)
+}
+
+type BatchApproveItem struct {
+	ID        int
+	UpdatedAt string
+}
+
+type lockedApprovalRow struct {
+	comments sql.NullString
+	status   sql.NullString
+}
+
+func approvalFields(agreementNum int) (string, string, string, error) {
+	if agreementNum != 1 && agreementNum != 2 {
+		return "", "", "", fmt.Errorf("invalid agreement level: %d", agreementNum)
+	}
+	return fmt.Sprintf("agreement%d", agreementNum),
+		fmt.Sprintf("agreement%d_status", agreementNum),
+		fmt.Sprintf("agreement%d_comment", agreementNum), nil
+}
+
+// lockApprovalRow проверяет версию и удерживает блокировку записи до конца транзакции.
+func lockApprovalRow(tx *sql.Tx, statusField string, item BatchApproveItem) (lockedApprovalRow, error) {
+	var row lockedApprovalRow
+	query := fmt.Sprintf(`
+		SELECT comments, %s
+		FROM dbo.tbl_PromoActivities WITH (UPDLOCK, ROWLOCK)
+		WHERE id = ? AND deleted_at IS NULL
+		  AND CONVERT(NVARCHAR(23), updated_at, 121) = ?`, statusField)
+	err := tx.QueryRow(query, item.ID, item.UpdatedAt).Scan(&row.comments, &row.status)
+	if err == nil {
+		return row, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return lockedApprovalRow{}, err
 	}
 
-	statusField := fmt.Sprintf("agreement%d_status", agreementNum)
-	commentField := fmt.Sprintf("agreement%d_comment", agreementNum)
-	agreementField := fmt.Sprintf("agreement%d", agreementNum)
-
-	timestamp := time.Now().Format("02.01.2006 15:04")
-
-	placeholders := make([]string, 0, len(ids))
-	args := []interface{}{legacyValue, status, comment}
-	for _, id := range ids {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
+	var exists int
+	existsErr := tx.QueryRow(
+		"SELECT 1 FROM dbo.tbl_PromoActivities WITH (UPDLOCK, ROWLOCK) WHERE id = ? AND deleted_at IS NULL",
+		item.ID,
+	).Scan(&exists)
+	if existsErr == nil {
+		return lockedApprovalRow{}, &ApprovalConflictError{IDs: []int{item.ID}}
 	}
-
-	// Сначала читаем текущие comments для всех ID
-	idArgs := make([]interface{}, 0, len(ids))
-	for _, id := range ids {
-		idArgs = append(idArgs, id)
+	if errors.Is(existsErr, sql.ErrNoRows) {
+		return lockedApprovalRow{}, ErrPromoNotFound
 	}
-	idPlaceholders := make([]string, 0, len(ids))
-	for range ids {
-		idPlaceholders = append(idPlaceholders, "?")
-	}
+	return lockedApprovalRow{}, existsErr
+}
 
-	readQuery := fmt.Sprintf(
-		"SELECT id, comments FROM dbo.tbl_PromoActivities WHERE id IN (%s) AND deleted_at IS NULL",
-		strings.Join(idPlaceholders, ","),
+func appendApprovalComment(current, comment, username string, agreementNum int) string {
+	if comment == "" {
+		return current
+	}
+	if current != "" && !strings.HasSuffix(current, "\n") {
+		current += "\n"
+	}
+	return current + fmt.Sprintf(
+		"[%s согласование%d|%s]: %s",
+		time.Now().Format("02.01.2006 15:04"), agreementNum, username, comment,
 	)
+}
 
-	rows, err := config.DB.Query(readQuery, idArgs...)
+func insertCommentTx(tx *sql.Tx, promoID int, userName, role, commentText string) error {
+	_, err := tx.Exec(
+		"INSERT INTO dbo.tbl_PromoComments (promo_id, user_name, role, comment_text) VALUES (?, ?, ?, ?)",
+		promoID, userName, role, commentText,
+	)
+	return err
+}
+
+func applyApprovalUpdate(
+	tx *sql.Tx,
+	agreementNum int,
+	item BatchApproveItem,
+	locked lockedApprovalRow,
+	status, comment, legacyValue, username string,
+) (int64, error) {
+	agreementField, statusField, commentField, err := approvalFields(agreementNum)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
 
-	// Для каждого ID формируем новый comments с добавленной строкой лога
-	commentUpdates := make(map[int]string)
-	for rows.Next() {
-		var id int
-		var currentComments sql.NullString
-		if err := rows.Scan(&id, &currentComments); err != nil {
+	newComments := appendApprovalComment(locked.comments.String, comment, username, agreementNum)
+	preserveStatus := status == "commented" && (locked.status.String == "approved" || locked.status.String == "rejected")
+
+	var result sql.Result
+	if preserveStatus {
+		result, err = tx.Exec(
+			`UPDATE dbo.tbl_PromoActivities
+			 SET comments = ?, updated_at = GETDATE()
+			 WHERE id = ? AND deleted_at IS NULL
+			   AND CONVERT(NVARCHAR(23), updated_at, 121) = ?`,
+			newComments, item.ID, item.UpdatedAt,
+		)
+	} else {
+		query := fmt.Sprintf(`
+			UPDATE dbo.tbl_PromoActivities
+			SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE()
+			WHERE id = ? AND deleted_at IS NULL
+			  AND CONVERT(NVARCHAR(23), updated_at, 121) = ?`, agreementField, statusField, commentField)
+		result, err = tx.Exec(query, legacyValue, status, comment, newComments, item.ID, item.UpdatedAt)
+	}
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected != 1 {
+		return 0, &ApprovalConflictError{IDs: []int{item.ID}}
+	}
+	if comment != "" {
+		if err := insertCommentTx(tx, item.ID, username, fmt.Sprintf("согласование%d", agreementNum), comment); err != nil {
+			return 0, err
+		}
+	}
+	return affected, nil
+}
+
+// ApprovePromoWithStatus атомарно проверяет updated_at, обновляет согласование
+// и сохраняет комментарий в обеих моделях хранения.
+func ApprovePromoWithStatus(
+	agreementNum, id int,
+	updatedAt, status, comment, legacyValue, username string,
+) error {
+	_, statusField, _, err := approvalFields(agreementNum)
+	if err != nil {
+		return err
+	}
+	if id <= 0 || strings.TrimSpace(updatedAt) == "" {
+		return fmt.Errorf("invalid approval item")
+	}
+
+	tx, err := config.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	item := BatchApproveItem{ID: id, UpdatedAt: updatedAt}
+	locked, err := lockApprovalRow(tx, statusField, item)
+	if err != nil {
+		return err
+	}
+	if _, err := applyApprovalUpdate(tx, agreementNum, item, locked, status, comment, legacyValue, username); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func normalizeBatchApproveItems(items []BatchApproveItem) ([]BatchApproveItem, error) {
+	result := append([]BatchApproveItem(nil), items...)
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	for i, item := range result {
+		if item.ID <= 0 || strings.TrimSpace(item.UpdatedAt) == "" {
+			return nil, fmt.Errorf("invalid approval item at index %d", i)
+		}
+		if i > 0 && result[i-1].ID == item.ID {
+			return nil, fmt.Errorf("duplicate promo ID: %d", item.ID)
+		}
+	}
+	return result, nil
+}
+
+// BatchApprove применяет пакет целиком или не применяет ничего.
+// Все версии проверяются до первого UPDATE и блокируются в стабильном порядке ID.
+func BatchApprove(
+	agreementNum int,
+	items []BatchApproveItem,
+	status, comment, legacyValue, username string,
+) (int64, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	_, statusField, _, err := approvalFields(agreementNum)
+	if err != nil {
+		return 0, err
+	}
+	items, err = normalizeBatchApproveItems(items)
+	if err != nil {
+		return 0, err
+	}
+
+	tx, err := config.DB.BeginTx(context.Background(), nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	lockedRows := make(map[int]lockedApprovalRow, len(items))
+	conflictIDs := make([]int, 0)
+	for _, item := range items {
+		locked, lockErr := lockApprovalRow(tx, statusField, item)
+		if lockErr == nil {
+			lockedRows[item.ID] = locked
 			continue
 		}
-		newComments := currentComments.String
-		if comment != "" {
-			if len(newComments) > 0 && !strings.HasSuffix(newComments, "\n") {
-				newComments += "\n"
-			}
-			roleLabel := fmt.Sprintf("согласование%d", agreementNum)
-			commentLine := fmt.Sprintf("[%s %s|%s]: %s", timestamp, roleLabel, "batch", comment)
-			newComments += commentLine
+		var conflictErr *ApprovalConflictError
+		if errors.As(lockErr, &conflictErr) || errors.Is(lockErr, ErrPromoNotFound) {
+			conflictIDs = append(conflictIDs, item.ID)
+			continue
 		}
-		commentUpdates[id] = newComments
+		return 0, lockErr
 	}
-	rows.Close()
+	if len(conflictIDs) > 0 {
+		return 0, &ApprovalConflictError{IDs: conflictIDs}
+	}
 
-	// Обновляем каждую запись индивидуально, чтобы проставить свой comments
-	commentRole := fmt.Sprintf("согласование%d", agreementNum)
 	var totalAffected int64
-	for _, id := range ids {
-		newComments := commentUpdates[id]
-		query := fmt.Sprintf(
-			"UPDATE dbo.tbl_PromoActivities SET %s = ?, %s = ?, %s = ?, comments = ?, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
-			agreementField, statusField, commentField,
+	for _, item := range items {
+		affected, updateErr := applyApprovalUpdate(
+			tx, agreementNum, item, lockedRows[item.ID], status, comment, legacyValue, username,
 		)
-		result, err := config.DB.Exec(query, legacyValue, status, comment, newComments, id)
-		if err != nil {
-			return totalAffected, err
+		if updateErr != nil {
+			return 0, updateErr
 		}
-		affected, _ := result.RowsAffected()
 		totalAffected += affected
-		// Запись в новую таблицу комментариев
-		if comment != "" {
-			_ = InsertComment(id, "batch", commentRole, comment)
-		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return totalAffected, nil
 }
