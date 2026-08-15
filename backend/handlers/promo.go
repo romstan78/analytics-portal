@@ -998,24 +998,11 @@ func ExportPromoExcel(c *gin.Context) {
 	// Данные — пишем напрямую из курсора БД
 	rowNum := 2
 	for rows.Next() {
-		var r models.PromoRow
-		if err := rows.Scan(
-			&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber,
-			&r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS,
-			&r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments,
-			&r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub,
-			&r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub,
-			&r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub,
-			&r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM,
-			&r.TotalPharmacies, &r.PromoPharmacies, &r.ActualPromoSalesUnits,
-			&r.ActualInvestments, &r.Status, &r.ActualPromoRub,
-			&r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub,
-			&r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline,
-			&r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments,
-			&r.PromoChannel, &r.Agreement1, &r.Agreement2,
-			&r.Date, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt,
-		); err != nil {
-			continue
+		r, err := repository.ScanPromoRow(rows)
+		if err != nil {
+			config.Logger.Error("promo_excel_row_scan_failed", "row", rowNum, "error", err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка чтения данных для Excel"})
+			return
 		}
 		vals := []interface{}{
 			r.ID,
@@ -1036,13 +1023,22 @@ func ExportPromoExcel(c *gin.Context) {
 		}
 		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
 		if err := sw.SetRow(cell, vals); err != nil {
-			continue
+			config.Logger.Error("promo_excel_row_write_failed", "row", rowNum, "error", err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка формирования Excel"})
+			return
 		}
 		rowNum++
+	}
+	if err := rows.Err(); err != nil {
+		config.Logger.Error("promo_excel_rows_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка чтения данных для Excel"})
+		return
 	}
 
 	if err := sw.Flush(); err != nil {
 		config.Logger.Error("promo_excel_stream_flush_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка формирования Excel"})
+		return
 	}
 
 	// Стиль заголовка

@@ -207,6 +207,36 @@ func buildPromoWhere(params PromoFilterParams, channels []string) (string, []int
 // promoRowsColumns — общий список колонок для GetPromoRowsStream и GetPromoRows.
 const promoRowsColumns = `p.id, p.network_name, p.kam, p.id_directum, p.ds_number, p.year, p.month, p.quarter, p.sku, p.brand, p.brand_as, p.mechanics, p.discount_amount, p.gtn_opex, p.conditions, p.comments, p.total_pharmacies, p.promo_pharmacies, p.baseline_units, p.baseline_rub, p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub, p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.plan_promo_uplift_pct_units, p.plan_promo_uplift_pct_rub, p.plan_investments_pct, p.plan_roi, p.contract_price, p.gm, p.actual_promo_sales_units, p.actual_investments, p.status, p.actual_promo_rub, p.actual_promo_uplift_units, p.actual_promo_uplift_rub, p.actual_external_ecom_units, p.actual_corrected_baseline, p.actual_roi, p.plan_vs_fact_rub, p.plan_vs_fact_investments, p.agreement1, p.agreement2, p.date, p.created_at, p.updated_at, p.deleted_at, m.channel`
 
+type promoRowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+// ScanPromoRow keeps the SELECT column order and destination fields in one place.
+// Both the JSON API and Excel export must use this function to prevent schema drift.
+func ScanPromoRow(scanner promoRowScanner) (models.PromoRow, error) {
+	var r models.PromoRow
+	err := scanner.Scan(
+		&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber,
+		&r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS,
+		&r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments,
+		&r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub,
+		&r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub,
+		&r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub,
+		&r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub,
+		&r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM,
+		&r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status,
+		&r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub,
+		&r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI,
+		&r.PlanVsFactRub, &r.PlanVsFactInvestments,
+		&r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt,
+		&r.DeletedAt, &r.PromoChannel,
+	)
+	if err != nil {
+		return models.PromoRow{}, err
+	}
+	return r, nil
+}
+
 // GetPromoRowsStream возвращает sql.Rows для потокового чтения (Excel export).
 // Вызывающая сторона обязана закрыть rows (defer rows.Close()).
 func GetPromoRowsStream(params PromoFilterParams, channels []string) (*sql.Rows, error) {
@@ -243,11 +273,14 @@ func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize in
 
 	var results []models.PromoRow
 	for rows.Next() {
-		var r models.PromoRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.KAM, &r.IDDirectum, &r.DSNumber, &r.Year, &r.Month, &r.Quarter, &r.SKU, &r.Brand, &r.BrandAS, &r.Mechanics, &r.DiscountAmount, &r.GTNOpex, &r.Conditions, &r.Comments, &r.TotalPharmacies, &r.PromoPharmacies, &r.BaselineUnits, &r.BaselineRub, &r.PlanPromoUnits, &r.PlanPromoRub, &r.PlanInvestmentsRub, &r.PlanPromoUpliftUnits, &r.PlanPromoUpliftRub, &r.PlanPromoUpliftPctUnits, &r.PlanPromoUpliftPctRub, &r.PlanInvestmentsPct, &r.PlanROI, &r.ContractPrice, &r.GM, &r.ActualPromoSalesUnits, &r.ActualInvestments, &r.Status, &r.ActualPromoRub, &r.ActualPromoUpliftUnits, &r.ActualPromoUpliftRub, &r.ActualExternalEcomUnits, &r.ActualCorrectedBaseline, &r.ActualROI, &r.PlanVsFactRub, &r.PlanVsFactInvestments, &r.Agreement1, &r.Agreement2, &r.Date, &r.CreatedAt, &r.UpdatedAt, &r.DeletedAt, &r.PromoChannel); err != nil {
-			continue
+		r, err := ScanPromoRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan promo row: %w", err)
 		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate promo rows: %w", err)
 	}
 	if results == nil {
 		results = []models.PromoRow{}
