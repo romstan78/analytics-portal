@@ -986,7 +986,7 @@ func ExportPromoExcel(c *gin.Context) {
 
 	// Заголовки
 	headers := []interface{}{
-		"Год", "Месяц", "Канал", "Сеть", "Бренд", "SKU", "Механика",
+		"ID промо", "Год", "Месяц", "Канал", "Сеть", "Бренд", "SKU", "Механика",
 		"План (уп)", "Факт (уп)", "План инвест.", "Факт инвест.",
 		"Согласование 1", "Согласование 2", "Статус",
 	}
@@ -1018,6 +1018,7 @@ func ExportPromoExcel(c *gin.Context) {
 			continue
 		}
 		vals := []interface{}{
+			r.ID,
 			r.Year,
 			models.ValInt(r.Month),
 			models.ValString(r.PromoChannel),

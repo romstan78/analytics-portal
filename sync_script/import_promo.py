@@ -17,6 +17,7 @@ LOCAL_UID = os.getenv('LOCAL_UID')
 LOCAL_PWD = os.getenv('LOCAL_PWD')
 
 COLUMN_MAPPING = {
+    "ID промо": "id",
     "Название сети": "network_name",
     "KAM": "kam",
     "ID Директум": "id_directum",
@@ -84,9 +85,19 @@ COLUMN_MAPPING = {
     "план Promo Uplift СИП OLAP": "plan_promo_uplift_cip_olap",
     "факт Promo Uplift СИП OLAP": "fact_promo_uplift_cip_olap",
     "Дата": "date",
+    # Алиасы сокращённого экспорта портала.
+    "Сеть": "network_name",
+    "Бренд": "brand_as",
+    "План (уп)": "plan_promo_units",
+    "Факт (уп)": "actual_promo_sales_units",
+    "План инвест.": "plan_investments_rub",
+    "Факт инвест.": "actual_investments",
+    "Согласование 1": "agreement1",
+    "Согласование 2": "agreement2",
+    "Статус": "status",
 }
 
-INT_FIELDS = ['year', 'quarter', 'total_pharmacies', 'promo_pharmacies']
+INT_FIELDS = ['id', 'year', 'quarter', 'total_pharmacies', 'promo_pharmacies']
 
 FLOAT_FIELDS = [
     'discount_amount', 'baseline_units', 'plan_promo_units', 'plan_investments_rub',
@@ -109,6 +120,7 @@ AGREEMENT_FIELDS = ['agreement1', 'agreement2']
 
 BUSINESS_KEY = ['sku', 'network_name', 'year', 'month', 'mechanics']
 TABLE_NAME = 'dbo.tbl_PromoActivities'
+PROTECTED_IMPORT_COLUMNS = {'agreement1', 'agreement2'}
 
 MONTH_NAMES = {
     'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4,
@@ -229,11 +241,16 @@ def prepare_dataframe(excel_file):
     if source.empty:
         raise ValueError('Excel-файл не содержит строк; импорт отменён.')
 
-    rename_dict = {
-        excel_col: db_col
-        for excel_col, db_col in COLUMN_MAPPING.items()
-        if excel_col in source.columns
-    }
+    rename_dict = {}
+    selected_db_columns = set()
+    for excel_col, db_col in COLUMN_MAPPING.items():
+        if (
+            excel_col in source.columns
+            and db_col not in selected_db_columns
+            and db_col not in PROTECTED_IMPORT_COLUMNS
+        ):
+            rename_dict[excel_col] = db_col
+            selected_db_columns.add(db_col)
     mapped_columns = list(rename_dict.values())
     missing_keys = [column for column in BUSINESS_KEY if column not in mapped_columns]
     if missing_keys:
@@ -278,13 +295,28 @@ def prepare_dataframe(excel_file):
     if 'quarter' in source and not source['quarter'].dropna().between(1, 4).all():
         raise ValueError('Квартал должен быть числом от 1 до 4.')
 
-    normalized_keys = source[BUSINESS_KEY].copy()
+    if 'id' in source:
+        invalid_ids = source['id'].notna() & (source['id'] <= 0)
+        if invalid_ids.any():
+            rows = ', '.join(str(index + 2) for index in source.index[invalid_ids][:10])
+            raise ValueError(f'ID промо должен быть положительным числом, строки: {rows}')
+        duplicate_ids = source['id'].notna() & source['id'].duplicated(keep=False)
+        if duplicate_ids.any():
+            rows = ', '.join(str(index + 2) for index in source.index[duplicate_ids][:10])
+            raise ValueError(f'Повторяющиеся ID промо в строках: {rows}')
+        fallback_rows = source['id'].isna()
+    else:
+        fallback_rows = pd.Series(True, index=source.index)
+
+    normalized_keys = source.loc[fallback_rows, BUSINESS_KEY].copy()
     for column in ['sku', 'network_name', 'mechanics']:
         normalized_keys[column] = normalized_keys[column].map(lambda value: value.casefold())
     duplicate_rows = normalized_keys.duplicated(keep=False)
     if duplicate_rows.any():
-        rows = ', '.join(str(index + 2) for index in source.index[duplicate_rows][:10])
-        raise ValueError(f'Дубли бизнес-ключа в Excel в строках: {rows}')
+        rows = ', '.join(str(index + 2) for index in normalized_keys.index[duplicate_rows][:10])
+        raise ValueError(
+            'Неоднозначные новые строки без ID промо в строках: ' + rows
+        )
 
     return source, mapped_columns
 
@@ -323,18 +355,26 @@ def quote_identifier(identifier):
 
 
 def build_merge_sql(db_columns, full_snapshot=False):
-    quoted_columns = ', '.join(quote_identifier(column) for column in db_columns)
-    source_columns = ', '.join(f's.{quote_identifier(column)}' for column in db_columns)
-    update_columns = [column for column in db_columns if column not in BUSINESS_KEY]
+    insert_columns = [column for column in db_columns if column != 'id']
+    quoted_columns = ', '.join(quote_identifier(column) for column in insert_columns)
+    source_columns = ', '.join(f's.{quote_identifier(column)}' for column in insert_columns)
+    update_columns = [column for column in db_columns if column != 'id']
     assignments = [
         f't.{quote_identifier(column)} = s.{quote_identifier(column)}'
         for column in update_columns
     ]
     assignments.extend(['t.[deleted_at] = NULL', 't.[updated_at] = GETDATE()'])
-    match = ' AND '.join(
+    business_match = ' AND '.join(
         f't.{quote_identifier(column)} = s.{quote_identifier(column)}'
         for column in BUSINESS_KEY
     )
+    if 'id' in db_columns:
+        match = (
+            f'((s.[id] IS NOT NULL AND t.[id] = s.[id]) OR '
+            f'(s.[id] IS NULL AND {business_match}))'
+        )
+    else:
+        match = business_match
     delete_clause = ''
     if full_snapshot:
         delete_clause = """
@@ -378,26 +418,44 @@ def validate_destination(cursor, db_columns):
     if missing:
         raise RuntimeError('В таблице отсутствуют колонки: ' + ', '.join(missing))
 
-    key_list = ', '.join(quote_identifier(column) for column in BUSINESS_KEY)
-    not_null = ' AND '.join(f'{quote_identifier(column)} IS NOT NULL' for column in BUSINESS_KEY)
+
+
+def validate_stage_matches(cursor, has_id):
+    if has_id:
+        cursor.execute(f"""
+            SELECT COUNT(*)
+            FROM #PromoImportStage s
+            LEFT JOIN {TABLE_NAME} t ON t.id = s.id AND t.deleted_at IS NULL
+            WHERE s.id IS NOT NULL AND t.id IS NULL
+        """)
+        missing_ids = cursor.fetchone()[0]
+        if missing_ids:
+            raise RuntimeError(
+                f'В файле есть отсутствующие или удалённые ID промо: {missing_ids}.'
+            )
+        fallback_condition = 's.id IS NULL AND'
+    else:
+        fallback_condition = ''
+
+    key_match = ' AND '.join(
+        f't.{quote_identifier(column)} = s.{quote_identifier(column)}'
+        for column in BUSINESS_KEY
+    )
     cursor.execute(f"""
-        WITH duplicate_keys AS (
-            SELECT COUNT(*) AS duplicate_count
-            FROM {TABLE_NAME}
-            WHERE [deleted_at] IS NULL AND {not_null}
-            GROUP BY {key_list}
-            HAVING COUNT(*) > 1
-        )
-        SELECT COUNT(*) AS duplicate_groups,
-               COALESCE(SUM(duplicate_count - 1), 0) AS excess_rows
-        FROM duplicate_keys
+        SELECT COUNT(*)
+        FROM #PromoImportStage s
+        CROSS APPLY (
+            SELECT COUNT(*) AS match_count
+            FROM {TABLE_NAME} t
+            WHERE t.deleted_at IS NULL AND {key_match}
+        ) matches
+        WHERE {fallback_condition} matches.match_count > 1
     """)
-    duplicate_groups, excess_rows = cursor.fetchone()
-    if duplicate_groups:
+    ambiguous = cursor.fetchone()[0]
+    if ambiguous:
         raise RuntimeError(
-            'В базе уже есть дубли активного бизнес-ключа; импорт отменён. '
-            f'Групп: {duplicate_groups}, лишних строк: {excess_rows}. '
-            'Сначала разберите дубли отдельной контролируемой процедурой.'
+            f'Неоднозначное сопоставление без ID промо для строк: {ambiguous}. '
+            'Добавьте колонку «ID промо» из экспорта портала.'
         )
 
 
@@ -409,8 +467,12 @@ def import_dataframe(connection, dataframe, db_columns, full_snapshot=False):
     try:
         cursor.execute('SET XACT_ABORT ON; SET NOCOUNT ON;')
         validate_destination(cursor, db_columns)
+        stage_projection = ', '.join(
+            f'CAST([id] AS INT) AS [id]' if column == 'id' else quote_identifier(column)
+            for column in db_columns
+        )
         cursor.execute(f"""
-            SELECT TOP (0) {quoted_columns}
+            SELECT TOP (0) {stage_projection}
             INTO #PromoImportStage
             FROM {TABLE_NAME};
         """)
@@ -420,6 +482,7 @@ def import_dataframe(connection, dataframe, db_columns, full_snapshot=False):
             f'INSERT INTO #PromoImportStage ({quoted_columns}) VALUES ({placeholders})',
             rows,
         )
+        validate_stage_matches(cursor, has_id='id' in db_columns)
         cursor.execute(build_merge_sql(db_columns, full_snapshot=full_snapshot))
         stats = {row[0]: row[1] for row in cursor.fetchall()}
         connection.commit()

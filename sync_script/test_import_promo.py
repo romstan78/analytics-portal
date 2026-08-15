@@ -38,8 +38,27 @@ class PrepareDataframeTests(unittest.TestCase):
         source = pd.concat([valid_source(), valid_source()], ignore_index=True)
         source.loc[1, 'SKU'] = 'sku-1'
 
-        with self.assertRaisesRegex(ValueError, 'Дубли бизнес-ключа'):
+        with self.assertRaisesRegex(ValueError, 'Неоднозначные новые строки'):
             self.prepare(source)
+
+    def test_allows_same_business_key_with_distinct_promo_ids(self):
+        source = pd.concat([valid_source(), valid_source()], ignore_index=True)
+        source.insert(0, 'ID промо', ['101', '102'])
+
+        dataframe, columns = self.prepare(source)
+
+        self.assertIn('id', columns)
+        self.assertEqual(dataframe['id'].tolist(), [101, 102])
+
+    def test_ignores_approval_columns_managed_by_application(self):
+        source = valid_source()
+        source['Borzenkov A'] = ['согласовано']
+        source['Sapunova N.'] = ['отклонено']
+
+        _dataframe, columns = self.prepare(source)
+
+        self.assertNotIn('agreement1', columns)
+        self.assertNotIn('agreement2', columns)
 
     def test_rejects_missing_business_key_column(self):
         source = valid_source().drop(columns=['Механика/статья затрат'])
@@ -82,6 +101,13 @@ class MergeSqlTests(unittest.TestCase):
         self.assertIn('WHEN NOT MATCHED BY SOURCE', sql)
         self.assertIn("'SOFT_DELETE'", sql)
 
+    def test_promo_id_is_used_for_matching_but_not_inserted(self):
+        sql = import_promo.build_merge_sql(['id', *import_promo.BUSINESS_KEY])
+
+        self.assertIn('s.[id] IS NOT NULL AND t.[id] = s.[id]', sql)
+        insert_clause = sql.split('WHEN NOT MATCHED BY TARGET THEN', 1)[1]
+        self.assertNotIn('INSERT ([id]', insert_clause)
+
 
 class FailingMergeCursor:
     def __init__(self):
@@ -92,8 +118,8 @@ class FailingMergeCursor:
         if 'FROM sys.columns' in sql:
             self.result = [(column,) for column in import_promo.BUSINESS_KEY]
             self.result += [('deleted_at',), ('updated_at',)]
-        elif 'WITH duplicate_keys' in sql:
-            self.result = [(0, 0)]
+        elif 'CROSS APPLY' in sql:
+            self.result = [(0,)]
         elif f'MERGE {import_promo.TABLE_NAME}' in sql:
             raise RuntimeError('simulated merge failure')
         else:

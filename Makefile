@@ -18,4 +18,4 @@ seed-dev:
 test:
 	cd backend && go test ./config ./middleware ./handlers
 	cd frontend && npm run lint && npm run build
-	cd sync_script && python3 -m unittest -v test_import_promo.py
+	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py
