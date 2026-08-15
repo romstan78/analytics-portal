@@ -478,6 +478,8 @@ def import_dataframe(connection, dataframe, db_columns, full_snapshot=False):
         """)
 
         rows = list(dataframe[db_columns].itertuples(index=False, name=None))
+        if not rows:
+            raise ValueError('Нет строк для импорта; транзакция отменена.')
         cursor.executemany(
             f'INSERT INTO #PromoImportStage ({quoted_columns}) VALUES ({placeholders})',
             rows,

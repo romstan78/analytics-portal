@@ -156,6 +156,20 @@ class FakeConnection:
 
 
 class TransactionTests(unittest.TestCase):
+    def test_rolls_back_empty_low_level_import(self):
+        connection = FakeConnection()
+        dataframe = pd.DataFrame(columns=import_promo.BUSINESS_KEY)
+
+        with self.assertRaisesRegex(ValueError, 'Нет строк для импорта'):
+            import_promo.import_dataframe(
+                connection,
+                dataframe,
+                import_promo.BUSINESS_KEY,
+            )
+
+        self.assertTrue(connection.rolled_back)
+        self.assertFalse(connection.committed)
+
     def test_rolls_back_entire_import_when_merge_fails(self):
         connection = FakeConnection()
         dataframe = pd.DataFrame([{
