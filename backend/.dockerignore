@@ -1,0 +1,9 @@
+.env
+logs
+*.log
+coverage*
+main
+backend
+app
+server
+.DS_Store

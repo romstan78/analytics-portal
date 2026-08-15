@@ -1,17 +1,92 @@
-version: '3.9'
+x-backend-environment: &backend-environment
+  DB_SERVER: mssql_db
+  DB_PORT: "1433"
+  DB_USER: sa
+  DB_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
+  DB_NAME: ${DB_NAME:-local_project_db}
+  DB_AUTO_CREATE: "true"
+  DB_STARTUP_TIMEOUT_SECONDS: "120"
+  APP_ENV: ${APP_ENV:-development}
+  JWT_SECRET: ${JWT_SECRET:?Укажите JWT_SECRET в .env}
+  CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
+  PORT: "8080"
+
+x-backend-service: &backend-service
+  build:
+    context: ./backend
+  image: analytics-portal-backend:local
+  environment: *backend-environment
+  depends_on:
+    mssql_db:
+      condition: service_healthy
 
 services:
   mssql_db:
     image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: my_local_mssql
+    platform: ${MSSQL_PLATFORM:-linux/amd64}
     environment:
       ACCEPT_EULA: Y
-      SA_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
     ports:
-      - "1433:1433" # MSSQL стандартный порт
+      - "${MSSQL_PORT:-1433}:1433"
     volumes:
-      - mssql_data_volume:/var/opt/mssql
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     restart: unless-stopped
 
+  backend:
+    <<: *backend-service
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: http://localhost:${BACKEND_PORT:-8080}
+    image: analytics-portal-frontend:local
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  bootstrap-user:
+    <<: *backend-service
+    profiles: ["tools"]
+    entrypoint: ["/app/bootstrap-user"]
+    environment:
+      <<: *backend-environment
+      BOOTSTRAP_USERNAME: ${BOOTSTRAP_USERNAME:-}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+      BOOTSTRAP_ROLE: ${BOOTSTRAP_ROLE:-admin}
+
+  seed-dev:
+    <<: *backend-service
+    profiles: ["tools"]
+    entrypoint: ["/app/seed-dev"]
+
 volumes:
-  mssql_data_volume:
+  mssql_data:
+  backend_logs:

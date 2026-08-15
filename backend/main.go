@@ -82,7 +82,9 @@ func main() {
 		log.Fatalf("Ошибка конфигурации авторизации: %v", err)
 	}
 
-	config.Init()
+	if err := config.Init(); err != nil {
+		log.Fatalf("Ошибка инициализации БД: %v", err)
+	}
 	defer config.DB.Close()
 
 	limiter := NewIPRateLimiter(100.0/60.0, 20) // 100 запросов в минуту, burst 20
@@ -104,6 +106,8 @@ func main() {
 	r.Use(limiter.RateLimitMiddleware())
 
 	// ─── Публичный роут (без авторизации) ────────────────────────────────
+	r.GET("/health", handlers.Liveness)
+	r.GET("/ready", handlers.Readiness)
 	r.POST("/api/auth/login", handlers.Login)
 	r.POST("/api/auth/refresh", handlers.RefreshToken)
 	r.POST("/api/auth/logout", handlers.Logout)
@@ -148,8 +152,12 @@ func main() {
 		api.PATCH("/promo/:id/restore", middleware.RoleRequired("admin"), handlers.RestorePromo)
 	}
 
-	config.Logger.Info("server_starting", "port", "8080")
-	if err := r.Run(":8080"); err != nil {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+	config.Logger.Info("server_starting", "port", port)
+	if err := r.Run(":" + port); err != nil {
 		config.Logger.Error("server_failed", "error", err.Error())
 		log.Fatalf("Ошибка запуска: %v", err)
 	}

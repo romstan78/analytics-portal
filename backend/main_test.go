@@ -41,7 +41,27 @@ func cleanupTestData() {
 		fmt.Println("[WARN] cleanupTestData: БД не оканчивается на _test, пропускаем DELETE")
 		return
 	}
-	config.DB.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'")
+	tx, err := config.DB.Begin()
+	if err != nil {
+		fmt.Printf("[WARN] cleanupTestData: не удалось начать транзакцию: %v\n", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM dbo.tbl_PromoComments WHERE promo_id IN (SELECT id FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%')`); err != nil {
+		fmt.Printf("[WARN] cleanupTestData: комментарии не удалены: %v\n", err)
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM dbo.tbl_AuditLog WHERE entity_type = 'promo' AND entity_id IN (SELECT id FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%')`); err != nil {
+		fmt.Printf("[WARN] cleanupTestData: аудит не удалён: %v\n", err)
+		return
+	}
+	if _, err := tx.Exec("DELETE FROM dbo.tbl_PromoActivities WHERE sku LIKE 'TEST-%'"); err != nil {
+		fmt.Printf("[WARN] cleanupTestData: промо не удалены: %v\n", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fmt.Printf("[WARN] cleanupTestData: commit не выполнен: %v\n", err)
+	}
 }
 
 func TestMain(m *testing.M) {
@@ -51,7 +71,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "ОТКАЗ: интеграционные тесты разрешены только для DB_NAME с суффиксом _test, получено %q\n", dbName)
 		os.Exit(2)
 	}
-	config.Init()
+	if err := config.Init(); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка инициализации тестовой БД: %v\n", err)
+		os.Exit(2)
+	}
 	code := m.Run()
 	cleanupTestData()
 	if config.DB != nil {
@@ -291,9 +314,8 @@ func TestUpdatePromo_UpdateNonExistent(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	// fetchExistingRow вернёт ошибку → 500
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Ожидался статус 500 для несуществующего ID, получен %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Ожидался статус 404 для несуществующего ID, получен %d", w.Code)
 	}
 }
 
@@ -331,15 +353,15 @@ func TestDeletePromo_ThenVerifyGone(t *testing.T) {
 		t.Fatalf("Ожидался статус 200 при удалении, получен %d", w.Code)
 	}
 
-	// Пробуем обновить удалённое → 500
+	// Пробуем обновить удалённое → 404
 	payload := map[string]interface{}{"id": id, "status": "Обновлено"}
 	body, _ := json.Marshal(payload)
 	req2, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusInternalServerError {
-		t.Errorf("Ожидался статус 500 при обновлении удалённой записи, получен %d", w2.Code)
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("Ожидался статус 404 при обновлении удалённой записи, получен %d", w2.Code)
 	}
 }
 
@@ -553,14 +575,14 @@ func TestIntegration_PromoCRUD(t *testing.T) {
 	}
 	t.Log("Удалено успешно")
 
-	// VERIFY DELETION — обновление удалённой записи должно вернуть 500
+	// VERIFY DELETION — обновление удалённой записи должно вернуть 404
 	body5, _ := json.Marshal(map[string]interface{}{"id": id, "status": "После удаления"})
 	req5, _ := http.NewRequest("POST", "/api/promo/save", bytes.NewBuffer(body5))
 	req5.Header.Set("Content-Type", "application/json")
 	w5 := httptest.NewRecorder()
 	router.ServeHTTP(w5, req5)
-	if w5.Code != http.StatusInternalServerError {
-		t.Errorf("VERIFY: обновление удалённой записи должно вернуть 500, получен %d", w5.Code)
+	if w5.Code != http.StatusNotFound {
+		t.Errorf("VERIFY: обновление удалённой записи должно вернуть 404, получен %d", w5.Code)
 	}
 }
 

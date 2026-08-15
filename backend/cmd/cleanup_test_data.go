@@ -18,7 +18,9 @@ func main() {
 	if !strings.HasSuffix(dbName, "_test") {
 		log.Fatalf("ОТКАЗ: очистка разрешена только для DB_NAME с суффиксом _test, получено %q", dbName)
 	}
-	config.Init()
+	if err := config.Init(); err != nil {
+		log.Fatalf("Ошибка инициализации БД: %v", err)
+	}
 	defer config.DB.Close()
 
 	fmt.Printf("БД: %s\n", config.GetDBInfo())
