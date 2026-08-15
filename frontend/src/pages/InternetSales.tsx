@@ -1,11 +1,12 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Stack, Box, Typography, CircularProgress } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import FilterPanel from '../components/FilterPanel';
 import DataTable from '../components/DataTable';
-import DrilldownModal from '../components/DrilldownModal';
 import { salesAPI } from '../api/promo';
+
+const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const FILTERS_STORAGE_KEY = 'internet_sales_filters_v7';
@@ -238,12 +239,16 @@ export default function InternetSales() {
         />
       </Box>
 
-      <DrilldownModal
-        open={!!drilldownRow}
-        onClose={handleCloseDrilldown}
-        rowData={drilldownRow}
-        appliedFilters={appliedFilters}
-      />
+      {drilldownRow && (
+        <Suspense fallback={<CircularProgress size={24} />}>
+          <DrilldownModal
+            open
+            onClose={handleCloseDrilldown}
+            rowData={drilldownRow}
+            appliedFilters={appliedFilters}
+          />
+        </Suspense>
+      )}
     </Box>
   );
 }

@@ -1,8 +1,12 @@
+import argparse
+import math
 import pandas as pd
 import pyodbc
 import os
 import re
+import sys
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,16 +15,6 @@ LOCAL_SERVER = os.getenv('LOCAL_SERVER')
 LOCAL_DATABASE = os.getenv('LOCAL_DATABASE', 'local_project_db')
 LOCAL_UID = os.getenv('LOCAL_UID')
 LOCAL_PWD = os.getenv('LOCAL_PWD')
-
-# Текущая реализация импорта небезопасна для данных: она отключена до перехода
-# на staging-таблицу и одну атомарную MERGE-транзакцию.
-if os.getenv('ALLOW_UNSAFE_PROMO_IMPORT') != 'I_UNDERSTAND_THIS_IMPORT_IS_UNSAFE':
-    raise SystemExit(
-        'Импорт промо временно отключён: текущий алгоритм может удалить активные записи. '
-        'Используйте восстановленную безопасную версию со staging-таблицей.'
-    )
-
-EXCEL_FILE = input("Введите путь к Excel-файлу с данными промо: ").strip().strip("'\"")
 
 COLUMN_MAPPING = {
     "Название сети": "network_name",
@@ -113,6 +107,9 @@ FLOAT_FIELDS = [
 
 AGREEMENT_FIELDS = ['agreement1', 'agreement2']
 
+BUSINESS_KEY = ['sku', 'network_name', 'year', 'month', 'mechanics']
+TABLE_NAME = 'dbo.tbl_PromoActivities'
+
 MONTH_NAMES = {
     'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4,
     'май': 5, 'июнь': 6, 'июль': 7, 'август': 8,
@@ -135,7 +132,8 @@ def safe_int(value):
     if pd.isna(value) or value == '' or value is None:
         return None
     try:
-        return int(float(str(value).replace(',', '.').strip()))
+        parsed = float(str(value).replace(',', '.').strip())
+        return int(parsed) if math.isfinite(parsed) and parsed.is_integer() else None
     except (ValueError, TypeError):
         return None
 
@@ -143,7 +141,8 @@ def safe_float(value):
     if pd.isna(value) or value == '' or value is None:
         return None
     try:
-        return float(str(value).replace(',', '.').replace(' ', '').strip())
+        parsed = float(str(value).replace(',', '.').replace(' ', '').strip())
+        return parsed if math.isfinite(parsed) else None
     except (ValueError, TypeError):
         return None
 
@@ -154,14 +153,15 @@ def safe_date(value):
         if isinstance(value, datetime):
             return value
         return pd.to_datetime(value).to_pydatetime()
-    except:
+    except (ValueError, TypeError, OverflowError):
         return None
 
 def convert_month(value):
     if pd.isna(value) or value is None or value == '':
         return None
     try:
-        return int(float(str(value).strip()))
+        parsed = float(str(value).strip())
+        return int(parsed) if math.isfinite(parsed) and parsed.is_integer() else None
     except (ValueError, TypeError):
         month_str = clean_string(value)
         if month_str and month_str.lower() in MONTH_NAMES:
@@ -199,148 +199,275 @@ def convert_quarter(val):
         return int(m.group(1))
     return safe_int(val)
 
+def is_blank(value):
+    return value is None or pd.isna(value) or str(value).strip() == ''
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Безопасный атомарный импорт промо из Excel в SQL Server.'
+    )
+    parser.add_argument('excel_file', type=Path, help='Путь к Excel-файлу')
+    parser.add_argument(
+        '--full-snapshot',
+        action='store_true',
+        help='Пометить удалёнными активные записи, которых нет в файле. По умолчанию импорт только добавляет и обновляет.',
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Прочитать и полностью проверить файл без подключения к базе и без изменений.',
+    )
+    return parser.parse_args(argv)
+
+
+def prepare_dataframe(excel_file):
+    if not excel_file.is_file():
+        raise ValueError(f'Файл не найден: {excel_file}')
+
+    source = pd.read_excel(excel_file, dtype=object)
+    if source.empty:
+        raise ValueError('Excel-файл не содержит строк; импорт отменён.')
+
+    rename_dict = {
+        excel_col: db_col
+        for excel_col, db_col in COLUMN_MAPPING.items()
+        if excel_col in source.columns
+    }
+    mapped_columns = list(rename_dict.values())
+    missing_keys = [column for column in BUSINESS_KEY if column not in mapped_columns]
+    if missing_keys:
+        missing_headers = [
+            excel_col for excel_col, db_col in COLUMN_MAPPING.items() if db_col in missing_keys
+        ]
+        raise ValueError(
+            'Нет обязательных колонок бизнес-ключа: ' + ', '.join(missing_headers)
+        )
+
+    source = source.rename(columns=rename_dict)[mapped_columns].copy()
+    conversion_errors = []
+
+    for column in mapped_columns:
+        converted = []
+        for index, value in source[column].items():
+            result = convert_quarter(value) if column == 'quarter' else convert_value(column, value)
+            intentional_null = (
+                column in AGREEMENT_FIELDS and clean_string(value) == '0'
+            )
+            if not is_blank(value) and result is None and not intentional_null:
+                conversion_errors.append(
+                    f'строка {index + 2}, колонка {column}: {value!r}'
+                )
+            converted.append(result)
+        source[column] = converted
+
+    if conversion_errors:
+        preview = '; '.join(conversion_errors[:10])
+        suffix = f'; ещё ошибок: {len(conversion_errors) - 10}' if len(conversion_errors) > 10 else ''
+        raise ValueError(f'Некорректные значения: {preview}{suffix}')
+
+    null_key_rows = source[BUSINESS_KEY].isna().any(axis=1)
+    if null_key_rows.any():
+        rows = ', '.join(str(index + 2) for index in source.index[null_key_rows][:10])
+        raise ValueError(f'Пустые значения бизнес-ключа в строках: {rows}')
+
+    if not source['month'].between(1, 12).all():
+        raise ValueError('Месяц должен быть числом от 1 до 12.')
+    if not source['year'].between(2000, 2100).all():
+        raise ValueError('Год должен быть числом от 2000 до 2100.')
+    if 'quarter' in source and not source['quarter'].dropna().between(1, 4).all():
+        raise ValueError('Квартал должен быть числом от 1 до 4.')
+
+    normalized_keys = source[BUSINESS_KEY].copy()
+    for column in ['sku', 'network_name', 'mechanics']:
+        normalized_keys[column] = normalized_keys[column].map(lambda value: value.casefold())
+    duplicate_rows = normalized_keys.duplicated(keep=False)
+    if duplicate_rows.any():
+        rows = ', '.join(str(index + 2) for index in source.index[duplicate_rows][:10])
+        raise ValueError(f'Дубли бизнес-ключа в Excel в строках: {rows}')
+
+    return source, mapped_columns
+
+
 def connect_to_db():
+    missing = [
+        name for name, value in {
+            'LOCAL_SERVER': LOCAL_SERVER,
+            'LOCAL_UID': LOCAL_UID,
+            'LOCAL_PWD': LOCAL_PWD,
+        }.items() if not value
+    ]
+    if missing:
+        raise RuntimeError('Не заданы переменные окружения: ' + ', '.join(missing))
+
+    errors = []
+    for driver in ['ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server']:
+        try:
+            conn_str = (
+                f'DRIVER={{{driver}}};SERVER={LOCAL_SERVER};DATABASE={LOCAL_DATABASE};'
+                f'UID={LOCAL_UID};PWD={LOCAL_PWD};TrustServerCertificate=yes;'
+            )
+            connection = pyodbc.connect(conn_str, autocommit=False)
+            print(f'✅ Подключение к {LOCAL_DATABASE} через {driver}')
+            return connection
+        except pyodbc.Error as error:
+            errors.append(f'{driver}: {error.args[0] if error.args else "ошибка подключения"}')
+
+    raise RuntimeError('Не удалось подключиться к SQL Server. ' + '; '.join(errors))
+
+
+def quote_identifier(identifier):
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', identifier):
+        raise ValueError(f'Недопустимое имя SQL-колонки: {identifier}')
+    return f'[{identifier}]'
+
+
+def build_merge_sql(db_columns, full_snapshot=False):
+    quoted_columns = ', '.join(quote_identifier(column) for column in db_columns)
+    source_columns = ', '.join(f's.{quote_identifier(column)}' for column in db_columns)
+    update_columns = [column for column in db_columns if column not in BUSINESS_KEY]
+    assignments = [
+        f't.{quote_identifier(column)} = s.{quote_identifier(column)}'
+        for column in update_columns
+    ]
+    assignments.extend(['t.[deleted_at] = NULL', 't.[updated_at] = GETDATE()'])
+    match = ' AND '.join(
+        f't.{quote_identifier(column)} = s.{quote_identifier(column)}'
+        for column in BUSINESS_KEY
+    )
+    delete_clause = ''
+    if full_snapshot:
+        delete_clause = """
+        WHEN NOT MATCHED BY SOURCE AND t.[deleted_at] IS NULL THEN
+            UPDATE SET t.[deleted_at] = GETDATE(), t.[updated_at] = GETDATE()"""
+
+    return f"""
+        DECLARE @merge_actions TABLE ([action] NVARCHAR(20));
+
+        MERGE {TABLE_NAME} WITH (HOLDLOCK) AS t
+        USING #PromoImportStage AS s
+          ON {match} AND t.[deleted_at] IS NULL
+        WHEN MATCHED THEN
+            UPDATE SET {', '.join(assignments)}
+        WHEN NOT MATCHED BY TARGET THEN
+            INSERT ({quoted_columns}) VALUES ({source_columns})
+        {delete_clause}
+        OUTPUT CASE
+            WHEN $action = 'UPDATE' AND s.[sku] IS NULL THEN 'SOFT_DELETE'
+            ELSE $action
+        END INTO @merge_actions;
+
+        SELECT [action], COUNT(*) AS [count]
+        FROM @merge_actions
+        GROUP BY [action];
+    """
+
+
+def validate_destination(cursor, db_columns):
+    cursor.execute("""
+        SELECT [name]
+        FROM sys.columns
+        WHERE [object_id] = OBJECT_ID('dbo.tbl_PromoActivities')
+    """)
+    available_columns = {row[0] for row in cursor.fetchall()}
+    if not available_columns:
+        raise RuntimeError('Таблица dbo.tbl_PromoActivities не существует.')
+
+    required = set(db_columns) | {'deleted_at', 'updated_at'}
+    missing = sorted(required - available_columns)
+    if missing:
+        raise RuntimeError('В таблице отсутствуют колонки: ' + ', '.join(missing))
+
+    key_list = ', '.join(quote_identifier(column) for column in BUSINESS_KEY)
+    not_null = ' AND '.join(f'{quote_identifier(column)} IS NOT NULL' for column in BUSINESS_KEY)
+    cursor.execute(f"""
+        WITH duplicate_keys AS (
+            SELECT COUNT(*) AS duplicate_count
+            FROM {TABLE_NAME}
+            WHERE [deleted_at] IS NULL AND {not_null}
+            GROUP BY {key_list}
+            HAVING COUNT(*) > 1
+        )
+        SELECT COUNT(*) AS duplicate_groups,
+               COALESCE(SUM(duplicate_count - 1), 0) AS excess_rows
+        FROM duplicate_keys
+    """)
+    duplicate_groups, excess_rows = cursor.fetchone()
+    if duplicate_groups:
+        raise RuntimeError(
+            'В базе уже есть дубли активного бизнес-ключа; импорт отменён. '
+            f'Групп: {duplicate_groups}, лишних строк: {excess_rows}. '
+            'Сначала разберите дубли отдельной контролируемой процедурой.'
+        )
+
+
+def import_dataframe(connection, dataframe, db_columns, full_snapshot=False):
+    cursor = connection.cursor()
+    quoted_columns = ', '.join(quote_identifier(column) for column in db_columns)
+    placeholders = ', '.join('?' for _ in db_columns)
+
     try:
-        drivers = ['ODBC Driver 18 for SQL Server', 'ODBC Driver 17 for SQL Server']
-        for driver in drivers:
-            try:
-                conn_str = f'DRIVER={{{driver}}};SERVER={LOCAL_SERVER};DATABASE={LOCAL_DATABASE};UID={LOCAL_UID};PWD={LOCAL_PWD};TrustServerCertificate=yes;'
-                conn = pyodbc.connect(conn_str)
-                print(f"✅ Подключение к {LOCAL_DATABASE} через {driver}")
-                return conn
-            except pyodbc.Error:
-                continue
-        raise Exception("Не найден ODBC драйвер")
-    except Exception as e:
-        print(f"❌ Ошибка подключения: {e}")
-        return None
-
-def main():
-    if not os.path.exists(EXCEL_FILE):
-        print(f"❌ Файл не найден: {EXCEL_FILE}")
-        return
-
-    print(f"📂 Читаю файл: {EXCEL_FILE}")
-
-    try:
-        df = pd.read_excel(EXCEL_FILE, dtype=str)
-        print(f"✅ Загружено {len(df)} строк, {len(df.columns)} колонок")
-
-        rename_dict = {}
-        for excel_col, db_col in COLUMN_MAPPING.items():
-            if excel_col in df.columns:
-                rename_dict[excel_col] = db_col
-
-        df.rename(columns=rename_dict, inplace=True)
-        print(f"🔄 Переименовано {len(rename_dict)} колонок")
-
-        # Конвертация квартала: Q1 → 1
-        if 'quarter' in df.columns:
-            before = df['quarter'].iloc[0] if len(df) > 0 else 'N/A'
-            df['quarter'] = df['quarter'].apply(convert_quarter)
-            print(f"🔄 Кварталы сконвертированы (было: {before})")
-
-        conn = connect_to_db()
-        if not conn:
-            return
-
-        cursor = conn.cursor()
-
-        # Добавляем колонку deleted_at если её ещё нет
-        cursor.execute("""
-            IF COL_LENGTH('dbo.tbl_PromoActivities', 'deleted_at') IS NULL
-            ALTER TABLE dbo.tbl_PromoActivities ADD deleted_at DATETIME NULL
+        cursor.execute('SET XACT_ABORT ON; SET NOCOUNT ON;')
+        validate_destination(cursor, db_columns)
+        cursor.execute(f"""
+            SELECT TOP (0) {quoted_columns}
+            INTO #PromoImportStage
+            FROM {TABLE_NAME};
         """)
-        conn.commit()
 
-        # Помечаем ВСЕ активные записи как удалённые. MERGE восстановит те, что есть в Excel.
-        cursor.execute("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE() WHERE deleted_at IS NULL")
-        marked = cursor.rowcount
-        print(f"🏷️ Помечено как удалённые: {marked} записей")
-
-        db_columns = [col for col in rename_dict.values() if col in df.columns]
-
-        # Строим MERGE
-        update_clause = ', '.join([f"t.[{col}] = s.[{col}]" for col in db_columns])
-        insert_cols = ', '.join([f"[{col}]" for col in db_columns])
-        insert_vals = ', '.join([f"s.[{col}]" for col in db_columns])
-
-        merge_sql = f"""
-            MERGE dbo.tbl_PromoActivities AS t
-            USING (VALUES ({{placeholders}})) AS s ({insert_cols})
-            ON t.sku = s.sku AND t.network_name = s.network_name 
-               AND t.[year] = s.[year] AND t.[month] = s.[month] 
-               AND t.mechanics = s.mechanics AND t.deleted_at IS NULL
-            WHEN MATCHED THEN UPDATE SET {update_clause}
-            WHEN NOT MATCHED BY TARGET THEN INSERT ({insert_cols}) VALUES ({insert_vals})
-            WHEN NOT MATCHED BY SOURCE AND t.deleted_at IS NULL THEN UPDATE SET t.deleted_at = GETDATE();
-        """
-
-        # Конвертируем данные
-        rows_to_insert = []
-        errors = []
-
-        for idx, (_, row) in enumerate(df.iterrows()):
-            try:
-                values = []
-                for col in db_columns:
-                    val = convert_value(col, row[col])
-                    values.append(val)
-                rows_to_insert.append(tuple(values))
-            except Exception as e:
-                errors.append(f"Строка {idx+2}: {str(e)[:100]}")
-
-        if errors:
-            print(f"⚠️ Ошибок конвертации: {len(errors)} из {len(df)} строк")
-
-        # Выполняем MERGE батчами
-        batch_size = 500
-        cursor.fast_executemany = True
-        total_processed = 0
-
-        # Формируем плейсхолдеры для одного батча
-        single_row = '(' + ', '.join(['?' for _ in db_columns]) + ')'
-
-        for i in range(0, len(rows_to_insert), batch_size):
-            batch = rows_to_insert[i:i+batch_size]
-            placeholders_str = ', '.join([single_row for _ in batch])
-            flat_values = [val for row in batch for val in row]
-
-            batch_sql = merge_sql.replace('{placeholders}', placeholders_str)
-
-            try:
-                cursor.execute(batch_sql, flat_values)
-                conn.commit()
-                total_processed += len(batch)
-                print(f"  ✓ {total_processed}/{len(rows_to_insert)}")
-            except Exception as e:
-                print(f"  ❌ Ошибка в батче {i//batch_size + 1}: {str(e)[:200]}")
-                # Пробуем по одной
-                for row_data in batch:
-                    try:
-                        single_merge = merge_sql.replace('{placeholders}', single_row)
-                        cursor.execute(single_merge, row_data)
-                        conn.commit()
-                        total_processed += 1
-                    except Exception as e2:
-                        pass
-
-        # Окончательно помечаем удалёнными записи, которых не было в Excel
-        # (те, что остались deleted_at IS NULL после MERGE WHEN NOT MATCHED BY SOURCE)
-        cursor.execute("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE() WHERE deleted_at IS NULL")
-        remaining = cursor.rowcount
-        if remaining > 0:
-            print(f"  🗑️ Помечено удалёнными: {remaining} записей (отсутствуют в Excel)")
-
-        print(f"✅ Импорт завершён! Обработано {total_processed} из {len(rows_to_insert)} записей")
-
+        rows = list(dataframe[db_columns].itertuples(index=False, name=None))
+        cursor.executemany(
+            f'INSERT INTO #PromoImportStage ({quoted_columns}) VALUES ({placeholders})',
+            rows,
+        )
+        cursor.execute(build_merge_sql(db_columns, full_snapshot=full_snapshot))
+        stats = {row[0]: row[1] for row in cursor.fetchall()}
+        connection.commit()
+        return stats
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
         cursor.close()
-        conn.close()
 
-    except Exception as e:
-        print(f"❌ Ошибка: {e}")
-        import traceback
-        traceback.print_exc()
+
+def main(argv=None):
+    args = parse_args(argv)
+    try:
+        print(f'📂 Проверяю файл: {args.excel_file}')
+        dataframe, db_columns = prepare_dataframe(args.excel_file)
+        print(f'✅ Проверено {len(dataframe)} строк, {len(db_columns)} колонок')
+
+        if args.dry_run:
+            print('✅ Dry-run завершён: база данных не изменялась.')
+            return 0
+
+        if args.full_snapshot:
+            print('⚠️ Режим полного снимка: отсутствующие в файле активные промо будут помечены удалёнными.')
+        else:
+            print('ℹ️ Безопасный режим: отсутствующие в файле записи не изменяются.')
+
+        connection = connect_to_db()
+        try:
+            stats = import_dataframe(
+                connection,
+                dataframe,
+                db_columns,
+                full_snapshot=args.full_snapshot,
+            )
+        finally:
+            connection.close()
+
+        print(
+            '✅ Импорт зафиксирован одной транзакцией: '
+            f'добавлено {stats.get("INSERT", 0)}, '
+            f'обновлено {stats.get("UPDATE", 0)}, '
+            f'помечено удалёнными {stats.get("SOFT_DELETE", 0)}.'
+        )
+        return 0
+    except Exception as error:
+        print(f'❌ Импорт отменён, изменения не зафиксированы: {error}', file=sys.stderr)
+        return 1
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

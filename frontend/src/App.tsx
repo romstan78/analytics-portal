@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
-import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button } from '@mui/material';
+import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button, CircularProgress } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
-import Login from './pages/Login';
-import Home from './pages/Home';
-import InternetSales from './pages/InternetSales';
-import PromoAnalysis from './pages/PromoAnalysis';
 import { getToken, logout } from './api/auth';
+
+const Login = lazy(() => import('./pages/Login'));
+const Home = lazy(() => import('./pages/Home'));
+const InternetSales = lazy(() => import('./pages/InternetSales'));
+const PromoAnalysis = lazy(() => import('./pages/PromoAnalysis'));
 
 const modernTheme = createTheme({
   palette: {
@@ -107,6 +108,14 @@ const modernTheme = createTheme({
   },
 });
 
+function PageLoader() {
+  return (
+    <Box sx={{ display: 'grid', minHeight: '100vh', placeItems: 'center' }}>
+      <CircularProgress aria-label="Загрузка страницы" />
+    </Box>
+  );
+}
+
 function PlaceholderPage({ title, description }) {
   const navigate = useNavigate();
 
@@ -151,7 +160,9 @@ export default function App() {
     return (
       <ThemeProvider theme={modernTheme}>
         <CssBaseline />
-        <Login onLogin={handleLogin} />
+        <Suspense fallback={<PageLoader />}>
+          <Login onLogin={handleLogin} />
+        </Suspense>
       </ThemeProvider>
     );
   }
@@ -160,15 +171,17 @@ export default function App() {
     <ThemeProvider theme={modernTheme}>
       <CssBaseline />
       <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
-        <Routes>
-          <Route path="/" element={<Home onLogout={handleLogout} />} />
-          <Route path="/internet-sales" element={<InternetSales />} />
-          <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
-          <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
-          <Route path="/network-registry" element={<PlaceholderPage title="Реестр сетей" description="Справочник торговых сетей" />} />
-          <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
-          <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
-        </Routes>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route path="/" element={<Home onLogout={handleLogout} />} />
+            <Route path="/internet-sales" element={<InternetSales />} />
+            <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
+            <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
+            <Route path="/network-registry" element={<PlaceholderPage title="Реестр сетей" description="Справочник торговых сетей" />} />
+            <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
+            <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
+          </Routes>
+        </Suspense>
       </Box>
     </ThemeProvider>
   );

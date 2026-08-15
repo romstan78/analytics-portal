@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Button, Stack, Box, Typography, CircularProgress, Tabs, Tab, 
@@ -17,14 +17,15 @@ import { ButtonGroup } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { useQueryClient } from '@tanstack/react-query';
 import FilterPanel from '../components/FilterPanel';
-import PromoForm from './PromoForm';
 import PromoEditDialog from '../components/PromoEditDialog';
-import PromoApproval from './PromoApproval';
 import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
 import { usePromoCalculations } from '../hooks/usePromoCalculations';
+
+const PromoForm = lazy(() => import('./PromoForm'));
+const PromoApproval = lazy(() => import('./PromoApproval'));
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
@@ -428,10 +429,18 @@ export default function PromoAnalysis({ role }) {
       </>)}
 
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
-      {tab === 1 && <PromoForm onSave={handlePromoFormSave} />}
+      {tab === 1 && (
+        <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
+          <PromoForm onSave={handlePromoFormSave} />
+        </Suspense>
+      )}
 
       {/* ─── Tab 2: Согласование ──────────────────────────────────────── */}
-      {tab === 2 && <PromoApproval role={role} onDataChanged={() => queryClient.invalidateQueries({ queryKey: ['promoData'] })} />}
+      {tab === 2 && (
+        <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
+          <PromoApproval role={role} onDataChanged={() => queryClient.invalidateQueries({ queryKey: ['promoData'] })} />
+        </Suspense>
+      )}
 
       {/* Снекбар уведомлений */}
       <Snackbar open={snackbar.open} autoHideDuration={3000} 
