@@ -19,8 +19,8 @@ test('ошибка при неверных данных', async ({ page }) => {
   await page.locator('input[type="text"]').fill('wrong');
   await page.locator('input[type="password"]').fill('wrong');
   await page.getByRole('button', { name: 'Войти' }).click();
-  // Ждём либо ошибку, либо редирект
-  await expect(
-    page.locator('.MuiAlert-root, text=Заполните все поля, text=Ошибка входа, text=Сервер недоступен')
-  ).toBeVisible({ timeout: 10000 });
+  await expect(page.getByRole('alert')).toContainText(
+    /неверный логин|Ошибка входа|Сервер недоступен/,
+    { timeout: 10000 },
+  );
 });

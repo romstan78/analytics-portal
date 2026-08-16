@@ -33,6 +33,9 @@ node_modules/
 frontend/dist/
 frontend/build/
 frontend/.vite/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
 *.log
 npm-debug.log*
 yarn-debug.log*

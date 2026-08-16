@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"regexp"
@@ -128,7 +129,9 @@ func Init() error {
 		MaxAge:     30,
 		Compress:   true,
 	}
-	handler := slog.NewJSONHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})
+	// Пишем одновременно в stdout (docker logs/агент мониторинга) и в
+	// ротируемый локальный файл для диагностики на хосте.
+	handler := slog.NewJSONHandler(io.MultiWriter(os.Stdout, logWriter), &slog.HandlerOptions{Level: slog.LevelInfo})
 	Logger = slog.New(handler)
 	slog.SetDefault(Logger)
 

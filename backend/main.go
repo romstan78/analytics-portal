@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"backend/config"
@@ -81,6 +85,9 @@ func main() {
 	if err := config.InitAuth(); err != nil {
 		log.Fatalf("Ошибка конфигурации авторизации: %v", err)
 	}
+	if err := config.ValidateRuntime(); err != nil {
+		log.Fatalf("Ошибка production-конфигурации: %v", err)
+	}
 
 	if err := config.Init(); err != nil {
 		log.Fatalf("Ошибка инициализации БД: %v", err)
@@ -89,7 +96,15 @@ func main() {
 
 	limiter := NewIPRateLimiter(100.0/60.0, 20) // 100 запросов в минуту, burst 20
 
+	if config.IsProduction() {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.Default()
+	// По умолчанию не доверяем X-Forwarded-For от произвольного клиента.
+	// В production принимаем заголовок только от явно заданных proxy.
+	if err := r.SetTrustedProxies(config.TrustedProxies()); err != nil {
+		log.Fatalf("Ошибка настройки доверенных proxy: %v", err)
+	}
 	corsOrigins := []string{"http://localhost:5173"}
 	if env := os.Getenv("CORS_ORIGINS"); env != "" {
 		corsOrigins = strings.Split(env, ",")
@@ -157,8 +172,40 @@ func main() {
 		port = "8080"
 	}
 	config.Logger.Info("server_starting", "port", port)
-	if err := r.Run(":" + port); err != nil {
-		config.Logger.Error("server_failed", "error", err.Error())
-		log.Fatalf("Ошибка запуска: %v", err)
+
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      10 * time.Minute, // большие Excel-выгрузки
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	shutdownSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	select {
+	case err := <-serverErrors:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			config.Logger.Error("server_failed", "error", err.Error())
+			log.Fatalf("Ошибка запуска: %v", err)
+		}
+	case <-shutdownSignal.Done():
+		config.Logger.Info("server_shutdown_started")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		config.Logger.Error("server_shutdown_failed", "error", err.Error())
+		if closeErr := server.Close(); closeErr != nil {
+			config.Logger.Error("server_force_close_failed", "error", closeErr.Error())
+		}
+	}
+	config.Logger.Info("server_stopped")
 }

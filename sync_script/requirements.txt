@@ -1,4 +1,4 @@
-pyodbc
-pandas
-python-dotenv
-openpyxl
+pyodbc==5.3.0
+pandas==2.2.2
+python-dotenv==1.2.2
+openpyxl==3.1.5

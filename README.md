@@ -154,4 +154,21 @@ python sync_script/dedupe_promo.py rollback \
 make test
 ```
 
+Браузерные smoke-тесты запускаются отдельно:
+
+```bash
+make test-e2e
+```
+
 Полные интеграционные Go-тесты запускаются только с `DB_NAME`, оканчивающимся на `_test`; в противном случае они завершаются до подключения к базе.
+
+## Production
+
+Production override отключает автоматическое создание БД, требует явные HTTPS-адреса и скрывает порт SQL Server от хоста:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+```
+
+Пример несекретных параметров находится в `ops/production.env.example`, эксплуатационный чек-лист — в `ops/README.md`. Пароли и JWT-секрет передаются только через защищённое окружение или secret manager.

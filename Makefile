@@ -1,4 +1,4 @@
-.PHONY: up down logs bootstrap-user seed-dev test
+.PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod
 
 up:
 	docker compose up -d --build
@@ -17,5 +17,11 @@ seed-dev:
 
 test:
 	cd backend && go test ./config ./middleware ./handlers ./repository
-	cd frontend && npm run lint && npm run build
+	cd frontend && npm run lint && npm run test:unit && npm run build
 	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py
+
+test-e2e:
+	cd frontend && npm run test:e2e
+
+config-prod:
+	docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet

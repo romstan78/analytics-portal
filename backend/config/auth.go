@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -34,6 +36,47 @@ func InitAuth() error {
 // IsProduction использует единую переменную окружения для production-настроек.
 func IsProduction() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
+}
+
+func TrustedProxies() []string {
+	var proxies []string
+	for _, proxy := range strings.Split(os.Getenv("TRUSTED_PROXIES"), ",") {
+		if value := strings.TrimSpace(proxy); value != "" {
+			proxies = append(proxies, value)
+		}
+	}
+	return proxies
+}
+
+// ValidateRuntime запрещает опасные значения по умолчанию в production.
+// Пароли здесь не читаются и не изменяются.
+func ValidateRuntime() error {
+	if !IsProduction() {
+		return nil
+	}
+	if envEnabled("DB_AUTO_CREATE") {
+		return errors.New("DB_AUTO_CREATE должен быть выключен в production")
+	}
+	origins := strings.TrimSpace(os.Getenv("CORS_ORIGINS"))
+	if origins == "" {
+		return errors.New("CORS_ORIGINS должен быть явно задан в production")
+	}
+	if len(TrustedProxies()) == 0 {
+		return errors.New("TRUSTED_PROXIES должен содержать адреса только доверенных reverse proxy в production")
+	}
+	for _, origin := range strings.Split(origins, ",") {
+		normalized := strings.TrimSpace(origin)
+		parsed, err := url.Parse(normalized)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("CORS_ORIGINS содержит некорректный HTTPS origin %q", normalized)
+		}
+		hostname := strings.ToLower(parsed.Hostname())
+		ip := net.ParseIP(hostname)
+		if normalized == "*" || hostname == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return fmt.Errorf("CORS_ORIGINS содержит недопустимый production-origin %q", normalized)
+		}
+	}
+	return nil
 }
 
 type Claims struct {

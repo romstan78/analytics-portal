@@ -4,11 +4,12 @@ x-backend-environment: &backend-environment
   DB_USER: sa
   DB_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
   DB_NAME: ${DB_NAME:-local_project_db}
-  DB_AUTO_CREATE: "true"
+  DB_AUTO_CREATE: ${DB_AUTO_CREATE:-true}
   DB_STARTUP_TIMEOUT_SECONDS: "120"
   APP_ENV: ${APP_ENV:-development}
   JWT_SECRET: ${JWT_SECRET:?Укажите JWT_SECRET в .env}
-  CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-5173}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-5173}}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
   PORT: "8080"
 
 x-backend-service: &backend-service
@@ -26,12 +27,13 @@ services:
     platform: ${MSSQL_PLATFORM:-linux/amd64}
     environment:
       ACCEPT_EULA: Y
-      MSSQL_PID: Developer
+      MSSQL_PID: ${MSSQL_PID:-Developer}
       MSSQL_SA_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
     ports:
-      - "${MSSQL_PORT:-1433}:1433"
+      - "${MSSQL_BIND_ADDRESS:-127.0.0.1}:${MSSQL_PORT:-1433}:1433"
     volumes:
       - mssql_data:/var/opt/mssql
+      - mssql_backups:/var/opt/mssql/backup
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" -b -o /dev/null"]
       interval: 10s
@@ -58,7 +60,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE: http://localhost:${BACKEND_PORT:-8080}
+        VITE_API_BASE: ${PUBLIC_API_BASE:-http://localhost:${BACKEND_PORT:-8080}}
     image: analytics-portal-frontend:local
     ports:
       - "${FRONTEND_PORT:-5173}:80"
@@ -89,4 +91,5 @@ services:
 
 volumes:
   mssql_data:
+  mssql_backups:
   backend_logs:

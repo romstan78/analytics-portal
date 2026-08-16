@@ -1,0 +1,18 @@
+services:
+  mssql_db:
+    # В production SQL Server доступен только другим сервисам compose.
+    ports: !reset []
+    environment:
+      MSSQL_PID: ${MSSQL_PID:-Standard}
+
+  backend:
+    environment:
+      APP_ENV: production
+      DB_AUTO_CREATE: "false"
+      CORS_ORIGINS: ${CORS_ORIGINS:?Укажите публичный HTTPS origin портала}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?Укажите адреса только доверенных reverse proxy}
+
+  frontend:
+    build:
+      args:
+        VITE_API_BASE: ${PUBLIC_API_BASE:?Укажите публичный HTTPS URL backend}
