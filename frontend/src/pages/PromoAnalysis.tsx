@@ -292,7 +292,7 @@ export default function PromoAnalysis({ role }) {
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2 }}>
       {/* Шапка */}
-      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Анализ промо</Typography>
         {meta.loading && <CircularProgress size={20} />}
@@ -349,7 +349,7 @@ export default function PromoAnalysis({ role }) {
             </Menu>
             <TextField size="small" placeholder="Поиск по таблице..." value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              InputProps={{ startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> }}
+              slotProps={{ input: { startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> } }}
               sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
             <Box sx={{ flex: 1 }} />
             {role === 'admin' && (

@@ -32,7 +32,7 @@ const MONTHS = [
   { label: 'Октябрь', value: 10 }, { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
 ];
 
-const SIDEBAR_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as', 'kam']);
+const HEADER_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as']);
 
 const ROLE_COLORS = {
   'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
@@ -64,7 +64,7 @@ const ApprovalCard = memo(function ApprovalCard({
 
   const visibleData = useMemo(() => {
     if (!visibleFields || visibleFields.length === 0) return [];
-    return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !SIDEBAR_FIELDS.has(f.id));
+    return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !HEADER_FIELDS.has(f.id));
   }, [visibleFields]);
 
   const { data: comments = [], isLoading: commentsLoading } = useQuery<CommentRow[]>({
@@ -99,11 +99,12 @@ const ApprovalCard = memo(function ApprovalCard({
         )}
         <CardContent sx={{ flex: 1, pb: 1, pt: 2, display: 'flex', flexDirection: 'column' }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 0.5 }}>
-            {item.network_name || '—'}
+            {visibleFields.includes('network_name') ? item.network_name || `Промо #${id}` : `Промо #${id}`}
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.5, mb: 1, flexWrap: 'wrap' }}>
-            <Chip label={item.sku || '—'} size="small" variant="outlined" />
-            <Chip label={item.mechanics || '—'} size="small" color="primary" variant="outlined" />
+            {visibleFields.includes('brand_as') && item.brand_as && <Chip label={item.brand_as} size="small" variant="outlined" />}
+            {visibleFields.includes('sku') && item.sku && <Chip label={item.sku} size="small" variant="outlined" />}
+            {visibleFields.includes('mechanics') && item.mechanics && <Chip label={item.mechanics} size="small" color="primary" variant="outlined" />}
           </Box>
           {item.year && item.month && (
             <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
@@ -127,19 +128,6 @@ const ApprovalCard = memo(function ApprovalCard({
                 </Grid>
               ))}
             </Grid>
-          )}
-
-          {(visibleFields?.includes('historical_count') || visibleFields?.includes('avg_historical_roi') || visibleFields?.includes('avg_historical_uplift')) && (
-            <Box sx={{ bgcolor: '#f1f5f9', borderRadius: 1.5, p: 1, mb: 1, display: 'flex', gap: 2 }}>
-              {visibleFields.includes('historical_count') && (
-                <Typography variant="caption" color="text.secondary">История: {item.historical_count} промо</Typography>
-              )}
-              {visibleFields.includes('avg_historical_roi') && (
-                <Typography variant="caption" color="text.secondary">
-                  Средний ROI: {item.avg_historical_roi != null ? `${Number(item.avg_historical_roi).toFixed(1)}%` : '—'}
-                </Typography>
-              )}
-            </Box>
           )}
 
           {(item.agreement1 || item.agreement2) && (
@@ -203,14 +191,17 @@ const ApprovalCard = memo(function ApprovalCard({
 
         <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2, gap: 0.5, mt: 'auto' }}>
           <Button size="small" variant="outlined" startIcon={<CommentIcon />}
-            onClick={() => { onCommentOnly(id, localComment); setLocalComment(''); }} disabled={isSubmitting || !localComment.trim()}
+            onClick={async () => {
+              const saved = await onCommentOnly(id, localComment);
+              if (saved) setLocalComment('');
+            }} disabled={isSubmitting || !localComment.trim()}
             sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Комментарий</Button>
           <Button size="small" variant="contained" color="success" startIcon={<ApproveIcon />}
             onClick={() => { onOpenConfirm(id, 'согласовано', localComment); }} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовано</Button>
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Согласовать</Button>
           <Button size="small" variant="contained" color="error" startIcon={<RejectIcon />}
             onClick={() => { onOpenConfirm(id, 'отклонено', localComment); }} disabled={isSubmitting}
-            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонено</Button>
+            sx={{ borderRadius: 2, flex: 1, fontSize: '0.75rem' }}>Отклонить</Button>
         </CardActions>
       </Card>
 

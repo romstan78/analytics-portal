@@ -5,6 +5,7 @@ import {
   TextField, MenuItem, Dialog,
   DialogTitle, DialogContent, DialogActions,
   Paper, Stack, Button, ToggleButtonGroup, ToggleButton,
+  Chip,
   Checkbox, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination,
   Drawer, Accordion, AccordionSummary, AccordionDetails,
@@ -18,8 +19,9 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import ApprovalCard from '../components/ApprovalCard';
+import ApprovalDetailPanel from '../components/ApprovalDetailPanel';
 import { promoAPI } from '../api/promo';
-import { FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS } from '../utils/cardFields';
+import { FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS, normalizeVisibleFields } from '../utils/cardFields';
 
 const MONTHS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 },
@@ -40,25 +42,31 @@ export default function PromoApproval({ role, onDataChanged }) {
   const queryClient = useQueryClient();
   const [adminApprovalRole, setAdminApprovalRole] = useState('agreement1');
   const approvalRole = role === 'admin' ? adminApprovalRole : role;
-  // Вид: cards | table
-  const [viewMode, setViewMode] = useState('cards');
+  // Основной вид: очередь + детали. Карточки оставлены как дополнительный режим.
+  const [viewMode, setViewMode] = useState('workspace');
 
   // Настройка карточек (Drawer)
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchField, setSearchField] = useState('');
   const [visibleFields, setVisibleFields] = useState(() => {
     try {
-      const saved = localStorage.getItem('promo_card_fields_v2');
-      return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_FIELDS;
+      const saved = localStorage.getItem('promo_approval_fields_v3');
+      return saved ? normalizeVisibleFields(JSON.parse(saved)) : [...DEFAULT_VISIBLE_FIELDS];
     } catch { return DEFAULT_VISIBLE_FIELDS; }
   });
 
   const toggleField = (id) => {
     setVisibleFields(prev => {
       const next = prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id];
-      localStorage.setItem('promo_card_fields_v2', JSON.stringify(next));
+      localStorage.setItem('promo_approval_fields_v3', JSON.stringify(next));
       return next;
     });
+  };
+
+  const resetVisibleFields = () => {
+    const defaults = [...DEFAULT_VISIBLE_FIELDS];
+    localStorage.setItem('promo_approval_fields_v3', JSON.stringify(defaults));
+    setVisibleFields(defaults);
   };
 
   // Черновики фильтров (меняются сразу)
@@ -91,6 +99,7 @@ export default function PromoApproval({ role, onDataChanged }) {
   const [mechanicsOptions, setMechanicsOptions] = useState([]);
 
   const [approvals, setApprovals] = useState([]);
+  const [activeApprovalId, setActiveApprovalId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expandedCards, setExpandedCards] = useState({});
@@ -167,6 +176,12 @@ export default function PromoApproval({ role, onDataChanged }) {
 
   useEffect(() => { fetchApprovals(); }, [fetchApprovals]);
 
+  useEffect(() => {
+    setActiveApprovalId(currentId => (
+      approvals.some(item => item.id === currentId) ? currentId : approvals[0]?.id ?? null
+    ));
+  }, [approvals]);
+
   const handleApply = () => {
     setHasApplied(true);
     setAppliedKam(draftKam);
@@ -187,6 +202,7 @@ export default function PromoApproval({ role, onDataChanged }) {
     setAppliedStatus('pending'); setAppliedYear(String(new Date().getFullYear())); setAppliedMonth('');
     setDraftHasComments(false); setAppliedHasComments(false);
     setApprovals([]);
+    setActiveApprovalId(null);
     setSelectedIds(new Set());
     setHasApplied(false);
     setPage(0);
@@ -234,9 +250,9 @@ export default function PromoApproval({ role, onDataChanged }) {
     }
   };
 
-  const handleCommentOnly = (id, comment) => {
-    if (!comment || !comment.trim()) return;
-    handleQuickAction(id, 'comment', comment);
+  const handleCommentOnly = async (id, comment) => {
+    if (!comment || !comment.trim()) return false;
+    return handleQuickAction(id, 'comment', comment);
   };
 
   // Быстрое действие без диалога подтверждения (comment-only).
@@ -254,11 +270,13 @@ export default function PromoApproval({ role, onDataChanged }) {
       setRefreshFilters(prev => prev + 1);
       await fetchApprovals();
       if (onDataChanged) onDataChanged();
+      return true;
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + (err.message || 'не удалось'), severity: 'error' });
       if (err?.status === 409 || err?.status === 404) {
         await fetchApprovals();
       }
+      return false;
     } finally {
       setSubmitting(prev => ({ ...prev, [id]: false }));
     }
@@ -342,13 +360,23 @@ export default function PromoApproval({ role, onDataChanged }) {
     return undefined;
   };
 
+  const activeApproval = approvals.find(item => item.id === activeApprovalId) || null;
+  const getCurrentStatus = (item) => (
+    approvalRole === 'agreement2' ? item.agreement2_status : item.agreement1_status
+  ) || 'pending';
+  const statusMeta = (status) => {
+    if (status === 'approved') return { label: 'Согласовано', color: 'success' };
+    if (status === 'rejected') return { label: 'Отклонено', color: 'error' };
+    if (status === 'commented') return { label: 'Комментарий', color: 'info' };
+    return { label: 'Ожидает', color: 'default' };
+  };
+
   return (
     <Box sx={{ flex: 1, overflow: 'auto', px: 2, pb: 4 }}>
-      {/* Sticky: фильтры + переключатель вида — закреплены при скролле */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 10, bgcolor: '#f5f7fa', pb: 2, pt: 2 }}>
+      <Box sx={{ pb: 1, pt: 2 }}>
       {role === 'admin' && (
         <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
-          <Stack direction="row" spacing={2} alignItems="center">
+          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Этап согласования:</Typography>
             <ToggleButtonGroup
               value={adminApprovalRole}
@@ -358,6 +386,7 @@ export default function PromoApproval({ role, onDataChanged }) {
                 if (!nextRole) return;
                 setAdminApprovalRole(nextRole);
                 setApprovals([]);
+                setActiveApprovalId(null);
                 setSelectedIds(new Set());
                 setHasApplied(false);
                 setTotal(0);
@@ -372,7 +401,7 @@ export default function PromoApproval({ role, onDataChanged }) {
       )}
       <Paper variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 3 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1.5 }}>🔍 Фильтры</Typography>
-        <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap alignItems="center">
+        <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
           <TextField select size="small" label="KAM" value={draftKam}
             onChange={(e) => setDraftKam(e.target.value)} sx={{ minWidth: 180 }}>
             <MenuItem value="">Все</MenuItem>
@@ -442,23 +471,19 @@ export default function PromoApproval({ role, onDataChanged }) {
             }}
             size="small"
           >
+            <ToggleButton value="workspace"><TableIcon sx={{ mr: 0.5, fontSize: 18 }} />Очередь</ToggleButton>
             <ToggleButton value="cards"><CardIcon sx={{ mr: 0.5, fontSize: 18 }} />Карточки</ToggleButton>
-            <ToggleButton value="table"><TableIcon sx={{ mr: 0.5, fontSize: 18 }} />Таблица</ToggleButton>
           </ToggleButtonGroup>
-          {/* Кнопка настроек карточек — только в режиме карточек */}
-          {viewMode === 'cards' && (
-            <Button
-              size="small"
-              startIcon={<SettingsIcon />}
-              onClick={() => setSettingsOpen(true)}
-              sx={{ color: '#475569', fontWeight: 500, ml: 1 }}
-            >
-              Поля
-            </Button>
-          )}
+          <Button
+            size="small"
+            startIcon={<SettingsIcon />}
+            onClick={() => setSettingsOpen(true)}
+            sx={{ color: '#475569', fontWeight: 500, ml: 1 }}
+          >
+            Поля
+          </Button>
           <Box sx={{ flex: 1 }} />
-          {/* Кнопки массовых действий — только в режиме таблицы */}
-          {viewMode === 'table' && (
+          {viewMode === 'workspace' && (
             <>
               <Button
                 variant="contained" color="success" size="small"
@@ -513,12 +538,12 @@ export default function PromoApproval({ role, onDataChanged }) {
         return (
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Найдено: {approvals.length} промо{remaining > 0 ? ` • Показаны первые ${MAX_CARDS}` : ''}
+              Найдено: {total} промо · на странице {approvals.length}{remaining > 0 ? ` • Показаны первые ${MAX_CARDS}` : ''}
             </Typography>
             {remaining > 0 && (
               <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
-                Показаны первые {MAX_CARDS} из {approvals.length} промо. Осталось ещё {remaining}.<br />
-                Для массовых действий переключитесь в табличный вид.
+                Показаны первые {MAX_CARDS} из {approvals.length} промо на странице. Осталось ещё {remaining}.<br />
+                Для полного списка и массовых действий переключитесь в режим «Очередь».
               </Alert>
             )}
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 2 }}>
@@ -534,65 +559,134 @@ export default function PromoApproval({ role, onDataChanged }) {
         );
       })()}
 
-      {/* Вид: Таблица */}
-      {!loading && approvals.length > 0 && viewMode === 'table' && (
-        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
-          <Table size="small">
-            <TableHead>
-              <TableRow sx={{ bgcolor: '#f1f5f9' }}>
-                <TableCell padding="checkbox">
-                  <Checkbox
-                    size="small"
-                    indeterminate={selectedIds.size > 0 && selectedIds.size < approvals.length}
-                    checked={selectedIds.size === approvals.length}
-                    onChange={toggleSelectAll}
-                  />
-                </TableCell>
-                <TableCell>Период</TableCell>
-                <TableCell>Сеть</TableCell>
-                <TableCell>Бренд</TableCell>
-                <TableCell>SKU</TableCell>
-                <TableCell>Механика</TableCell>
-                <TableCell align="right">План (уп)</TableCell>
-                <TableCell align="right">Факт (уп)</TableCell>
-                <TableCell align="right">Инвестиции</TableCell>
-                <TableCell align="right">ROI</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {approvals.map(a => (
-                <TableRow key={a.id} hover selected={selectedIds.has(a.id)}>
-                  <TableCell padding="checkbox">
-                    <Checkbox
-                      size="small"
-                      checked={selectedIds.has(a.id)}
-                      onChange={() => toggleSelect(a.id)}
-                    />
-                  </TableCell>
-                  <TableCell>{a.year}.{String(a.month).padStart(2, '0')}</TableCell>
-                  <TableCell>{a.network_name}</TableCell>
-                  <TableCell>{a.brand_as}</TableCell>
-                  <TableCell>{a.sku}</TableCell>
-                  <TableCell>{a.mechanics}</TableCell>
-                  <TableCell align="right">
-                    {a.plan_promo_units != null ? Number(a.plan_promo_units).toLocaleString('ru-RU') : ''}
-                  </TableCell>
-                  <TableCell align="right">
-                    {a.actual_promo_sales_units != null ? Number(a.actual_promo_sales_units).toLocaleString('ru-RU') : ''}
-                  </TableCell>
-                  <TableCell align="right">
-                    {a.plan_investments_rub != null ? Number(a.plan_investments_rub).toLocaleString('ru-RU') : ''}
-                  </TableCell>
-                  <TableCell align="right">
-                    <Typography fontWeight={600} color={getROIColor(a.plan_roi)}>
-                      {formatROI(a.plan_roi)}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+      {/* Основной вид: очередь согласований + подробности */}
+      {!loading && approvals.length > 0 && viewMode === 'workspace' && (
+        <Paper
+          variant="outlined"
+          sx={{
+            borderRadius: 3,
+            overflow: 'hidden',
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', lg: 'minmax(620px, 1.25fr) minmax(380px, 0.75fr)' },
+          }}
+        >
+          <Box sx={{ minWidth: 0, borderRight: { lg: '1px solid #e2e8f0' }, borderBottom: { xs: '1px solid #e2e8f0', lg: 0 } }}>
+            <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+              <Box>
+                <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Очередь согласования</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  На странице {approvals.length} из {total} · выбрано {selectedIds.size}
+                </Typography>
+              </Box>
+              <Box sx={{ flex: 1 }} />
+              <Chip size="small" label={`Этап ${approvalRole === 'agreement2' ? '2' : '1'}`} color="primary" variant="outlined" />
+            </Box>
+            <TableContainer sx={{ maxHeight: 720 }}>
+              <Table stickyHeader size="small" aria-label="Очередь промо на согласование">
+                <TableHead>
+                  <TableRow>
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        size="small"
+                        indeterminate={selectedIds.size > 0 && selectedIds.size < approvals.length}
+                        checked={approvals.length > 0 && selectedIds.size === approvals.length}
+                        onClick={toggleSelectAll}
+                        onChange={() => {}}
+                        slotProps={{ input: { 'aria-label': 'Выбрать все промо на странице' } }}
+                      />
+                    </TableCell>
+                    <TableCell>Промо</TableCell>
+                    <TableCell>Период</TableCell>
+                    <TableCell align="right">План / факт</TableCell>
+                    <TableCell align="right">Инвестиции</TableCell>
+                    <TableCell align="right">ROI</TableCell>
+                    <TableCell>Статус</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {approvals.map(item => {
+                    const currentStatus = getCurrentStatus(item);
+                    const meta = statusMeta(currentStatus);
+                    const isActive = activeApprovalId === item.id;
+                    return (
+                      <TableRow
+                        key={item.id}
+                        hover
+                        selected={isActive}
+                        onClick={() => setActiveApprovalId(item.id)}
+                        sx={{
+                          cursor: 'pointer',
+                          '& td:first-of-type': { borderLeft: isActive ? '3px solid #6366f1' : '3px solid transparent' },
+                          '&.Mui-selected': { bgcolor: '#eef2ff' },
+                          '&.Mui-selected:hover': { bgcolor: '#e0e7ff' },
+                        }}
+                      >
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={selectedIds.has(item.id)}
+                            onChange={() => {}}
+                            onClick={event => {
+                              event.stopPropagation();
+                              toggleSelect(item.id);
+                            }}
+                            slotProps={{ input: { 'aria-label': `Выбрать промо ${item.id}` } }}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 190 }}>
+                          <Box
+                            component="button"
+                            type="button"
+                            aria-label={`Открыть промо ${item.id}`}
+                            onClick={() => setActiveApprovalId(item.id)}
+                            sx={{
+                              display: 'block', width: '100%', p: 0, border: 0, bgcolor: 'transparent',
+                              color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                            }}
+                          >
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>{item.network_name || 'Сеть не указана'}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{item.brand_as || '—'} · {item.sku || '—'}</Typography>
+                            <Typography variant="caption" color="text.secondary">{item.mechanics || 'Механика не указана'}</Typography>
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.year}.{String(item.month || '').padStart(2, '0')}</TableCell>
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {item.plan_promo_units != null ? Number(item.plan_promo_units).toLocaleString('ru-RU') : '—'}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            факт {item.actual_promo_sales_units != null ? Number(item.actual_promo_sales_units).toLocaleString('ru-RU') : '—'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          {item.plan_investments_rub != null ? Number(item.plan_investments_rub).toLocaleString('ru-RU') : '—'}
+                        </TableCell>
+                        <TableCell align="right">
+                          <Typography variant="body2" sx={{ fontWeight: 700, color: getROIColor(item.plan_roi) }}>
+                            {formatROI(item.plan_roi) || '—'}{item.plan_roi != null ? '%' : ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            факт {formatROI(item.actual_roi) || '—'}{item.actual_roi != null ? '%' : ''}
+                          </Typography>
+                        </TableCell>
+                        <TableCell><Chip size="small" label={meta.label} color={meta.color} variant="outlined" /></TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+
+          <ApprovalDetailPanel
+            item={activeApproval}
+            approvalRole={approvalRole}
+            visibleFields={visibleFields}
+            submitting={Boolean(activeApproval && submitting[activeApproval.id])}
+            onOpenConfirm={openConfirm}
+            onCommentOnly={handleCommentOnly}
+          />
+        </Paper>
       )}
 
       {/* Диалог подтверждения (единичное действие) */}
@@ -647,10 +741,13 @@ export default function PromoApproval({ role, onDataChanged }) {
         <Alert severity={snackbar.severity} onClose={() => setSnackbar(s => ({ ...s, open: false }))}>{snackbar.message}</Alert>
       </Snackbar>
 
-      {/* Drawer настройки полей карточки */}
+      {/* Настройка полей подробной панели и карточек */}
       <Drawer anchor="right" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
         <Box sx={{ width: 350, p: 3 }}>
-          <Typography variant="h6" mb={2}>Настройка карточки</Typography>
+          <Typography variant="h6" sx={{ mb: 0.5 }}>Поля отображения</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Настройка применяется к подробной панели и карточкам. Доступны только поля, которые загружает API.
+          </Typography>
 
           <TextField
             fullWidth size="small" placeholder="Поиск поля..."
@@ -698,6 +795,10 @@ export default function PromoApproval({ role, onDataChanged }) {
               </Accordion>
             );
           })}
+
+          <Button variant="outlined" fullWidth onClick={resetVisibleFields} sx={{ mt: 2 }}>
+            Восстановить стандартные поля
+          </Button>
         </Box>
       </Drawer>
     </Box>

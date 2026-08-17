@@ -75,6 +75,7 @@ export interface ApprovalRow {
   plan_roi: number | null;
   actual_roi: number | null;
   conditions: string | null;
+  comments: string | null;
   agreement1: string | null;
   agreement1_status: string | null;
   agreement1_comment: string | null;

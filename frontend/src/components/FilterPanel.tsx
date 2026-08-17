@@ -122,14 +122,17 @@ export default function FilterPanel({
                   const values = newVal.map(v => v.value);
                   onFiltersChange({ ...filters, [filter.field]: values });
                 }}
-                renderTags={() => null}
+                renderValue={() => null}
                 renderOption={renderCheckboxOption}
                 renderInput={(params) => (
                   <TextField 
                     {...params} 
                     label={filter.label} 
                     placeholder={monthDisplayText}
-                    InputLabelProps={{ shrink: true }} 
+                    slotProps={{
+                      ...params.slotProps,
+                      inputLabel: { ...params.slotProps.inputLabel, shrink: true },
+                    }}
                   />
                 )}
                 slotProps={{ 
@@ -161,14 +164,17 @@ export default function FilterPanel({
               options={options} value={selected}
               onChange={handleArrayChange(key)}
               renderOption={renderCheckboxOption}
-              renderTags={() => null}
+              renderValue={() => null}
               limitTags={0}
               renderInput={(params) => (
                 <TextField
                   {...params}
                   label={getLabel(key)}
                   placeholder={displayText}
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{
+                    ...params.slotProps,
+                    inputLabel: { ...params.slotProps.inputLabel, shrink: true },
+                  }}
                 />
               )}
               slotProps={{ listbox: { style: { maxHeight: 300 } }, paper: { sx: { minWidth: 350 } } }}
