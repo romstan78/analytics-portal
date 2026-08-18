@@ -114,7 +114,7 @@ const EXTRA_FILTERS = [
   { type: 'year', field: 'yearTo', label: 'Год до' }, 
   { type: 'months', field: 'months', label: 'Месяцы' }
 ];
-const PROMO_VISIBLE_FILTERS = ['kam', 'brand', 'sku', 'network_name', 'mechanics', 'channel', 'status'];
+const PROMO_VISIBLE_FILTERS = ['kam', 'network_name', 'brand', 'sku', 'mechanics', 'channel', 'status'];
 
 // ─── Компонент ─────────────────────────────────────────────────────────────
 // role — передаётся из App.jsx (admin / agreement1 / agreement2)
