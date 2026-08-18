@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -147,6 +148,25 @@ func GetPromoData(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": results})
+}
+
+func GetPromoByID(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный ID промо"})
+		return
+	}
+
+	row, err := repository.GetPromoByID(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Промо не найдено"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось загрузить промо"})
+		return
+	}
+	c.JSON(http.StatusOK, row)
 }
 
 func GetSKUByBrand(c *gin.Context) {

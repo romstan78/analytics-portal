@@ -110,6 +110,8 @@ type HistoryRow struct {
 	BaselineUnits          *float64 `json:"baseline_units"`
 	PlanPromoUnits         *float64 `json:"plan_promo_units"`
 	ActualPromoSalesUnits  *float64 `json:"actual_promo_sales_units"`
+	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
+	ActualInvestments      *float64 `json:"actual_investments"`
 	PlanPromoUpliftUnits   *float64 `json:"plan_promo_uplift_units"`
 	ActualPromoUpliftUnits *float64 `json:"actual_promo_uplift_units"`
 	PlanROI                *float64 `json:"plan_roi"`

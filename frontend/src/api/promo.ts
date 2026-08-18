@@ -125,6 +125,13 @@ export const promoAPI = {
   getData: (filters: Record<string, unknown> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`).then(r => r.json()),
 
+  getById: (id: number): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/promo/${id}`).then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      return data;
+    }),
+
   // История промо по SKU/сети/механике
   getHistory: (params: Record<string, string> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/promo/history?${new URLSearchParams(params)}`).then(r => r.json()),

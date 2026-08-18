@@ -126,6 +126,7 @@ export default function PromoAnalysis({ role }) {
   const [allNetworkOptions, setAllNetworkOptions] = useState([]);
   const [investmentTypes, setInvestmentTypes] = useState([]);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [promoViewOnly, setPromoViewOnly] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [deletedFilter, setDeletedFilter] = useState(''); // "" = active, "deleted" = only deleted, "all" = both
@@ -185,7 +186,7 @@ export default function PromoAnalysis({ role }) {
   }), [meta]);
 
   // ─── Обработчики действий ─────────────────────────────────────────────
-  const handleRowClick = (params) => { formHandleRowClick(params.row); setEditDialogOpen(true); };
+  const handleRowClick = (params) => { formHandleRowClick(params.row); setPromoViewOnly(false); setEditDialogOpen(true); };
 
   const handleSave = async (commentOverride) => { 
     const result = await formHandleSave(commentOverride); 
@@ -200,7 +201,17 @@ export default function PromoAnalysis({ role }) {
 
   const handlePromoFormSave = () => {
     queryClient.invalidateQueries({ queryKey: ['promoData'] });
-    setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
+  };
+
+  const handleHistoryPromoOpen = async (id) => {
+    try {
+      const promo = await promoAPI.getById(id);
+      formHandleRowClick(promo);
+      setPromoViewOnly(true);
+      setEditDialogOpen(true);
+    } catch (err) {
+      setSnackbar({ open: true, message: `❌ Не удалось открыть промо: ${err.message}`, severity: 'error' });
+    }
   };
 
   // Debounce поиска (300ms) — чтобы не тормозить при вводе
@@ -404,34 +415,12 @@ export default function PromoAnalysis({ role }) {
           />
         </Box>
 
-        {/* Диалог редактирования */}
-        <PromoEditDialog 
-          open={editDialogOpen} onClose={() => setEditDialogOpen(false)}
-          form={form} setForm={setForm} recalcPlan={recalcPlan} recalcActual={recalcActual}
-          onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
-          saving={saving} deleting={deleting} meta={meta} 
-          allSkuOptions={allSkuOptions} allNetworkOptions={allNetworkOptions} 
-          investmentTypes={investmentTypes}
-          role={role}
-        />
-
-        {/* Диалог подтверждения удаления */}
-        <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-          <DialogTitle>Удалить промо #{form.id}?</DialogTitle>
-          <DialogContent><Typography>Это действие нельзя отменить.</Typography></DialogContent>
-          <DialogActions>
-            <Button onClick={() => setDeleteDialogOpen(false)}>Отмена</Button>
-            <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
-              {deleting ? 'Удаление...' : 'Удалить'}
-            </Button>
-          </DialogActions>
-        </Dialog>
       </>)}
 
       {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
       {tab === 1 && (
         <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
-          <PromoForm onSave={handlePromoFormSave} />
+          <PromoForm onSave={handlePromoFormSave} onOpenPromo={handleHistoryPromoOpen} />
         </Suspense>
       )}
 
@@ -441,6 +430,29 @@ export default function PromoAnalysis({ role }) {
           <PromoApproval role={role} onDataChanged={() => queryClient.invalidateQueries({ queryKey: ['promoData'] })} />
         </Suspense>
       )}
+
+      {/* Карточка доступна и из таблицы, и из истории на форме создания */}
+      <PromoEditDialog
+        open={editDialogOpen} onClose={() => { setEditDialogOpen(false); setPromoViewOnly(false); }}
+        form={form} setForm={setForm} recalcPlan={recalcPlan} recalcActual={recalcActual}
+        onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
+        saving={saving} deleting={deleting} meta={meta}
+        allSkuOptions={allSkuOptions} allNetworkOptions={allNetworkOptions}
+        investmentTypes={investmentTypes}
+        role={role}
+        readOnly={promoViewOnly}
+      />
+
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+        <DialogTitle>Удалить промо #{form.id}?</DialogTitle>
+        <DialogContent><Typography>Это действие нельзя отменить.</Typography></DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Отмена</Button>
+          <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
+            {deleting ? 'Удаление...' : 'Удалить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Снекбар уведомлений */}
       <Snackbar open={snackbar.open} autoHideDuration={3000} 

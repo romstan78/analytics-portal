@@ -91,13 +91,14 @@ interface PromoEditDialogProps {
   allNetworkOptions: string[];
   investmentTypes: string[];
   role: string | null;
+  readOnly?: boolean;
 }
 
 export default function PromoEditDialog({
   open, onClose, form, setForm, recalcPlan, recalcActual,
   onSave, onDelete, saving,
   meta, allSkuOptions, investmentTypes,
-  role,
+  role, readOnly = false,
 }: PromoEditDialogProps) {
   const queryClient = useQueryClient();
   const [editingFields, setEditingFields] = useState({});
@@ -125,6 +126,7 @@ export default function PromoEditDialog({
   if (!form) return null;
 
   const isDeleted = Boolean(form.deleted_at);
+  const isLocked = isDeleted || readOnly;
 
   const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
 
@@ -156,7 +158,7 @@ export default function PromoEditDialog({
   const isApprover = role === 'agreement1' || role === 'agreement2';
 
   const handleSaveClick = async () => {
-    if (isDeleted) return;
+    if (isLocked) return;
     if (isApprover) {
       setConfirmOpen(true);
     } else {
@@ -167,7 +169,7 @@ export default function PromoEditDialog({
   };
 
   const handleConfirmSave = async () => {
-    if (isDeleted) return;
+    if (isLocked) return;
     setConfirmOpen(false);
     await onSave(newComment.trim() || null);
     setNewComment('');
@@ -175,7 +177,7 @@ export default function PromoEditDialog({
   };
 
   const handleRestore = async () => {
-    if (!form?.id) return;
+    if (!form?.id || readOnly) return;
     setRestoring(true);
     try {
       await promoAPI.restore(form.id);
@@ -202,7 +204,7 @@ export default function PromoEditDialog({
       {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#ffffff', py: 1.5, px: 3 }}>
         <Typography component="span" sx={{ fontSize: '1.25rem', fontWeight: 600 }}>
-          Редактирование: {form.network_name || 'Промо'}
+          {readOnly ? 'Просмотр' : 'Редактирование'}: {form.network_name || 'Промо'}
         </Typography>
         <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
       </DialogTitle>
@@ -236,29 +238,29 @@ export default function PromoEditDialog({
                   <Typography variant="subtitle1" sx={{ ...titleStyles }}>📋 Основные данные</Typography>
                   
                   <Box sx={gridStyles}>
-                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} disabled={isDeleted} />
-                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} disabled={isDeleted} />
-                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')} disabled={isDeleted}>
+                    <TextField label="ID Директум" size="small" fullWidth value={form.id_directum || ''} onChange={updateField('id_directum')} disabled={isLocked} />
+                    <TextField label="№ ДС" size="small" fullWidth value={form.ds_number || ''} onChange={updateField('ds_number')} disabled={isLocked} />
+                    <TextField select size="small" fullWidth label="Месяц" value={form.month || ''} onChange={updateField('month')} disabled={isLocked}>
                       {MONTH_OPTIONS.map(m => <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
                     </TextField>
-                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} disabled={isDeleted} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
+                    <TextField label="Год" type="number" size="small" fullWidth value={form.year || ''} onChange={updateField('year')} disabled={isLocked} slotProps={{ htmlInput: { min: 2020, max: 2030 } }} />
   
-                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''} disabled={isDeleted}
+                    <TextField select size="small" fullWidth label="SKU" value={form.sku || ''} disabled={isLocked}
                       onChange={(e) => { const v = e.target.value; setForm(prev => ({ ...prev, sku: v })); if (v) fetchSKUInfoForEdit(v); }}>
                       {allSkuOptions.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
                     </TextField>
-                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')} disabled={isDeleted}>
+                    <TextField select size="small" fullWidth label="Механика" value={form.mechanics || ''} onChange={updateField('mechanics')} disabled={isLocked}>
                       {meta.mechanics?.map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
                     </TextField>
-                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')} disabled={isDeleted}>
+                    <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')} disabled={isLocked}>
                       {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
                     </TextField>
-                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')} disabled={isDeleted}>
+                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')} disabled={isLocked}>
                       {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
                     </TextField>
   
-                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} disabled={isDeleted} slotProps={{ htmlInput: { min: 0 } }} />
-                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} disabled={isDeleted} slotProps={{ htmlInput: { min: 0 } }} />
+                    <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} disabled={isLocked} slotProps={{ htmlInput: { min: 0 } }} />
+                    <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} disabled={isLocked} slotProps={{ htmlInput: { min: 0 } }} />
                     <AgreementChip label="Согласование 1" value={form.agreement1} />
                     <AgreementChip label="Согласование 2" value={form.agreement2} />
                   </Box>
@@ -266,7 +268,7 @@ export default function PromoEditDialog({
                   {/* Поля Условия и Комментарии: minRows={1} экономит место, но позволяет расширяться */}
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 1.5 }}>
                     <TextField label="Условия" size="small" fullWidth multiline minRows={1} maxRows={3}
-                      value={form.conditions || ''} onChange={updateField('conditions')} disabled={isDeleted} />
+                      value={form.conditions || ''} onChange={updateField('conditions')} disabled={isLocked} />
                    {/* История комментариев (только чтение) */}
                    {commentsLoading ? (
                      <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -292,7 +294,7 @@ export default function PromoEditDialog({
                    )}
                   {/* Поле для нового комментария КАМ */}
                   <TextField label="Новый комментарий" size="small" fullWidth multiline minRows={1} maxRows={3}
-                    value={newComment} onChange={(e) => setNewComment(e.target.value)} disabled={isDeleted} />
+                    value={newComment} onChange={(e) => setNewComment(e.target.value)} disabled={isLocked} />
                   </Box>
                 </Paper>
   
@@ -312,7 +314,7 @@ export default function PromoEditDialog({
                       { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
                       { label: 'ROI план %', field: 'plan_roi', editable: false },
                     ].map(({ label, field, editable }) => {
-                      const canEdit = editable && !isDeleted;
+                      const canEdit = editable && !isLocked;
                       return (
                         <TextField key={field} label={label} type="text" size="small" fullWidth
                           value={getDisplayValue(field, canEdit)}
@@ -341,7 +343,7 @@ export default function PromoEditDialog({
                       { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
                       { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
                     ].map(({ label, field, editable }) => {
-                      const canEdit = editable && !isDeleted;
+                      const canEdit = editable && !isLocked;
                       return (
                         <TextField key={field} label={label} type="text" size="small" fullWidth
                           value={getDisplayValue(field, canEdit)}
@@ -363,8 +365,8 @@ export default function PromoEditDialog({
       </DialogContent>
   
       {/* Уменьшили отступы в подвале (py: 1.5) */}
-      <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+      <DialogActions sx={{ justifyContent: readOnly ? 'flex-end' : 'space-between', px: 3, py: 1.5, bgcolor: '#ffffff' }}>
+        {!readOnly && <Box sx={{ display: 'flex', gap: 1 }}>
           {form?.deleted_at ? (
             <Button color="warning" variant="contained" startIcon={<RestoreIcon />} onClick={handleRestore} disabled={restoring}>
               {restoring ? 'Восстановление...' : 'Восстановить (отмена удаления)'}
@@ -372,12 +374,12 @@ export default function PromoEditDialog({
           ) : (
             <Button color="error" startIcon={<DeleteIcon />} onClick={onDelete}>Удалить</Button>
           )}
-        </Box>
+        </Box>}
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button variant="outlined" onClick={onClose}>Закрыть</Button>
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving || isDeleted}>
+          {!readOnly && <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSaveClick} disabled={saving || isLocked}>
             {saving ? 'Сохранение...' : 'Сохранить'}
-          </Button>
+          </Button>}
         </Box>
       </DialogActions>
 

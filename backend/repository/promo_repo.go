@@ -290,6 +290,12 @@ func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize in
 	return results, nil
 }
 
+// GetPromoByID возвращает полную запись для открытия карточки из истории.
+func GetPromoByID(id int) (models.PromoRow, error) {
+	query := "SELECT " + promoRowsColumns + " FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics WHERE p.id = ? AND p.deleted_at IS NULL"
+	return ScanPromoRow(config.DB.QueryRow(query, id))
+}
+
 // ─── SKU / Lookups ──────────────────────────────────────────────────────────
 
 func GetSKUsByBrand(brand string) ([]string, error) {
@@ -401,7 +407,7 @@ func GetLastSKUData(sku string) (*models.LastSKUData, error) {
 // ─── History ────────────────────────────────────────────────────────────────
 
 func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models.HistoryRow, error) {
-	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE deleted_at IS NULL"
+	query := "SELECT TOP 10 id, network_name, year, month, mechanics, sku, baseline_units, plan_promo_units, actual_promo_sales_units, plan_investments_rub, actual_investments, plan_promo_uplift_units, actual_promo_uplift_units, plan_roi, actual_roi FROM dbo.tbl_PromoActivities WHERE deleted_at IS NULL"
 	args := []interface{}{}
 	if sku != "" {
 		query += " AND sku = ?"
@@ -438,7 +444,7 @@ func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models
 	var results []models.HistoryRow
 	for rows.Next() {
 		var r models.HistoryRow
-		if err := rows.Scan(&r.ID, &r.NetworkName, &r.Year, &r.Month, &r.Mechanics, &r.SKU, &r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits, &r.PlanPromoUpliftUnits, &r.ActualPromoUpliftUnits, &r.PlanROI, &r.ActualROI); err != nil {
+		if err := rows.Scan(&r.ID, &r.NetworkName, &r.Year, &r.Month, &r.Mechanics, &r.SKU, &r.BaselineUnits, &r.PlanPromoUnits, &r.ActualPromoSalesUnits, &r.PlanInvestmentsRub, &r.ActualInvestments, &r.PlanPromoUpliftUnits, &r.ActualPromoUpliftUnits, &r.PlanROI, &r.ActualROI); err != nil {
 			continue
 		}
 		results = append(results, r)

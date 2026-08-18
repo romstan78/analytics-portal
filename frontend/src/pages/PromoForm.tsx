@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Button, Stack, Box, Typography, TextField, Autocomplete, Grid, Paper, Alert, Snackbar,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress,
+  ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -28,9 +29,18 @@ const REQUIRED_FIELDS = [
   'discount_amount', 'conditions', 'ecom_segment', 'total_pharmacies', 'promo_pharmacies'
 ];
 
+const FIELD_LABELS = {
+  network_name: 'Сеть', sku: 'SKU', year: 'Год', month: 'Месяц', mechanics: 'Механика',
+  gtn_opex: 'Тип инвестиций', contract_price: 'Цена контракта', baseline_units: 'Baseline (уп)',
+  plan_promo_units: 'План промо (уп)', plan_investments_rub: 'Инвестиции (руб)',
+  id_directum: 'ID Директум', ds_number: '№ ДС', discount_amount: 'Сумма скидки',
+  conditions: 'Условия', ecom_segment: 'E-com сегмент', total_pharmacies: 'Аптек всего',
+  promo_pharmacies: 'Аптек в промо',
+};
+
 const EMPTY_FORM = {
   id: null, network_name: '', kam: '', brand: '', sku: '',
-  year: '', month: '', mechanics: '', gtn_opex: '', baseline_units: '',
+  year: '2027', month: '', mechanics: '', gtn_opex: '', baseline_units: '',
   plan_promo_units: '', plan_investments_rub: '', contract_price: '',
   id_directum: '', ds_number: '', discount_amount: '',
   conditions: '', comments: '', ecom_segment: '',
@@ -46,6 +56,10 @@ const fmt = (v) => {
   if (v == null || v === '') return '';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+
+const historyValue = (value, fractionDigits = 0) => value != null
+  ? Number(value).toLocaleString('ru-RU', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })
+  : '—';
 
 const cleanNumber = (v) => v.replace(/\s/g, '').replace(',', '.');
 
@@ -67,23 +81,47 @@ const NumberField = ({ label, value, onChange, ...props }) => (
     type="text"
     size="small"
     fullWidth
-    value={value != null && value !== '' ? Number(value).toLocaleString('ru-RU') : ''}
-    onChange={(e) => onChange(cleanNumber(e.target.value))}
+    value={value ?? ''}
+    onChange={(e) => {
+      const nextValue = cleanNumber(e.target.value);
+      if (/^-?\d*(\.\d*)?$/.test(nextValue)) onChange(nextValue);
+    }}
     slotProps={{ htmlInput: { inputMode: 'decimal' } }}
     {...props}
   />
 );
 
-export default function PromoForm({ onSave }) {
+const HistoryPair = ({ plan, fact, fractionDigits = 0, suffix = '' }) => (
+  <Box sx={{ display: 'grid', gap: 0.35, minWidth: 82 }}>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 0.5, px: 0.6, py: 0.35, borderRadius: 1, bgcolor: '#eef2ff' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.1 }}>План</Typography>
+      <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+        {historyValue(plan, fractionDigits)}{suffix}
+      </Typography>
+    </Box>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 0.5, px: 0.6, py: 0.35, borderRadius: 1, bgcolor: '#f0fdf4' }}>
+      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.1 }}>Факт</Typography>
+      <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+        {historyValue(fact, fractionDigits)}{suffix}
+      </Typography>
+    </Box>
+  </Box>
+);
+
+export default function PromoForm({ onSave, onOpenPromo }) {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [allSkuOptions, setAllSkuOptions] = useState([]);
   const [allNetworkOptions, setAllNetworkOptions] = useState([]);
   const [mechanicsOptions, setMechanicsOptions] = useState([]);
   const [investmentTypes, setInvestmentTypes] = useState([]);
   const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyMetric, setHistoryMetric] = useState('units');
   const [saving, setSaving] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [lastSKUData, setLastSKUData] = useState({});
+  const [skuDataLoading, setSkuDataLoading] = useState(false);
+  const [manualOverrides, setManualOverrides] = useState({ contract_price: false, total_pharmacies: false });
 
   // Загрузка справочников
   useEffect(() => {
@@ -98,53 +136,99 @@ export default function PromoForm({ onSave }) {
     }).catch(() => setInvestmentTypes(['GTN', 'GTN в ОС', 'OPEX', 'OPEX Marketing']));
   }, []);
 
-  // При выборе SKU
+  // Данные SKU и сети подтягиваем после короткой паузы: это исключает запросы на каждый символ
+  // и не даёт опоздавшему ответу перезаписать уже выбранное значение.
   useEffect(() => {
-    if (form.sku) {
-      promoAPI.getSKUInfo(form.sku).then(data => {
-        if (data.brand) setForm(prev => ({ ...prev, brand: data.brand }));
-      }).catch(() => {});
-      
-      promoAPI.getLastSKUData(form.sku).then(data => setLastSKUData(data)).catch(() => {});
+    const sku = form.sku.trim();
+    if (!sku) {
+      setLastSKUData({});
+      setSkuDataLoading(false);
+      return undefined;
     }
-  }, [form.sku]);
 
-  // При выборе сети — подтягиваем KAM, регион, сегмент, аптеки
-  useEffect(() => {
-    if (form.network_name) {
-      promoAPI.getNetworkGeo(form.network_name).then(data => {
+    let active = true;
+    setSkuDataLoading(true);
+    const timer = window.setTimeout(async () => {
+      const [skuInfo, lastData] = await Promise.all([
+        promoAPI.getSKUInfo(sku).catch(() => ({})),
+        promoAPI.getLastSKUData(sku).catch(() => ({})),
+      ]);
+      if (!active) return;
+
+      setLastSKUData(lastData || {});
+      setSkuDataLoading(false);
+      setForm(prev => {
+        if (prev.sku !== sku) return prev;
         const updates = {};
-        if (data.kam) updates.kam = data.kam;
-        if (data.key_region) updates.key_region = data.key_region;
-        if (data.top20_segment) updates.top20_segment = data.top20_segment;
-        if (Object.keys(updates).length > 0) setForm(prev => ({ ...prev, ...updates }));
-      }).catch(() => {});
-      
-      promoAPI.getLastNetworkData(form.network_name).then(data => {
-        if (data.total_pharmacies) setForm(prev => ({ ...prev, total_pharmacies: data.total_pharmacies }));
-      }).catch(() => {});
-    }
-  }, [form.network_name]);
+        if (skuInfo.brand) updates.brand = skuInfo.brand;
+        if (!manualOverrides.contract_price && lastData.contract_price != null) updates.contract_price = String(lastData.contract_price);
+        return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
+      });
+    }, 300);
 
-  // Автозаполнение из lastSKUData
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [form.sku, manualOverrides.contract_price]);
+
   useEffect(() => {
-    if (lastSKUData.contract_price) setForm(prev => ({ ...prev, contract_price: lastSKUData.contract_price }));
-  }, [lastSKUData]);
+    const network = form.network_name.trim();
+    if (!network) return undefined;
+
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      const [geo, lastNetworkData] = await Promise.all([
+        promoAPI.getNetworkGeo(network).catch(() => ({})),
+        promoAPI.getLastNetworkData(network).catch(() => ({})),
+      ]);
+      if (!active) return;
+
+      setForm(prev => {
+        if (prev.network_name !== network) return prev;
+        const updates = {};
+        if (geo.kam) updates.kam = geo.kam;
+        if (geo.key_region) updates.key_region = geo.key_region;
+        if (geo.top20_segment) updates.top20_segment = geo.top20_segment;
+        if (!manualOverrides.total_pharmacies && lastNetworkData.total_pharmacies != null) {
+          updates.total_pharmacies = String(lastNetworkData.total_pharmacies);
+        }
+        return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
+      });
+    }, 300);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [form.network_name, manualOverrides.total_pharmacies]);
 
   // История
-  const fetchHistory = useCallback(async () => {
-    if (!form.network_name || !form.sku || !form.mechanics) return;
-    try {
-      const data = await promoAPI.getHistory({
-        network_name: form.network_name,
-        sku: form.sku,
-        mechanics: form.mechanics,
-      });
-      setHistory(data.data || []);
-    } catch (e) { setHistory([]); }
-  }, [form.network_name, form.sku, form.mechanics]);
+  const historySelectionComplete = Boolean(form.network_name && form.sku && form.mechanics);
+  useEffect(() => {
+    if (!historySelectionComplete) {
+      setHistory([]);
+      setHistoryLoading(false);
+      return undefined;
+    }
 
-  useEffect(() => { fetchHistory(); }, [form.network_name, form.sku, form.mechanics, fetchHistory]);
+    let active = true;
+    setHistory([]);
+    setHistoryLoading(true);
+    promoAPI.getHistory({
+      network_name: form.network_name,
+      sku: form.sku,
+      mechanics: form.mechanics,
+    }).then(data => {
+      if (active) setHistory(data.data || []);
+    }).catch(() => {
+      if (active) setHistory([]);
+    }).finally(() => {
+      if (active) setHistoryLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [form.network_name, form.sku, form.mechanics, historySelectionComplete]);
 
   // Расчёты
   const calculated = useMemo(() => {
@@ -165,10 +249,11 @@ export default function PromoForm({ onSave }) {
   }, [form.plan_promo_units, form.contract_price, form.baseline_units, form.plan_investments_rub, form.year, form.month, lastSKUData.gm]);
 
   const missingFields = REQUIRED_FIELDS.filter(f => !form[f] || form[f] === '');
+  const missingFieldLabels = missingFields.map(field => FIELD_LABELS[field] || field);
 
   const handleSave = async () => {
     if (missingFields.length > 0) {
-      setSnackbar({ open: true, message: `⚠️ Заполните: ${missingFields.slice(0, 5).join(', ')}`, severity: 'warning' });
+      setSnackbar({ open: true, message: `⚠️ Заполните: ${missingFieldLabels.slice(0, 5).join(', ')}`, severity: 'warning' });
       return;
     }
     setSaving(true);
@@ -204,7 +289,8 @@ export default function PromoForm({ onSave }) {
       };
 
       await promoAPI.save(payload);
-      setSnackbar({ open: true, message: '✅ Сохранено', severity: 'success' });
+      handleReset();
+      setSnackbar({ open: true, message: '✅ Промо создано. Форма очищена для следующей записи.', severity: 'success' });
       if (onSave) onSave();
     } catch (err) {
       setSnackbar({ open: true, message: '❌ Ошибка: ' + err.message, severity: 'error' });
@@ -215,35 +301,65 @@ export default function PromoForm({ onSave }) {
     setForm({ ...EMPTY_FORM });
     setHistory([]);
     setLastSKUData({});
+    setSkuDataLoading(false);
+    setManualOverrides({ contract_price: false, total_pharmacies: false });
   };
 
   const updateForm = (field) => (value) => setForm(prev => ({ ...prev, [field]: value }));
+
+  const updateManualNumber = (field) => (value) => {
+    setManualOverrides(prev => ({ ...prev, [field]: true }));
+    setForm(prev => ({ ...prev, [field]: value }));
+  };
 
   const chartData = useMemo(() => {
     return history.map(row => ({
       period: `${row.year}-${String(row.month).padStart(2, '0')}`,
       plan: row.plan_promo_units || 0,
       fact: row.actual_promo_sales_units || 0,
+      planInvestments: row.plan_investments_rub || 0,
+      factInvestments: row.actual_investments || 0,
+      planRoi: row.plan_roi || 0,
+      factRoi: row.actual_roi || 0,
     })).reverse();
   }, [history]);
 
+  const chartConfig = {
+    units: { planKey: 'plan', factKey: 'fact', planLabel: 'План (уп)', factLabel: 'Факт (уп)' },
+    investments: { planKey: 'planInvestments', factKey: 'factInvestments', planLabel: 'Инвестиции план (руб)', factLabel: 'Инвестиции факт (руб)' },
+    roi: { planKey: 'planRoi', factKey: 'factRoi', planLabel: 'ROI план (%)', factLabel: 'ROI факт (%)' },
+  }[historyMetric];
+
   return (
-    <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      <Grid container spacing={2} sx={{ flex: 1, overflow: 'hidden' }}>
-        <Grid size={{ xs: 12, md: 6 }} sx={{ height: '100%', overflow: 'auto' }}>
-          <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h6" sx={{ mb: 1 }}>Новое промо</Typography>
+    <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <Grid container spacing={2} sx={{ flex: 1, minHeight: 0, overflow: 'hidden', alignItems: 'stretch' }}>
+        <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', minHeight: 0 }}>
+          <Paper sx={{ p: 2, flex: 1, minHeight: 0, overflowY: 'auto' }}>
             <Grid container spacing={1.5}>
               <Grid size={6}>
                 <Stack spacing={1.5}>
+                  <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700 }}>Идентификация</Typography>
                   <Autocomplete size="small" freeSolo options={allNetworkOptions} value={form.network_name || ''}
-                    onChange={(_, v) => setForm(prev => ({ ...prev, network_name: v || '', kam: '' }))}
-                    onInputChange={(_, v) => setForm(prev => ({ ...prev, network_name: v }))}
+                    onChange={(_, v) => {
+                      setManualOverrides(prev => ({ ...prev, total_pharmacies: false }));
+                      setForm(prev => ({ ...prev, network_name: v || '', kam: '' }));
+                    }}
+                    onInputChange={(_, v) => {
+                      setManualOverrides(prev => ({ ...prev, total_pharmacies: false }));
+                      setForm(prev => ({ ...prev, network_name: v }));
+                    }}
                     renderInput={(p) => <TextField {...p} label={requiredLabel('Сеть')} size="small" />} />
                   <Autocomplete size="small" freeSolo options={allSkuOptions} value={form.sku || ''}
-                    onChange={(_, v) => setForm(prev => ({ ...prev, sku: v || '' }))}
-                    onInputChange={(_, v) => setForm(prev => ({ ...prev, sku: v }))}
+                    onChange={(_, v) => {
+                      setManualOverrides(prev => ({ ...prev, contract_price: false }));
+                      setForm(prev => ({ ...prev, sku: v || '' }));
+                    }}
+                    onInputChange={(_, v) => {
+                      setManualOverrides(prev => ({ ...prev, contract_price: false }));
+                      setForm(prev => ({ ...prev, sku: v }));
+                    }}
                     renderInput={(p) => <TextField {...p} label={requiredLabel('SKU')} size="small" />} />
+                  <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, mt: 0.5 }}>Параметры промо</Typography>
                   <Autocomplete size="small" options={MONTH_OPTIONS} getOptionLabel={o => o.label}
                     value={MONTH_OPTIONS.find(m => m.value === parseInt(form.month)) || null}
                     onChange={(_, v) => setForm(prev => ({ ...prev, month: v?.value || '' }))}
@@ -255,6 +371,11 @@ export default function PromoForm({ onSave }) {
                     onChange={(_, v) => setForm(prev => ({ ...prev, mechanics: v || '' }))}
                     onInputChange={(_, v) => setForm(prev => ({ ...prev, mechanics: v }))}
                     renderInput={(p) => <TextField {...p} label={requiredLabel('Механика')} size="small" />} />
+
+                  <TextField label={requiredLabel('Условия')} size="small" fullWidth multiline rows={3} value={form.conditions}
+                    onChange={(e) => setForm(prev => ({ ...prev, conditions: e.target.value }))} />
+
+                  <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, mt: 0.5 }}>Коммерческие параметры</Typography>
                   <NumberField label={requiredLabel('Сумма скидки')} value={form.discount_amount} onChange={updateForm('discount_amount')} />
                   <Autocomplete size="small" freeSolo options={investmentTypes} value={form.gtn_opex || ''}
                     onChange={(_, v) => setForm(prev => ({ ...prev, gtn_opex: v || '' }))}
@@ -263,24 +384,24 @@ export default function PromoForm({ onSave }) {
                   <Autocomplete size="small" options={ECOM_SEGMENT_OPTIONS} value={form.ecom_segment || ''}
                     onChange={(_, v) => setForm(prev => ({ ...prev, ecom_segment: v || '' }))}
                     renderInput={(p) => <TextField {...p} label={requiredLabel('E-com сегмент')} size="small" />} />
-                  <NumberField label={requiredLabel('Аптек ТОТАЛ')} value={form.total_pharmacies} onChange={updateForm('total_pharmacies')} />
+                  <NumberField label={requiredLabel('Аптек всего')} value={form.total_pharmacies} onChange={updateManualNumber('total_pharmacies')} />
                   <NumberField label={requiredLabel('Аптек в промо')} value={form.promo_pharmacies} onChange={updateForm('promo_pharmacies')} />
+
+                  <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, mt: 0.5 }}>Документы</Typography>
                   <TextField label={requiredLabel('ID Директум')} size="small" fullWidth value={form.id_directum}
                     onChange={(e) => setForm(prev => ({ ...prev, id_directum: e.target.value }))} />
                   <TextField label={requiredLabel('№ ДС')} size="small" fullWidth value={form.ds_number}
                     onChange={(e) => setForm(prev => ({ ...prev, ds_number: e.target.value }))} />
-                  <NumberField label={requiredLabel('Цена контракта')} value={form.contract_price} onChange={updateForm('contract_price')} />
                 </Stack>
               </Grid>
               <Grid size={6}>
                 <Stack spacing={1.5}>
-                  <TextField label={requiredLabel('Условия')} size="small" fullWidth multiline rows={4} value={form.conditions}
-                    onChange={(e) => setForm(prev => ({ ...prev, conditions: e.target.value }))} />
                   <TextField label="Комментарии" size="small" fullWidth multiline rows={3} value={form.comments}
                     onChange={(e) => setForm(prev => ({ ...prev, comments: e.target.value }))} />
                   <Paper variant="outlined" sx={{ p: 1.5, bgcolor: '#f8f9fa' }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>📊 Baseline и План</Typography>
                     <Stack spacing={1.5}>
+                      <NumberField label={requiredLabel('Цена контракта')} value={form.contract_price} onChange={updateManualNumber('contract_price')} />
                       <NumberField label={requiredLabel('Baseline (уп)')} value={form.baseline_units} onChange={updateForm('baseline_units')} />
                       <NumberField label={requiredLabel('План промо (уп)')} value={form.plan_promo_units} onChange={updateForm('plan_promo_units')} />
                       <TextField label="План (руб)" size="small" fullWidth value={fmt(calculated.plan_promo_rub)} slotProps={{ input: { readOnly: true } }} />
@@ -288,6 +409,11 @@ export default function PromoForm({ onSave }) {
                       <TextField label="Uplift (уп)" size="small" fullWidth value={fmt(calculated.plan_promo_uplift_units)} slotProps={{ input: { readOnly: true } }} />
                       <TextField label="Uplift (руб)" size="small" fullWidth value={fmt(calculated.plan_promo_uplift_rub)} slotProps={{ input: { readOnly: true } }} />
                       <TextField label="ROI план %" size="small" fullWidth value={calculated.plan_roi.toFixed(1)} slotProps={{ input: { readOnly: true } }} />
+                      {form.sku && !skuDataLoading && !lastSKUData.gm && (
+                        <Alert severity="warning" sx={{ py: 0.25 }}>
+                          GM для SKU не найден. ROI рассчитан предварительно с GM = 1.
+                        </Alert>
+                      )}
                     </Stack>
                   </Paper>
                   <Stack direction="row" spacing={1}>
@@ -301,8 +427,8 @@ export default function PromoForm({ onSave }) {
             </Grid>
           </Paper>
         </Grid>
-        <Grid size={{ xs: 12, md: 6 }} sx={{ height: '100%' }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 1 }}>
+        <Grid size={{ xs: 12, md: 6 }} sx={{ display: 'flex', minHeight: 0 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 1 }}>
             <Paper sx={{ p: 2, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
                 📋 История: {form.network_name || 'сеть'} / {form.sku || 'SKU'} / {form.mechanics || 'механика'}
@@ -313,38 +439,55 @@ export default function PromoForm({ onSave }) {
                     <TableRow>
                       <TableCell>Период</TableCell>
                       <TableCell align="right">Baseline</TableCell>
-                      <TableCell align="right">План (уп)</TableCell>
-                      <TableCell align="right">Факт (уп)</TableCell>
-                      <TableCell align="right">Uplift план</TableCell>
-                      <TableCell align="right">Uplift факт</TableCell>
-                      <TableCell align="right">ROI план %</TableCell>
-                      <TableCell align="right">ROI факт %</TableCell>
+                      <TableCell>Продажи, уп.</TableCell>
+                      <TableCell>Инвестиции, руб.</TableCell>
+                      <TableCell>Uplift, уп.</TableCell>
+                      <TableCell>ROI, %</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {history.map((row) => (
-                      <TableRow key={row.id} hover>
+                      <TableRow key={row.id} hover tabIndex={0}
+                        onClick={() => onOpenPromo?.(row.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            onOpenPromo?.(row.id);
+                          }
+                        }}
+                        sx={{ cursor: onOpenPromo ? 'pointer' : 'default' }}
+                        aria-label={`Открыть промо за ${row.year}/${String(row.month).padStart(2, '0')}`}>
                         <TableCell>{row.year}/{String(row.month).padStart(2, '0')}</TableCell>
-                        <TableCell align="right">{row.baseline_units != null ? Number(row.baseline_units).toLocaleString('ru-RU') : '-'}</TableCell>
-                        <TableCell align="right">{row.plan_promo_units != null ? Number(row.plan_promo_units).toLocaleString('ru-RU') : '-'}</TableCell>
-                        <TableCell align="right">{row.actual_promo_sales_units != null ? Number(row.actual_promo_sales_units).toLocaleString('ru-RU') : '-'}</TableCell>
-                        <TableCell align="right">{row.plan_promo_uplift_units != null ? Number(row.plan_promo_uplift_units).toLocaleString('ru-RU') : '-'}</TableCell>
-                        <TableCell align="right">{row.actual_promo_uplift_units != null ? Number(row.actual_promo_uplift_units).toLocaleString('ru-RU') : '-'}</TableCell>
-                        <TableCell align="right">{row.plan_roi != null ? Number(row.plan_roi).toFixed(1) : '-'}</TableCell>
-                        <TableCell align="right">{row.actual_roi != null ? Number(row.actual_roi).toFixed(1) : '-'}</TableCell>
+                        <TableCell align="right">{historyValue(row.baseline_units)}</TableCell>
+                        <TableCell sx={{ px: 0.75, py: 0.75 }}><HistoryPair plan={row.plan_promo_units} fact={row.actual_promo_sales_units} /></TableCell>
+                        <TableCell sx={{ px: 0.75, py: 0.75 }}><HistoryPair plan={row.plan_investments_rub} fact={row.actual_investments} fractionDigits={2} /></TableCell>
+                        <TableCell sx={{ px: 0.75, py: 0.75 }}><HistoryPair plan={row.plan_promo_uplift_units} fact={row.actual_promo_uplift_units} /></TableCell>
+                        <TableCell sx={{ px: 0.75, py: 0.75 }}><HistoryPair plan={row.plan_roi} fact={row.actual_roi} fractionDigits={1} suffix="%" /></TableCell>
                       </TableRow>
                     ))}
-                    {history.length === 0 && (
-                      <TableRow><TableCell colSpan={8} align="center">Выберите сеть, SKU и механику</TableCell></TableRow>
+                    {historyLoading && (
+                      <TableRow><TableCell colSpan={6} align="center"><CircularProgress size={20} /></TableCell></TableRow>
+                    )}
+                    {!historyLoading && history.length === 0 && (
+                      <TableRow><TableCell colSpan={6} align="center">
+                        {historySelectionComplete ? 'По выбранной связке истории нет.' : 'Выберите сеть, SKU и механику.'}
+                      </TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
               </TableContainer>
             </Paper>
-            <Paper sx={{ p: 2, height: 250, flexShrink: 0 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>📈 План / Факт</Typography>
+            <Paper sx={{ p: 2, height: 286, flexShrink: 0 }}>
+              <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>📈 Динамика</Typography>
+                <ToggleButtonGroup size="small" exclusive value={historyMetric} onChange={(_, value) => value && setHistoryMetric(value)}>
+                  <ToggleButton value="units">Уп.</ToggleButton>
+                  <ToggleButton value="investments">Руб.</ToggleButton>
+                  <ToggleButton value="roi">ROI</ToggleButton>
+                </ToggleButtonGroup>
+              </Stack>
               {history.length > 0 ? (
-                <Box sx={{ height: 190 }}>
+                <Box sx={{ height: 220 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -352,14 +495,14 @@ export default function PromoForm({ onSave }) {
                       <YAxis tick={{ fontSize: 10 }} />
                       <Tooltip formatter={(v) => Number(v).toLocaleString('ru-RU')} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Bar dataKey="plan" name="План (уп)" fill="#8884d8" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="fact" name="Факт (уп)" fill="#82ca9d" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey={chartConfig.planKey} name={chartConfig.planLabel} fill="#8884d8" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey={chartConfig.factKey} name={chartConfig.factLabel} fill="#82ca9d" radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </Box>
               ) : (
-                <Box sx={{ height: 190, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafafa', borderRadius: 1 }}>
-                  <Typography color="text.disabled">Нет данных</Typography>
+                <Box sx={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafafa', borderRadius: 1 }}>
+                  <Typography color="text.disabled">{historyLoading ? 'Загружаем историю…' : 'Нет данных'}</Typography>
                 </Box>
               )}
             </Paper>
