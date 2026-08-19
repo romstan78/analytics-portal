@@ -12,8 +12,13 @@ const DEFAULT_MONTH_OPTIONS = [
   { label: 'Ноябрь', value: 11 }, { label: 'Декабрь', value: 12 },
 ];
 
+const DEFAULT_QUARTER_OPTIONS = [
+  { label: 'I квартал', value: 1 }, { label: 'II квартал', value: 2 },
+  { label: 'III квартал', value: 3 }, { label: 'IV квартал', value: 4 },
+];
+
 interface ExtraFilter {
-  type: 'year' | 'months';
+  type: 'year' | 'months' | 'quarters';
   field: string;
   label: string;
   options?: Array<{ label: string; value: number }>;
@@ -97,16 +102,16 @@ export default function FilterPanel({
             );
           }
 
-          // Месяцы
-          if (filter.type === 'months') {
-            const selectedMonths = filters[filter.field] || [];
-            const monthOptions = filter.options || DEFAULT_MONTH_OPTIONS;
+          // Месяцы и кварталы
+          if (filter.type === 'months' || filter.type === 'quarters') {
+            const selectedValues = filters[filter.field] || [];
+            const options = filter.options || (filter.type === 'quarters' ? DEFAULT_QUARTER_OPTIONS : DEFAULT_MONTH_OPTIONS);
             
-            const monthDisplayText = selectedMonths.length === 0 
+            const displayText = selectedValues.length === 0
               ? '' 
-              : selectedMonths.length === 1 
-                ? monthOptions.find(m => m.value === selectedMonths[0])?.label || ''
-                : `Выбрано: ${selectedMonths.length}`;
+              : selectedValues.length === 1
+                ? options.find(option => option.value === selectedValues[0])?.label || ''
+                : `Выбрано: ${selectedValues.length}`;
 
             return (
               <Autocomplete 
@@ -114,10 +119,10 @@ export default function FilterPanel({
                 multiple 
                 disableCloseOnSelect 
                 size="small"
-                options={monthOptions}
+                options={options}
                 getOptionLabel={(opt) => opt.label}
                 isOptionEqualToValue={(opt, val) => opt.value === val?.value}
-                value={monthOptions.filter(m => selectedMonths.includes(m.value))}
+                value={options.filter(option => selectedValues.includes(option.value))}
                 onChange={(_, newVal) => {
                   const values = newVal.map(v => v.value);
                   onFiltersChange({ ...filters, [filter.field]: values });
@@ -128,7 +133,7 @@ export default function FilterPanel({
                   <TextField 
                     {...params} 
                     label={filter.label} 
-                    placeholder={monthDisplayText}
+                    placeholder={displayText}
                     slotProps={{
                       ...params.slotProps,
                       inputLabel: { ...params.slotProps.inputLabel, shrink: true },

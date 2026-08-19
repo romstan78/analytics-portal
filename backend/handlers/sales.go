@@ -35,6 +35,7 @@ func GetFilterOptions(c *gin.Context) {
 
 	result := gin.H{
 		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
+		"productName": getDistinct("SELECT DISTINCT productName FROM dbo.tbl_EcomSalesNormalized WHERE productName IS NOT NULL ORDER BY productName"),
 		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
 		"un_rub":      getDistinct("SELECT DISTINCT un_rub FROM dbo.tbl_EcomSalesNormalized WHERE un_rub IS NOT NULL ORDER BY un_rub"),
 		"segment":     getDistinct("SELECT DISTINCT segment FROM dbo.tbl_EcomSalesNormalized WHERE segment IS NOT NULL ORDER BY segment"),
@@ -70,7 +71,9 @@ type salesFilter struct {
 	YearFromStr  string
 	YearToStr    string
 	Months       []string
+	Quarters     []string
 	BrandNames   []string // LIKE-фильтр (для GetData, ExportSalesExcel)
+	ProductNames []string
 	NetworkNames []string // LIKE-фильтр (для GetData, ExportSalesExcel)
 	UnRubs       []string
 	Segments     []string
@@ -78,11 +81,10 @@ type salesFilter struct {
 	Search       string
 	// Точное совпадение (для Drilldown)
 	BrandExact   string
+	ProductExact string
 	NetworkExact string
 }
 
-// buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
-// Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
 // buildSalesWhere строит WHERE-условие и аргументы для таблицы tbl_EcomSalesNormalized.
 // Возвращает строку, начинающуюся с " WHERE ...", и слайс аргументов (в порядке появления).
 // Использует squirrel Query Builder для безопасного построения SQL.
@@ -113,6 +115,17 @@ func buildSalesWhere(f salesFilter) (string, []interface{}) {
 			q = q.Where(sq.Eq{"n.[month]": months})
 		}
 	}
+	if len(f.Quarters) > 0 {
+		quarters := make([]interface{}, 0, len(f.Quarters))
+		for _, quarter := range f.Quarters {
+			if value, err := strconv.Atoi(quarter); err == nil && value >= 1 && value <= 4 {
+				quarters = append(quarters, value)
+			}
+		}
+		if len(quarters) > 0 {
+			q = q.Where(sq.Eq{"((n.[month] - 1) / 3) + 1": quarters})
+		}
+	}
 
 	// LIKE-фильтры (OR между значениями внутри одного поля)
 	if len(f.BrandNames) > 0 {
@@ -120,6 +133,17 @@ func buildSalesWhere(f salesFilter) (string, []interface{}) {
 		for _, v := range f.BrandNames {
 			if v != "" {
 				orConds = append(orConds, sq.Like{"n.brandName": "%" + v + "%"})
+			}
+		}
+		if len(orConds) > 0 {
+			q = q.Where(orConds)
+		}
+	}
+	if len(f.ProductNames) > 0 {
+		orConds := sq.Or{}
+		for _, v := range f.ProductNames {
+			if v != "" {
+				orConds = append(orConds, sq.Like{"n.productName": "%" + v + "%"})
 			}
 		}
 		if len(orConds) > 0 {
@@ -141,6 +165,9 @@ func buildSalesWhere(f salesFilter) (string, []interface{}) {
 	// Точное совпадение (приоритетнее LIKE, используется в Drilldown)
 	if f.BrandExact != "" {
 		q = q.Where("n.brandName = ?", f.BrandExact)
+	}
+	if f.ProductExact != "" {
+		q = q.Where("n.productName = ?", f.ProductExact)
 	}
 	if f.NetworkExact != "" {
 		q = q.Where("n.networkName = ?", f.NetworkExact)
@@ -205,7 +232,9 @@ func GetData(c *gin.Context) {
 		YearFromStr:  c.Query("yearFrom"),
 		YearToStr:    c.Query("yearTo"),
 		Months:       c.QueryArray("months"),
+		Quarters:     c.QueryArray("quarters"),
 		BrandNames:   c.QueryArray("brandName"),
+		ProductNames: c.QueryArray("productName"),
 		NetworkNames: c.QueryArray("networkName"),
 		UnRubs:       c.QueryArray("un_rub"),
 		Segments:     c.QueryArray("segment"),
@@ -285,6 +314,247 @@ func GetData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": results, "totalRows": totalRows})
 }
 
+type salesDashboardPoint struct {
+	Year  int     `json:"year"`
+	Month int     `json:"month"`
+	Value float64 `json:"value"`
+}
+
+type salesDashboardRank struct {
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+}
+
+type salesDashboardSeriesPoint struct {
+	Name  string  `json:"name"`
+	Year  int     `json:"year"`
+	Month int     `json:"month"`
+	Value float64 `json:"value"`
+}
+
+// GetSalesDashboard возвращает только агрегаты одного сегмента и одной единицы
+// измерения. Это не позволяет случайно сложить пересекающиеся итоги OLAP.
+func GetSalesDashboard(c *gin.Context) {
+	segment := strings.TrimSpace(c.DefaultQuery("focusSegment", "OLAP SS"))
+	channel := strings.TrimSpace(c.Query("focusChannel"))
+	unit := strings.TrimSpace(c.DefaultQuery("unit", "руб"))
+	focusProduct := strings.TrimSpace(c.Query("focusProduct"))
+	focusNetwork := strings.TrimSpace(c.Query("focusNetwork"))
+	if unit != "руб" && unit != "уп" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unit должен быть 'руб' или 'уп'"})
+		return
+	}
+
+	baseFilter := salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		Quarters:     c.QueryArray("quarters"),
+		BrandNames:   c.QueryArray("brandName"),
+		ProductNames: c.QueryArray("productName"),
+		NetworkNames: c.QueryArray("networkName"),
+		UnRubs:       []string{unit},
+		Segments:     []string{segment},
+	}
+	where, args := buildSalesWhere(baseFilter)
+
+	var total float64
+	var activeNetworks, activeProducts, periods int
+	summaryQuery := "SELECT COALESCE(SUM(n.metric_value), 0), COUNT(DISTINCT n.networkName), COUNT(DISTINCT n.productName), COUNT(DISTINCT CONCAT(n.[year], '-', n.[month])) FROM dbo.tbl_EcomSalesNormalized n" + where
+	if err := config.DB.QueryRow(summaryQuery, args...).Scan(&total, &activeNetworks, &activeProducts, &periods); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard summary query failed"})
+		return
+	}
+
+	loadTrend := func(trendWhere string, trendArgs []interface{}) ([]salesDashboardPoint, error) {
+		rows, err := config.DB.Query("SELECT n.[year], n.[month], SUM(n.metric_value) FROM dbo.tbl_EcomSalesNormalized n"+trendWhere+" GROUP BY n.[year], n.[month] ORDER BY n.[year], n.[month]", trendArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		result := make([]salesDashboardPoint, 0)
+		for rows.Next() {
+			var point salesDashboardPoint
+			if err := rows.Scan(&point.Year, &point.Month, &point.Value); err == nil {
+				result = append(result, point)
+			}
+		}
+		return result, rows.Err()
+	}
+
+	trend, err := loadTrend(where, args)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard trend query failed"})
+		return
+	}
+
+	var latestValue, previousPeriodValue, yearAgoValue *float64
+	latestYear, latestMonth := 0, 0
+	if len(trend) > 0 {
+		latest := trend[len(trend)-1]
+		latestYear, latestMonth = latest.Year, latest.Month
+		latestValue = &latest.Value
+
+		comparisonFilter := baseFilter
+		comparisonFilter.YearFromStr = ""
+		comparisonFilter.YearToStr = ""
+		comparisonFilter.Months = nil
+		comparisonFilter.Quarters = nil
+		comparisonWhere, comparisonArgs := buildSalesWhere(comparisonFilter)
+		loadPeriodValue := func(year, month int) *float64 {
+			queryArgs := append([]interface{}{}, comparisonArgs...)
+			queryArgs = append(queryArgs, year, month)
+			var value float64
+			var count int
+			query := "SELECT COALESCE(SUM(n.metric_value), 0), COUNT(*) FROM dbo.tbl_EcomSalesNormalized n" + comparisonWhere + " AND n.[year] = ? AND n.[month] = ?"
+			if queryErr := config.DB.QueryRow(query, queryArgs...).Scan(&value, &count); queryErr != nil || count == 0 {
+				return nil
+			}
+			return &value
+		}
+
+		previousYear, previousMonth := latestYear, latestMonth-1
+		if previousMonth == 0 {
+			previousYear--
+			previousMonth = 12
+		}
+		previousPeriodValue = loadPeriodValue(previousYear, previousMonth)
+		yearAgoValue = loadPeriodValue(latestYear-1, latestMonth)
+	}
+
+	focusTrend := make([]salesDashboardPoint, 0)
+	if focusProduct != "" || focusNetwork != "" {
+		focusFilter := baseFilter
+		focusFilter.ProductExact = focusProduct
+		focusFilter.NetworkExact = focusNetwork
+		focusWhere, focusArgs := buildSalesWhere(focusFilter)
+		focusTrend, err = loadTrend(focusWhere, focusArgs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard focus trend query failed"})
+			return
+		}
+	}
+
+	loadRank := func(column string) ([]salesDashboardRank, error) {
+		query := "SELECT TOP 8 n." + column + ", SUM(n.metric_value) AS total_value FROM dbo.tbl_EcomSalesNormalized n" + where + " GROUP BY n." + column + " ORDER BY total_value DESC"
+		rows, err := config.DB.Query(query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		result := make([]salesDashboardRank, 0)
+		for rows.Next() {
+			var item salesDashboardRank
+			if err := rows.Scan(&item.Name, &item.Value); err == nil {
+				result = append(result, item)
+			}
+		}
+		return result, rows.Err()
+	}
+
+	topNetworks, err := loadRank("networkName")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard networks query failed"})
+		return
+	}
+	topProducts, err := loadRank("productName")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard products query failed"})
+		return
+	}
+
+	channelSegments := make([]string, 0)
+	if channel != "" {
+		segmentRows, queryErr := config.DB.Query("SELECT DISTINCT segment FROM dbo.tbl_ChannelSegmentMapping WHERE channel = ? AND un_rub = ? AND segment IS NOT NULL ORDER BY segment", channel, unit)
+		if queryErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard channel mapping query failed"})
+			return
+		}
+		for segmentRows.Next() {
+			var mappedSegment string
+			if scanErr := segmentRows.Scan(&mappedSegment); scanErr == nil && mappedSegment != "" {
+				channelSegments = append(channelSegments, mappedSegment)
+			}
+		}
+		segmentRows.Close()
+	}
+	if len(channelSegments) == 0 {
+		channelSegments = append(channelSegments, segment)
+	}
+
+	segmentFilter := baseFilter
+	segmentFilter.Segments = channelSegments
+	segmentWhere, segmentArgs := buildSalesWhere(segmentFilter)
+	segmentRows, err := config.DB.Query("SELECT n.segment, SUM(n.metric_value) AS total_value FROM dbo.tbl_EcomSalesNormalized n"+segmentWhere+" GROUP BY n.segment ORDER BY total_value DESC", segmentArgs...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard segment totals query failed"})
+		return
+	}
+	segmentTotals := make([]salesDashboardRank, 0)
+	for segmentRows.Next() {
+		var item salesDashboardRank
+		if scanErr := segmentRows.Scan(&item.Name, &item.Value); scanErr == nil {
+			segmentTotals = append(segmentTotals, item)
+		}
+	}
+	segmentRows.Close()
+
+	networkTrends := make([]salesDashboardSeriesPoint, 0)
+	if len(topNetworks) > 0 {
+		limit := len(topNetworks)
+		if limit > 8 {
+			limit = 8
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", limit), ",")
+		networkArgs := append([]interface{}{}, args...)
+		for _, item := range topNetworks[:limit] {
+			networkArgs = append(networkArgs, item.Name)
+		}
+		networkQuery := "SELECT n.networkName, n.[year], n.[month], SUM(n.metric_value) FROM dbo.tbl_EcomSalesNormalized n" + where + " AND n.networkName IN (" + placeholders + ") GROUP BY n.networkName, n.[year], n.[month] ORDER BY n.[year], n.[month], n.networkName"
+		networkRows, queryErr := config.DB.Query(networkQuery, networkArgs...)
+		if queryErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard network trends query failed"})
+			return
+		}
+		for networkRows.Next() {
+			var point salesDashboardSeriesPoint
+			if scanErr := networkRows.Scan(&point.Name, &point.Year, &point.Month, &point.Value); scanErr == nil {
+				networkTrends = append(networkTrends, point)
+			}
+		}
+		networkRows.Close()
+	}
+
+	average := 0.0
+	if periods > 0 {
+		average = total / float64(periods)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"channel":         channel,
+		"channelSegments": channelSegments,
+		"segment":         segment,
+		"unit":            unit,
+		"summary": gin.H{
+			"total":           total,
+			"averagePerMonth": average,
+			"activeNetworks":  activeNetworks,
+			"activeProducts":  activeProducts,
+			"periods":         periods,
+			"latestYear":      latestYear,
+			"latestMonth":     latestMonth,
+			"latestValue":     latestValue,
+			"previousValue":   previousPeriodValue,
+			"yearAgoValue":    yearAgoValue,
+		},
+		"trend":         trend,
+		"focusTrend":    focusTrend,
+		"topNetworks":   topNetworks,
+		"topProducts":   topProducts,
+		"segmentTotals": segmentTotals,
+		"networkTrends": networkTrends,
+	})
+}
+
 func GetDrilldown(c *gin.Context) {
 	brandName := c.Query("brandName")
 	networkName := c.Query("networkName")
@@ -297,6 +567,7 @@ func GetDrilldown(c *gin.Context) {
 		YearFromStr:  c.Query("yearFrom"),
 		YearToStr:    c.Query("yearTo"),
 		Months:       c.QueryArray("months"),
+		Quarters:     c.QueryArray("quarters"),
 		Segments:     c.QueryArray("segment"),
 		Channels:     c.QueryArray("channel"),
 		BrandExact:   brandName,
@@ -330,7 +601,9 @@ func ExportSalesExcel(c *gin.Context) {
 		YearFromStr:  c.Query("yearFrom"),
 		YearToStr:    c.Query("yearTo"),
 		Months:       c.QueryArray("months"),
+		Quarters:     c.QueryArray("quarters"),
 		BrandNames:   c.QueryArray("brandName"),
+		ProductNames: c.QueryArray("productName"),
 		NetworkNames: c.QueryArray("networkName"),
 		UnRubs:       c.QueryArray("un_rub"),
 		Segments:     c.QueryArray("segment"),

@@ -280,6 +280,9 @@ export const salesAPI = {
   getData: (filters: Record<string, unknown> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/data?${buildParams(filters)}`).then(r => r.json()),
 
+  getDashboard: (filters: Record<string, unknown> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/sales/dashboard?${buildParams(filters)}`).then(r => parseJSONResponse(r, 'Ошибка загрузки дашборда')),
+
   getDrilldown: (params: Record<string, string> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/drilldown?${new URLSearchParams(params)}`).then(r => r.json()),
 };

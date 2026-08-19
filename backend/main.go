@@ -133,6 +133,7 @@ func main() {
 	{
 		// Интернет-продажи
 		api.GET("/data", handlers.GetData)
+		api.GET("/sales/dashboard", handlers.GetSalesDashboard)
 		api.GET("/data/export-xlsx", handlers.ExportSalesExcel)
 		api.GET("/filters", handlers.GetFilterOptions)
 		api.GET("/drilldown", handlers.GetDrilldown)
