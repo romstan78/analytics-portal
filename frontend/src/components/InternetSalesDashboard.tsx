@@ -1,6 +1,6 @@
 import { Alert, Box, Chip, CircularProgress, Grid, Paper, Stack, Typography } from '@mui/material';
 import {
-  Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer,
+  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts';
 
@@ -17,6 +17,17 @@ interface DashboardRank {
 
 interface DashboardSeriesPoint extends DashboardPoint {
   name: string;
+}
+
+interface DashboardFocusPoint extends DashboardSeriesPoint {
+  type: 'product' | 'network';
+}
+
+interface DashboardNetworkBreakdown {
+  network: string;
+  channel: string;
+  segment: string;
+  value: number;
 }
 
 interface DashboardSummary {
@@ -39,11 +50,13 @@ export interface InternetSalesDashboardData {
   unit: 'руб' | 'уп';
   summary: DashboardSummary;
   trend: DashboardPoint[];
-  focusTrend: DashboardPoint[];
+  focusTrends: DashboardFocusPoint[];
   topNetworks: DashboardRank[];
   topProducts: DashboardRank[];
   segmentTotals: DashboardRank[];
   networkTrends: DashboardSeriesPoint[];
+  channelTrends: DashboardSeriesPoint[];
+  networkBreakdown: DashboardNetworkBreakdown[];
 }
 
 export interface DashboardFocus {
@@ -55,10 +68,11 @@ interface InternetSalesDashboardProps {
   data: InternetSalesDashboardData | null;
   loading: boolean;
   error: string;
-  focus: DashboardFocus | null;
-  onProductSelect: (name: string) => void;
-  onNetworkSelect: (name: string) => void;
+  focuses: DashboardFocus[];
+  onProductSelect: (name: string, additive: boolean) => void;
+  onNetworkSelect: (name: string, additive: boolean) => void;
   onSegmentSelect: (name: string) => void;
+  onRemoveFocus: (focus: DashboardFocus) => void;
   onClearFocus: () => void;
 }
 
@@ -88,13 +102,13 @@ function KpiCard({ label, value, hint, accent }: { label: string; value: string;
   );
 }
 
-function RankList({ title, rows, unit, color, selectedName, onSelect }: {
+function RankList({ title, rows, unit, color, selectedNames, onSelect }: {
   title: string;
   rows: DashboardRank[];
   unit: string;
   color: string;
-  selectedName?: string;
-  onSelect?: (name: string) => void;
+  selectedNames: Set<string>;
+  onSelect?: (name: string, additive: boolean) => void;
 }) {
   const max = Math.max(...rows.map(row => row.value), 1);
   return (
@@ -102,8 +116,8 @@ function RankList({ title, rows, unit, color, selectedName, onSelect }: {
       <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>{title}</Typography>
       <Stack spacing={1.15}>
         {rows.map((row, index) => (
-          <Box key={row.name} component="button" type="button" onClick={() => onSelect?.(row.name)}
-            sx={{ display: 'block', width: '100%', p: 0.6, mx: -0.6, border: 0, borderRadius: 1.5, bgcolor: selectedName === row.name ? '#eef2ff' : 'transparent', textAlign: 'left', cursor: onSelect ? 'pointer' : 'default', '&:hover': { bgcolor: onSelect ? '#f8fafc' : undefined } }}>
+          <Box key={row.name} component="button" type="button" onClick={(event) => onSelect?.(row.name, event.ctrlKey || event.metaKey)}
+            sx={{ display: 'block', width: '100%', p: 0.6, mx: -0.6, border: selectedNames.has(row.name) ? '1px solid #818cf8' : '1px solid transparent', borderRadius: 1.5, bgcolor: selectedNames.has(row.name) ? '#eef2ff' : 'transparent', textAlign: 'left', cursor: onSelect ? 'pointer' : 'default', '&:hover': { bgcolor: onSelect ? '#f8fafc' : undefined } }}>
             <Stack direction="row" justifyContent="space-between" spacing={1}>
               <Typography variant="body2" noWrap title={row.name} sx={{ maxWidth: '68%' }}>
                 <Box component="span" sx={{ color: 'text.secondary', mr: 0.75 }}>{index + 1}.</Box>{row.name}
@@ -121,12 +135,12 @@ function RankList({ title, rows, unit, color, selectedName, onSelect }: {
   );
 }
 
-function NetworkHeatmap({ rows, networkOrder, unit, selectedName, onSelect }: {
+function NetworkHeatmap({ rows, networkOrder, unit, selectedNames, onSelect }: {
   rows: DashboardSeriesPoint[];
   networkOrder: string[];
   unit: string;
-  selectedName?: string;
-  onSelect: (name: string) => void;
+  selectedNames: Set<string>;
+  onSelect: (name: string, additive: boolean) => void;
 }) {
   const periods = [...new Set(rows.map(point => `${point.year}-${String(point.month).padStart(2, '0')}`))].sort();
   const valueMap = new Map(rows.map(point => [`${point.name}\u0000${point.year}-${String(point.month).padStart(2, '0')}`, point.value]));
@@ -154,17 +168,17 @@ function NetworkHeatmap({ rows, networkOrder, unit, selectedName, onSelect }: {
           </Box>
           {networkOrder.map(name => (
             <Box key={name} sx={{ display: 'grid', gridTemplateColumns: gridTemplate, gap: 0.35, mb: 0.35 }}>
-              <Box component="button" type="button" onClick={() => onSelect(name)} title={name}
-                sx={{ position: 'sticky', left: 0, zIndex: 2, border: 0, borderRadius: 1, bgcolor: selectedName === name ? '#eef2ff' : '#fff', px: 0.75, textAlign: 'left', cursor: 'pointer', overflow: 'hidden' }}>
-                <Typography variant="caption" noWrap sx={{ display: 'block', fontWeight: selectedName === name ? 700 : 500 }}>{name}</Typography>
+              <Box component="button" type="button" onClick={(event) => onSelect(name, event.ctrlKey || event.metaKey)} title={name}
+                sx={{ position: 'sticky', left: 0, zIndex: 2, border: 0, borderRadius: 1, bgcolor: selectedNames.has(name) ? '#eef2ff' : '#fff', px: 0.75, textAlign: 'left', cursor: 'pointer', overflow: 'hidden' }}>
+                <Typography variant="caption" noWrap sx={{ display: 'block', fontWeight: selectedNames.has(name) ? 700 : 500 }}>{name}</Typography>
               </Box>
               {periods.map(period => {
                 const value = valueMap.get(`${name}\u0000${period}`) || 0;
                 const intensity = value / (rowMax.get(name) || 1);
                 return (
-                  <Box key={period} component="button" type="button" onClick={() => onSelect(name)}
+                  <Box key={period} component="button" type="button" onClick={(event) => onSelect(name, event.ctrlKey || event.metaKey)}
                     title={`${name} · ${period}: ${fullNumber(value, unit)}`}
-                    sx={{ height: 24, border: selectedName === name ? '1px solid #6366f1' : '1px solid transparent', borderRadius: 0.75, bgcolor: value === 0 ? '#f8fafc' : `rgba(99, 102, 241, ${0.12 + intensity * 0.82})`, cursor: 'pointer' }} />
+                    sx={{ height: 24, border: selectedNames.has(name) ? '1px solid #6366f1' : '1px solid transparent', borderRadius: 0.75, bgcolor: value === 0 ? '#f8fafc' : `rgba(99, 102, 241, ${0.12 + intensity * 0.82})`, cursor: 'pointer' }} />
                 );
               })}
             </Box>
@@ -176,8 +190,8 @@ function NetworkHeatmap({ rows, networkOrder, unit, selectedName, onSelect }: {
 }
 
 export default function InternetSalesDashboard({
-  data, loading, error, focus,
-  onProductSelect, onNetworkSelect, onSegmentSelect, onClearFocus,
+  data, loading, error, focuses,
+  onProductSelect, onNetworkSelect, onSegmentSelect, onRemoveFocus, onClearFocus,
 }: InternetSalesDashboardProps) {
   if (loading && !data) {
     return <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
@@ -191,14 +205,29 @@ export default function InternetSalesDashboard({
     ...point,
     period: `${point.year}-${String(point.month).padStart(2, '0')}`,
   }));
-  const focusByPeriod = new Map(data.focusTrend.map(point => [
-    `${point.year}-${String(point.month).padStart(2, '0')}`,
-    point.value,
-  ]));
-  const chartTrend = trend.map(point => ({
-    ...point,
-    focusValue: focusByPeriod.get(point.period),
-  }));
+  const focusSeries = focuses.map((focus, index) => ({ ...focus, key: `focus_${index}` }));
+  const channelNames = [...new Set(data.channelTrends.map(point => point.name))];
+  const channelSeries = channelNames.map((name, index) => ({ name, key: `channel_${index}` }));
+  const chartByPeriod = new Map<string, Record<string, number | string>>(
+    trend.map(point => [point.period, { period: point.period, value: point.value }]),
+  );
+  data.focusTrends.forEach(point => {
+    const series = focusSeries.find(item => item.type === point.type && item.name === point.name);
+    if (!series) return;
+    const period = `${point.year}-${String(point.month).padStart(2, '0')}`;
+    const current = chartByPeriod.get(period) || { period };
+    current[series.key] = point.value;
+    chartByPeriod.set(period, current);
+  });
+  data.channelTrends.forEach(point => {
+    const series = channelSeries.find(item => item.name === point.name);
+    if (!series) return;
+    const period = `${point.year}-${String(point.month).padStart(2, '0')}`;
+    const current = chartByPeriod.get(period) || { period };
+    current[series.key] = point.value;
+    chartByPeriod.set(period, current);
+  });
+  const chartTrend = [...chartByPeriod.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
 
   const networkTrendByPeriod = new Map<string, Record<string, number | string>>();
   data.networkTrends.forEach(point => {
@@ -215,10 +244,34 @@ export default function InternetSalesDashboard({
     ? ((Number(data.summary.latestValue) - data.summary.previousValue) / data.summary.previousValue) * 100
     : null;
   const unitLabel = data.unit === 'руб' ? '₽' : 'уп.';
-  const focusLabel = focus?.type === 'product' ? 'SKU' : 'Сеть';
-  const showSegmentComparison = data.channelSegments.length > 1 && data.segmentTotals.length > 1;
-  const showNetworkDynamics = !showSegmentComparison && data.topProducts.length <= 1 && networkNames.length > 1;
-  const seriesColors = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899'];
+  const networkFocusNames = new Set(focuses.filter(item => item.type === 'network').map(item => item.name));
+  const productFocusNames = new Set(focuses.filter(item => item.type === 'product').map(item => item.name));
+  const showNetworkBreakdown = data.networkBreakdown.length > 1 && (networkFocusNames.size > 0 || data.topNetworks.length <= 1);
+  const showSegmentComparison = !showNetworkBreakdown && data.channelSegments.length > 1 && data.segmentTotals.length > 1;
+  const showNetworkDynamics = !showNetworkBreakdown && !showSegmentComparison && data.topProducts.length <= 1 && networkNames.length > 1;
+  const focusColors = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#8b5cf6'];
+  const channelColors = ['#0891b2', '#0f766e', '#2563eb', '#9333ea', '#c2410c'];
+  const maxOverall = Math.max(...data.trend.map(point => point.value), 0);
+  const maxFocus = Math.max(...data.focusTrends.map(point => point.value), 0);
+  const useFocusAxis = focusSeries.length > 0 && maxFocus > 0 && maxOverall / maxFocus >= 4;
+  const multipleBreakdownNetworks = new Set(data.networkBreakdown.map(item => item.network)).size > 1;
+  const breakdownRows = data.networkBreakdown.map(item => ({
+    name: multipleBreakdownNetworks
+      ? `${item.network} · ${item.channel} · ${item.segment}`
+      : `${item.channel} · ${item.segment}`,
+    value: item.value,
+  }));
+
+  const mainTooltipFormatter = (value: number | string, name: string, item: { payload?: Record<string, unknown> }) => {
+    const numericValue = Number(value);
+    const networkSeries = focusSeries.find(series => series.type === 'network' && series.name === name);
+    if (networkSeries) {
+      const total = Number(item.payload?.value || 0);
+      const share = total > 0 ? ` · доля ${((numericValue / total) * 100).toFixed(1)}%` : '';
+      return [`${fullNumber(numericValue, data.unit)}${share}`, name];
+    }
+    return [fullNumber(numericValue, data.unit), name];
+  };
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pr: 0.5 }}>
@@ -236,10 +289,16 @@ export default function InternetSalesDashboard({
               <Box>
                 <Stack direction="row" spacing={1} alignItems="center">
                   <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Динамика продаж</Typography>
-                  {focus && <Chip size="small" label={`${focusLabel}: ${focus.name}`} onDelete={onClearFocus} color="primary" variant="outlined" />}
+                  {focuses.map(focus => (
+                    <Chip key={`${focus.type}:${focus.name}`} size="small"
+                      label={`${focus.type === 'product' ? 'SKU' : 'Сеть'}: ${focus.name}`}
+                      onDelete={() => onRemoveFocus(focus)} color="primary" variant="outlined" />
+                  ))}
+                  {focuses.length > 1 && <Chip size="small" label="Сбросить выбор" onClick={onClearFocus} />}
                 </Stack>
                 <Typography variant="caption" color="text.secondary">
                   {data.channel ? `${data.channel} → ` : ''}{data.segment} · {data.unit === 'руб' ? 'в рублях' : 'в упаковках'}
+                  {useFocusAxis ? ' · выбранные серии по правой шкале' : ''}
                 </Typography>
               </Box>
               {loading && <CircularProgress size={18} />}
@@ -248,23 +307,45 @@ export default function InternetSalesDashboard({
               <LineChart data={chartTrend} margin={{ top: 10, right: 18, left: 4, bottom: 8 }}>
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 11 }} minTickGap={24} />
-                <YAxis tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />
-                <Tooltip formatter={(value, name) => [fullNumber(Number(value), data.unit), name]} labelFormatter={(label) => `Период: ${label}`} />
-                {focus && <Legend />}
-                <Line type="monotone" dataKey="value" name={focus ? 'Общий результат' : 'Продажи'} stroke={focus ? '#94a3b8' : '#6366f1'} strokeWidth={focus ? 2 : 3} strokeDasharray={focus ? '6 4' : undefined} dot={false} activeDot={{ r: 5 }} />
-                {focus && <Line type="monotone" dataKey="focusValue" name={focus.name} stroke="#6366f1" strokeWidth={3} dot={false} activeDot={{ r: 5 }} connectNulls />}
+                <YAxis yAxisId="main" tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />
+                {useFocusAxis && <YAxis yAxisId="focus" orientation="right" tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />}
+                <Tooltip formatter={mainTooltipFormatter} labelFormatter={(label) => `Период: ${label}`} />
+                {(focusSeries.length > 0 || channelSeries.length > 0) && <Legend />}
+                <Line yAxisId="main" type="monotone" dataKey="value" name={focusSeries.length || channelSeries.length ? 'Основной срез' : 'Продажи'} stroke={focusSeries.length || channelSeries.length ? '#94a3b8' : '#6366f1'} strokeWidth={focusSeries.length || channelSeries.length ? 2 : 3} strokeDasharray={focusSeries.length || channelSeries.length ? '6 4' : undefined} dot={false} activeDot={{ r: 5 }} />
+                {channelSeries.map((series, index) => (
+                  <Line key={series.key} yAxisId="main" type="monotone" dataKey={series.key} name={`Канал: ${series.name}`}
+                    stroke={channelColors[index % channelColors.length]} strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
+                ))}
+                {focusSeries.map((series, index) => (
+                  <Line key={series.key} yAxisId={useFocusAxis ? 'focus' : 'main'} type="monotone" dataKey={series.key} name={series.name}
+                    stroke={focusColors[index % focusColors.length]} strokeWidth={3} dot={false} activeDot={{ r: 5 }} connectNulls />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </Paper>
         </Grid>
         <Grid size={{ xs: 12, lg: 4 }}>
           <RankList title="Лидеры среди сетей" rows={data.topNetworks} unit={data.unit} color="#0ea5e9"
-            selectedName={focus?.type === 'network' ? focus.name : undefined} onSelect={onNetworkSelect} />
+            selectedNames={networkFocusNames} onSelect={onNetworkSelect} />
         </Grid>
       </Grid>
 
       <Paper variant="outlined" sx={{ p: 2, height: 350, borderRadius: 3, borderColor: '#e2e8f0' }}>
-        {showSegmentComparison ? (
+        {showNetworkBreakdown ? (
+          <>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Детализация сети по каналам и сегментам</Typography>
+            <Typography variant="caption" color="text.secondary">Срезы показаны отдельно и не складываются между собой, если они пересекаются</Typography>
+            <ResponsiveContainer width="100%" height={285}>
+              <BarChart data={[...breakdownRows].reverse()} layout="vertical" margin={{ top: 12, right: 24, left: 16, bottom: 0 }}>
+                <CartesianGrid stroke="#f1f5f9" horizontal={false} />
+                <XAxis type="number" tickFormatter={compactNumber} tick={{ fontSize: 10 }} />
+                <YAxis type="category" dataKey="name" width={multipleBreakdownNetworks ? 330 : 250} tick={{ fontSize: 10 }} />
+                <Tooltip formatter={(value) => [`${Number(value).toLocaleString('ru-RU')} ${unitLabel}`, 'Продажи']} />
+                <Bar dataKey="value" fill="#0f766e" radius={[0, 5, 5, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </>
+        ) : showSegmentComparison ? (
           <>
             <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Сегменты канала «{data.channel}»</Typography>
             <Typography variant="caption" color="text.secondary">Нажмите на сегмент, чтобы перестроить основной график</Typography>
@@ -291,7 +372,8 @@ export default function InternetSalesDashboard({
                 <Tooltip formatter={(value, name) => [fullNumber(Number(value), data.unit), name]} />
                 <Legend />
                 {networkLineNames.map((name, index) => (
-                  <Line key={name} type="monotone" dataKey={name} stroke={seriesColors[index % seriesColors.length]} strokeWidth={2.2} dot={false} connectNulls cursor="pointer" onClick={() => onNetworkSelect(name)} />
+                  <Line key={name} type="monotone" dataKey={name} stroke={focusColors[index % focusColors.length]} strokeWidth={2.2} dot={false} connectNulls cursor="pointer"
+                    onClick={(_entry, _index, event) => onNetworkSelect(name, Boolean(event?.ctrlKey || event?.metaKey))} />
                 ))}
               </LineChart>
             </ResponsiveContainer>
@@ -306,8 +388,13 @@ export default function InternetSalesDashboard({
                 <XAxis type="number" tickFormatter={compactNumber} tick={{ fontSize: 10 }} />
                 <YAxis type="category" dataKey="name" width={210} tick={{ fontSize: 10 }} />
                 <Tooltip formatter={(value) => [`${Number(value).toLocaleString('ru-RU')} ${unitLabel}`, 'Продажи']} />
-                <Bar dataKey="value" fill="#8b5cf6" radius={[0, 5, 5, 0]} cursor="pointer"
-                  onClick={(entry) => onProductSelect((entry as DashboardRank).name)} />
+                <Bar dataKey="value" radius={[0, 5, 5, 0]} cursor="pointer"
+                  onClick={(entry, _index, event) => onProductSelect((entry as DashboardRank).name, Boolean(event?.ctrlKey || event?.metaKey))}>
+                  {[...data.topProducts].reverse().map(item => (
+                    <Cell key={item.name} fill={productFocusNames.has(item.name) ? '#4f46e5' : '#8b5cf6'}
+                      stroke={productFocusNames.has(item.name) ? '#312e81' : 'none'} strokeWidth={2} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </>
@@ -319,7 +406,7 @@ export default function InternetSalesDashboard({
           rows={data.networkTrends}
           networkOrder={data.topNetworks.map(item => item.name)}
           unit={data.unit}
-          selectedName={focus?.type === 'network' ? focus.name : undefined}
+          selectedNames={networkFocusNames}
           onSelect={onNetworkSelect}
         />
       )}

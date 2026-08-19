@@ -7,7 +7,7 @@ import {
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import FilterPanel from '../components/FilterPanel';
 import DataTable from '../components/DataTable';
-import InternetSalesDashboard, { type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
+import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
 import { salesAPI } from '../api/promo';
 
 const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
@@ -73,8 +73,9 @@ export default function InternetSales() {
   });
   const [focusChannel, setFocusChannel] = useState('OLAP SS');
   const [focusSegment, setFocusSegment] = useState('OLAP SS');
+  const [comparisonChannels, setComparisonChannels] = useState<string[]>([]);
   const [unit, setUnit] = useState<'руб' | 'уп'>('руб');
-  const [dashboardFocus, setDashboardFocus] = useState<{ type: 'product' | 'network'; name: string } | null>(null);
+  const [dashboardFocus, setDashboardFocus] = useState<DashboardFocus[]>([]);
   const [dashboard, setDashboard] = useState<InternetSalesDashboardData | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState('');
@@ -130,14 +131,15 @@ export default function InternetSales() {
       focusChannel,
       focusSegment,
       unit,
-      ...(dashboardFocus?.type === 'product' ? { focusProduct: dashboardFocus.name } : {}),
-      ...(dashboardFocus?.type === 'network' ? { focusNetwork: dashboardFocus.name } : {}),
+      compareChannels: comparisonChannels,
+      focusProducts: dashboardFocus.filter(item => item.type === 'product').map(item => item.name),
+      focusNetworks: dashboardFocus.filter(item => item.type === 'network').map(item => item.name),
     })
       .then(raw => { if (active) setDashboard(raw as InternetSalesDashboardData); })
       .catch((err: { message?: string }) => { if (active) setDashboardError(err.message || 'Не удалось загрузить дашборд'); })
       .finally(() => { if (active) setDashboardLoading(false); });
     return () => { active = false; };
-  }, [appliedFilters, focusChannel, focusSegment, unit, dashboardFocus]);
+  }, [appliedFilters, focusChannel, focusSegment, unit, comparisonChannels, dashboardFocus]);
 
   const segmentOptions = useMemo(
     () => meta.channelSegmentMap[focusChannel] || meta.segment,
@@ -158,7 +160,7 @@ export default function InternetSales() {
 
   const handleSearch = useCallback(() => {
     setAppliedFilters({ ...filters });
-    setDashboardFocus(null);
+    setDashboardFocus([]);
     if (persistFilters) sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
   }, [filters, persistFilters]);
 
@@ -170,8 +172,9 @@ export default function InternetSales() {
     const defaultSegments = meta.channelSegmentMap[defaultChannel] || meta.segment;
     setFocusChannel(defaultChannel);
     setFocusSegment(defaultSegments.includes('OLAP SS') ? 'OLAP SS' : (defaultSegments[0] || ''));
+    setComparisonChannels([]);
     setUnit('руб');
-    setDashboardFocus(null);
+    setDashboardFocus([]);
     setRowCount(0);
     setDrilldownRow(null);
     sessionStorage.removeItem(FILTERS_STORAGE_KEY);
@@ -181,11 +184,24 @@ export default function InternetSales() {
     const nextSegments = meta.channelSegmentMap[value] || [];
     setFocusChannel(value);
     setFocusSegment(nextSegments[0] || '');
-    setDashboardFocus(null);
+    setDashboardFocus([]);
   }, [meta.channelSegmentMap]);
 
-  const toggleDashboardFocus = useCallback((type: 'product' | 'network', name: string) => {
-    setDashboardFocus(current => current?.type === type && current.name === name ? null : { type, name });
+  const toggleDashboardFocus = useCallback((type: DashboardFocus['type'], name: string, additive: boolean) => {
+    setDashboardFocus(current => {
+      const sameType = current.filter(item => item.type === type);
+      const exists = sameType.some(item => item.name === name);
+      if (!additive) {
+        return exists && sameType.length === 1 && current.length === 1 ? [] : [{ type, name }];
+      }
+      if (current.some(item => item.type !== type)) return [{ type, name }];
+      if (exists) return current.filter(item => !(item.type === type && item.name === name));
+      return current.length >= 5 ? current : [...current, { type, name }];
+    });
+  }, []);
+
+  const removeDashboardFocus = useCallback((focus: DashboardFocus) => {
+    setDashboardFocus(current => current.filter(item => item.type !== focus.type || item.name !== focus.name));
   }, []);
 
   const handlePersistChange = useCallback((checked: boolean) => {
@@ -242,19 +258,29 @@ export default function InternetSales() {
             onChange={(_, value) => {
               if (value) {
                 setFocusSegment(value);
-                setDashboardFocus(null);
+                setDashboardFocus([]);
               }
             }}
             renderInput={(params) => <TextField {...params} label="Сегмент канала" />}
             sx={{ minWidth: 240 }}
             disableClearable
           />
+          <Autocomplete
+            multiple
+            size="small"
+            options={meta.channel}
+            value={comparisonChannels}
+            onChange={(_, values) => setComparisonChannels(values.slice(0, 5))}
+            renderInput={(params) => <TextField {...params} label="Сравнить каналы" placeholder={comparisonChannels.length ? '' : 'До 5 каналов'} />}
+            limitTags={1}
+            sx={{ minWidth: 245 }}
+          />
           <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => value && setUnit(value)}>
             <ToggleButton value="руб">Рубли</ToggleButton>
             <ToggleButton value="уп">Упаковки</ToggleButton>
           </ToggleButtonGroup>
           <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 310 }}>
-            Список сегментов определяется выбранным каналом.
+            Ctrl/⌘ + клик добавляет SKU или сеть на основной график.
           </Typography>
           <Box sx={{ flex: 1 }} />
           <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}>
@@ -271,14 +297,15 @@ export default function InternetSales() {
           data={dashboard}
           loading={dashboardLoading}
           error={dashboardError}
-          focus={dashboardFocus}
-          onProductSelect={(name) => toggleDashboardFocus('product', name)}
-          onNetworkSelect={(name) => toggleDashboardFocus('network', name)}
+          focuses={dashboardFocus}
+          onProductSelect={(name, additive) => toggleDashboardFocus('product', name, additive)}
+          onNetworkSelect={(name, additive) => toggleDashboardFocus('network', name, additive)}
           onSegmentSelect={(name) => {
             setFocusSegment(name);
-            setDashboardFocus(null);
+            setDashboardFocus([]);
           }}
-          onClearFocus={() => setDashboardFocus(null)}
+          onRemoveFocus={removeDashboardFocus}
+          onClearFocus={() => setDashboardFocus([])}
         />
       ) : (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>

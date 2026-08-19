@@ -35,3 +35,11 @@ func TestBuildSalesWhereExactFocus(t *testing.T) {
 		t.Fatalf("args = %#v, want %#v", args, wantArgs)
 	}
 }
+
+func TestUniqueNonEmptyStrings(t *testing.T) {
+	got := uniqueNonEmptyStrings([]string{" A ", "", "B", "A", "C"}, 2)
+	want := []string{"A", "B"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("uniqueNonEmptyStrings() = %#v, want %#v", got, want)
+	}
+}
