@@ -2,10 +2,16 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/xml"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"backend/config"
@@ -14,7 +20,119 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	"github.com/gin-gonic/gin"
 	"github.com/xuri/excelize/v2"
+	"golang.org/x/text/encoding/charmap"
 )
+
+const cbrEURCurrencyID = "R01239"
+
+type cbrCurrencyRecord struct {
+	Date    string `xml:"Date,attr"`
+	Nominal string `xml:"Nominal"`
+	Value   string `xml:"Value"`
+}
+
+type cbrCurrencyResponse struct {
+	Records []cbrCurrencyRecord `xml:"Record"`
+}
+
+type eurRateCacheEntry struct {
+	Rates     map[int]float64
+	ExpiresAt time.Time
+}
+
+var eurRateCache = struct {
+	sync.Mutex
+	Items map[int]eurRateCacheEntry
+}{Items: make(map[int]eurRateCacheEntry)}
+
+func parseCBRDecimal(value string) (float64, error) {
+	return strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(value), ",", "."), 64)
+}
+
+func parseEURMonthlyRates(reader io.Reader) (map[int]float64, error) {
+	decoder := xml.NewDecoder(reader)
+	decoder.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) {
+		return charmap.Windows1251.NewDecoder().Reader(input), nil
+	}
+	var response cbrCurrencyResponse
+	if err := decoder.Decode(&response); err != nil {
+		return nil, err
+	}
+	sums := make(map[int]float64)
+	counts := make(map[int]int)
+	for _, record := range response.Records {
+		date, err := time.Parse("02.01.2006", record.Date)
+		if err != nil {
+			continue
+		}
+		nominal, err := parseCBRDecimal(record.Nominal)
+		if err != nil || nominal == 0 {
+			continue
+		}
+		value, err := parseCBRDecimal(record.Value)
+		if err != nil {
+			continue
+		}
+		sums[int(date.Month())] += value / nominal
+		counts[int(date.Month())]++
+	}
+	rates := make(map[int]float64, len(sums))
+	for month, sum := range sums {
+		if counts[month] > 0 {
+			rates[month] = sum / float64(counts[month])
+		}
+	}
+	if len(rates) == 0 {
+		return nil, fmt.Errorf("ЦБ РФ не вернул курсы EUR")
+	}
+	return rates, nil
+}
+
+func loadEURMonthlyRates(year int) (map[int]float64, error) {
+	eurRateCache.Lock()
+	if cached, ok := eurRateCache.Items[year]; ok && time.Now().Before(cached.ExpiresAt) {
+		eurRateCache.Unlock()
+		return cached.Rates, nil
+	}
+	eurRateCache.Unlock()
+
+	start := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year, time.December, 31, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+	if year == now.Year() && now.Before(end) {
+		end = now
+	}
+	if year > now.Year() {
+		return nil, fmt.Errorf("курсы EUR за %d год ещё недоступны", year)
+	}
+	params := url.Values{
+		"date_req1": {start.Format("02/01/2006")},
+		"date_req2": {end.Format("02/01/2006")},
+		"VAL_NM_RQ": {cbrEURCurrencyID},
+	}
+	request, err := http.NewRequest(http.MethodGet, "https://www.cbr.ru/scripts/XML_dynamic.asp?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "AnalyticsPortal/1.0")
+	client := &http.Client{Timeout: 12 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ЦБ РФ вернул HTTP %d", response.StatusCode)
+	}
+	rates, err := parseEURMonthlyRates(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	eurRateCache.Lock()
+	eurRateCache.Items[year] = eurRateCacheEntry{Rates: rates, ExpiresAt: time.Now().Add(6 * time.Hour)}
+	eurRateCache.Unlock()
+	return rates, nil
+}
 
 func GetFilterOptions(c *gin.Context) {
 	getDistinct := func(query string) []string {
@@ -34,6 +152,7 @@ func GetFilterOptions(c *gin.Context) {
 	}
 
 	result := gin.H{
+		"year":        getDistinct("SELECT DISTINCT CONVERT(varchar(4), [year]) FROM dbo.tbl_EcomSalesNormalized WHERE [year] IS NOT NULL ORDER BY CONVERT(varchar(4), [year])"),
 		"brandName":   getDistinct("SELECT DISTINCT brandName FROM dbo.tbl_EcomSalesNormalized WHERE brandName IS NOT NULL ORDER BY brandName"),
 		"productName": getDistinct("SELECT DISTINCT productName FROM dbo.tbl_EcomSalesNormalized WHERE productName IS NOT NULL ORDER BY productName"),
 		"networkName": getDistinct("SELECT DISTINCT networkName FROM dbo.tbl_EcomSalesNormalized WHERE networkName IS NOT NULL ORDER BY networkName"),
@@ -64,6 +183,52 @@ func GetFilterOptions(c *gin.Context) {
 		result["channelSegmentMap"] = chanSegMap
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// GetSalesNetworkOptions возвращает только сети, для которых есть данные при
+// текущем наборе остальных фильтров. Выбранные сети намеренно не включаются в
+// WHERE, чтобы список можно было безопасно пересчитать до их применения.
+func GetSalesNetworkOptions(c *gin.Context) {
+	unit := strings.TrimSpace(c.DefaultQuery("unit", "руб"))
+	segments := append(c.QueryArray("focusSegments"), c.Query("focusSegment"))
+	segments = uniqueNonEmptyStrings(segments, 0)
+	if len(segments) == 0 {
+		segments = []string{"OLAP SS"}
+	}
+	if unit != "руб" && unit != "уп" && unit != "евро" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unit должен быть 'руб', 'евро' или 'уп'"})
+		return
+	}
+	dbUnit := unit
+	if unit == "евро" {
+		dbUnit = "руб"
+	}
+
+	where, args := buildSalesWhere(salesFilter{
+		YearFromStr:  c.Query("yearFrom"),
+		YearToStr:    c.Query("yearTo"),
+		Months:       c.QueryArray("months"),
+		Quarters:     c.QueryArray("quarters"),
+		BrandNames:   c.QueryArray("brandName"),
+		ProductNames: c.QueryArray("productName"),
+		UnRubs:       []string{dbUnit},
+		Segments:     segments,
+	})
+	rows, err := config.DB.Query("SELECT DISTINCT n.networkName FROM dbo.tbl_EcomSalesNormalized n"+where+" AND n.networkName IS NOT NULL ORDER BY n.networkName", args...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Network options query failed"})
+		return
+	}
+	defer rows.Close()
+
+	networks := make([]string, 0)
+	for rows.Next() {
+		var network string
+		if scanErr := rows.Scan(&network); scanErr == nil && network != "" {
+			networks = append(networks, network)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"networkName": networks})
 }
 
 // salesFilter — параметры фильтрации интернет-продаж.
@@ -347,6 +512,47 @@ type salesDashboardNetworkBreakdown struct {
 	Value   float64 `json:"value"`
 }
 
+type salesDashboardMetricComparison struct {
+	Current  float64 `json:"current"`
+	Previous float64 `json:"previous"`
+}
+
+type salesDashboardDriver struct {
+	Name         string   `json:"name"`
+	Current      float64  `json:"current"`
+	Previous     float64  `json:"previous"`
+	Delta        float64  `json:"delta"`
+	DeltaPercent *float64 `json:"deltaPercent"`
+}
+
+type salesDashboardRankDetail struct {
+	Name       string   `json:"name"`
+	Value      float64  `json:"value"`
+	Previous   float64  `json:"previous"`
+	YoYPercent *float64 `json:"yoyPercent"`
+	Share      float64  `json:"share"`
+	Rank       int      `json:"rank"`
+	RankChange int      `json:"rankChange"`
+}
+
+type salesDimensionValue struct {
+	Name     string
+	Current  float64
+	Previous float64
+}
+
+type salesDashboardEcomShare struct {
+	Applicable    bool     `json:"applicable"`
+	Family        string   `json:"family"`
+	Full          float64  `json:"full"`
+	WithoutEcom   float64  `json:"withoutEcom"`
+	Ecom          float64  `json:"ecom"`
+	Share         *float64 `json:"share"`
+	PreviousFull  float64  `json:"previousFull"`
+	PreviousEcom  float64  `json:"previousEcom"`
+	PreviousShare *float64 `json:"previousShare"`
+}
+
 func uniqueNonEmptyStrings(values []string, limit int) []string {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -367,10 +573,83 @@ func uniqueNonEmptyStrings(values []string, limit int) []string {
 	return result
 }
 
-// GetSalesDashboard возвращает только агрегаты одного сегмента и одной единицы
-// измерения. Это не позволяет случайно сложить пересекающиеся итоги OLAP.
+func buildDimensionViews(values []salesDimensionValue) ([]salesDashboardDriver, []salesDashboardRankDetail) {
+	drivers := make([]salesDashboardDriver, 0, len(values))
+	currentTotal := 0.0
+	for _, item := range values {
+		currentTotal += item.Current
+		delta := item.Current - item.Previous
+		var deltaPercent *float64
+		if item.Previous != 0 {
+			value := delta / item.Previous * 100
+			deltaPercent = &value
+		}
+		drivers = append(drivers, salesDashboardDriver{
+			Name:         item.Name,
+			Current:      item.Current,
+			Previous:     item.Previous,
+			Delta:        delta,
+			DeltaPercent: deltaPercent,
+		})
+	}
+	sort.SliceStable(drivers, func(i, j int) bool {
+		return math.Abs(drivers[i].Delta) > math.Abs(drivers[j].Delta)
+	})
+	if len(drivers) > 12 {
+		drivers = drivers[:12]
+	}
+
+	currentOrder := append([]salesDimensionValue(nil), values...)
+	sort.SliceStable(currentOrder, func(i, j int) bool { return currentOrder[i].Current > currentOrder[j].Current })
+	previousOrder := append([]salesDimensionValue(nil), values...)
+	sort.SliceStable(previousOrder, func(i, j int) bool { return previousOrder[i].Previous > previousOrder[j].Previous })
+	previousRanks := make(map[string]int, len(previousOrder))
+	for index, item := range previousOrder {
+		if item.Previous > 0 {
+			previousRanks[item.Name] = index + 1
+		}
+	}
+
+	ranking := make([]salesDashboardRankDetail, 0, 10)
+	for index, item := range currentOrder {
+		if item.Current <= 0 || len(ranking) >= 10 {
+			continue
+		}
+		var yoyPercent *float64
+		if item.Previous != 0 {
+			value := (item.Current - item.Previous) / item.Previous * 100
+			yoyPercent = &value
+		}
+		share := 0.0
+		if currentTotal != 0 {
+			share = item.Current / currentTotal * 100
+		}
+		previousRank := previousRanks[item.Name]
+		rankChange := 0
+		if previousRank > 0 {
+			rankChange = previousRank - (index + 1)
+		}
+		ranking = append(ranking, salesDashboardRankDetail{
+			Name:       item.Name,
+			Value:      item.Current,
+			Previous:   item.Previous,
+			YoYPercent: yoyPercent,
+			Share:      share,
+			Rank:       index + 1,
+			RankChange: rankChange,
+		})
+	}
+	return drivers, ranking
+}
+
+// GetSalesDashboard возвращает агрегаты выбранных сегментов одного канала и
+// одной единицы измерения. Набор сегментов формируется из справочника канала.
 func GetSalesDashboard(c *gin.Context) {
-	segment := strings.TrimSpace(c.DefaultQuery("focusSegment", "OLAP SS"))
+	segments := append(c.QueryArray("focusSegments"), c.Query("focusSegment"))
+	segments = uniqueNonEmptyStrings(segments, 0)
+	if len(segments) == 0 {
+		segments = []string{"OLAP SS"}
+	}
 	channel := strings.TrimSpace(c.Query("focusChannel"))
 	unit := strings.TrimSpace(c.DefaultQuery("unit", "руб"))
 	focusProducts := append(c.QueryArray("focusProducts"), c.Query("focusProduct"))
@@ -378,21 +657,61 @@ func GetSalesDashboard(c *gin.Context) {
 	focusProducts = uniqueNonEmptyStrings(focusProducts, 5)
 	focusNetworks = uniqueNonEmptyStrings(focusNetworks, 5)
 	compareChannels := uniqueNonEmptyStrings(c.QueryArray("compareChannels"), 5)
-	if unit != "руб" && unit != "уп" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unit должен быть 'руб' или 'уп'"})
+	if unit != "руб" && unit != "уп" && unit != "евро" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unit должен быть 'руб', 'евро' или 'уп'"})
 		return
+	}
+	dbUnit := unit
+	if unit == "евро" {
+		dbUnit = "руб"
+	}
+
+	analysisYear, parseErr := strconv.Atoi(strings.TrimSpace(c.Query("analysisYear")))
+	if parseErr != nil || analysisYear < 2000 || analysisYear > 2100 {
+		analysisYear, parseErr = strconv.Atoi(strings.TrimSpace(c.Query("yearTo")))
+	}
+	if parseErr != nil || analysisYear < 2000 || analysisYear > 2100 {
+		analysisYear, parseErr = strconv.Atoi(strings.TrimSpace(c.Query("yearFrom")))
+	}
+	if parseErr != nil || analysisYear < 2000 || analysisYear > 2100 {
+		if err := config.DB.QueryRow("SELECT COALESCE(MAX([year]), YEAR(GETDATE())) FROM dbo.tbl_EcomSalesNormalized").Scan(&analysisYear); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard year query failed"})
+			return
+		}
+	}
+
+	eurRates := make(map[int]map[int]float64)
+	if unit == "евро" {
+		for _, year := range []int{analysisYear - 1, analysisYear} {
+			rates, err := loadEURMonthlyRates(year)
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Не удалось загрузить официальные курсы EUR ЦБ РФ", "details": err.Error()})
+				return
+			}
+			eurRates[year] = rates
+		}
+	}
+	convertValue := func(value float64, year, month int) (float64, error) {
+		if unit != "евро" {
+			return value, nil
+		}
+		rate := eurRates[year][month]
+		if rate <= 0 {
+			return 0, fmt.Errorf("нет курса EUR за %02d.%d", month, year)
+		}
+		return value / rate, nil
 	}
 
 	baseFilter := salesFilter{
-		YearFromStr:  c.Query("yearFrom"),
-		YearToStr:    c.Query("yearTo"),
+		YearFromStr:  strconv.Itoa(analysisYear),
+		YearToStr:    strconv.Itoa(analysisYear),
 		Months:       c.QueryArray("months"),
 		Quarters:     c.QueryArray("quarters"),
 		BrandNames:   c.QueryArray("brandName"),
 		ProductNames: c.QueryArray("productName"),
 		NetworkNames: c.QueryArray("networkName"),
-		UnRubs:       []string{unit},
-		Segments:     []string{segment},
+		UnRubs:       []string{dbUnit},
+		Segments:     segments,
 	}
 	where, args := buildSalesWhere(baseFilter)
 
@@ -414,6 +733,10 @@ func GetSalesDashboard(c *gin.Context) {
 		for rows.Next() {
 			var point salesDashboardPoint
 			if err := rows.Scan(&point.Year, &point.Month, &point.Value); err == nil {
+				point.Value, err = convertValue(point.Value, point.Year, point.Month)
+				if err != nil {
+					return nil, err
+				}
 				result = append(result, point)
 			}
 		}
@@ -424,6 +747,180 @@ func GetSalesDashboard(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard trend query failed"})
 		return
+	}
+	previousYearFilter := baseFilter
+	previousYearFilter.YearFromStr = strconv.Itoa(analysisYear - 1)
+	previousYearFilter.YearToStr = strconv.Itoa(analysisYear - 1)
+	previousYearWhere, previousYearArgs := buildSalesWhere(previousYearFilter)
+	previousYearTrend, err := loadTrend(previousYearWhere, previousYearArgs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard previous year trend query failed"})
+		return
+	}
+	if unit == "евро" {
+		total = 0
+		for _, point := range trend {
+			total += point.Value
+		}
+	}
+
+	loadMetricComparison := func(metricUnit string) (salesDashboardMetricComparison, error) {
+		metricFilter := baseFilter
+		metricFilter.YearFromStr = ""
+		metricFilter.YearToStr = ""
+		metricFilter.UnRubs = []string{metricUnit}
+		metricWhere, metricArgs := buildSalesWhere(metricFilter)
+		queryArgs := []interface{}{analysisYear, analysisYear - 1}
+		queryArgs = append(queryArgs, metricArgs...)
+		var result salesDashboardMetricComparison
+		err := config.DB.QueryRow(`SELECT
+			COALESCE(SUM(CASE WHEN n.[year] = ? THEN n.metric_value ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN n.[year] = ? THEN n.metric_value ELSE 0 END), 0)
+			FROM dbo.tbl_EcomSalesNormalized n`+metricWhere, queryArgs...).Scan(&result.Current, &result.Previous)
+		return result, err
+	}
+	rubComparison, err := loadMetricComparison("руб")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard rub comparison query failed"})
+		return
+	}
+	unitsComparison, err := loadMetricComparison("уп")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard units comparison query failed"})
+		return
+	}
+	eurComparison := salesDashboardMetricComparison{}
+	for _, point := range trend {
+		if unit == "евро" {
+			eurComparison.Current += point.Value
+		} else if rates := eurRates[point.Year]; rates != nil && rates[point.Month] > 0 {
+			eurComparison.Current += point.Value / rates[point.Month]
+		}
+	}
+	for _, point := range previousYearTrend {
+		if unit == "евро" {
+			eurComparison.Previous += point.Value
+		} else if rates := eurRates[point.Year]; rates != nil && rates[point.Month] > 0 {
+			eurComparison.Previous += point.Value / rates[point.Month]
+		}
+	}
+
+	loadDimensionValues := func(column string) ([]salesDimensionValue, error) {
+		dimensionFilter := baseFilter
+		dimensionFilter.YearFromStr = strconv.Itoa(analysisYear - 1)
+		dimensionFilter.YearToStr = strconv.Itoa(analysisYear)
+		dimensionWhere, dimensionArgs := buildSalesWhere(dimensionFilter)
+		query := `SELECT n.` + column + `, n.[year], n.[month], SUM(n.metric_value)
+			FROM dbo.tbl_EcomSalesNormalized n` + dimensionWhere +
+			` AND n.` + column + ` IS NOT NULL
+			GROUP BY n.` + column + `, n.[year], n.[month]`
+		rows, queryErr := config.DB.Query(query, dimensionArgs...)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		defer rows.Close()
+		values := make(map[string]*salesDimensionValue)
+		for rows.Next() {
+			var name string
+			var year, month int
+			var value float64
+			if scanErr := rows.Scan(&name, &year, &month, &value); scanErr == nil && name != "" {
+				value, scanErr = convertValue(value, year, month)
+				if scanErr != nil {
+					return nil, scanErr
+				}
+				item := values[name]
+				if item == nil {
+					item = &salesDimensionValue{Name: name}
+					values[name] = item
+				}
+				if year == analysisYear {
+					item.Current += value
+				} else if year == analysisYear-1 {
+					item.Previous += value
+				}
+			}
+		}
+		result := make([]salesDimensionValue, 0, len(values))
+		for _, item := range values {
+			result = append(result, *item)
+		}
+		return result, rows.Err()
+	}
+	networkValues, err := loadDimensionValues("networkName")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard network analytics query failed"})
+		return
+	}
+	productValues, err := loadDimensionValues("productName")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard product analytics query failed"})
+		return
+	}
+	networkDrivers, networkRanking := buildDimensionViews(networkValues)
+	productDrivers, productRanking := buildDimensionViews(productValues)
+
+	ecomShare := salesDashboardEcomShare{}
+	ecomFamily := ""
+	switch channel {
+	case "OLAP SS", "OLAP SS wo Ecom":
+		ecomFamily = "OLAP SS"
+	case "OLAP NW", "OLAP NW wo Ecom":
+		ecomFamily = "OLAP NW"
+	}
+	if ecomFamily != "" {
+		ecomShare.Applicable = true
+		ecomShare.Family = ecomFamily
+		withoutEcomSegment := ecomFamily + " wo Ecom"
+		ecomFilter := baseFilter
+		ecomFilter.YearFromStr = strconv.Itoa(analysisYear - 1)
+		ecomFilter.YearToStr = strconv.Itoa(analysisYear)
+		ecomFilter.Segments = []string{ecomFamily, withoutEcomSegment}
+		ecomWhere, ecomArgs := buildSalesWhere(ecomFilter)
+		ecomRows, queryErr := config.DB.Query(`SELECT n.segment, n.[year], n.[month], SUM(n.metric_value)
+			FROM dbo.tbl_EcomSalesNormalized n`+ecomWhere+`
+			GROUP BY n.segment, n.[year], n.[month]`, ecomArgs...)
+		if queryErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard Ecom share query failed"})
+			return
+		}
+		for ecomRows.Next() {
+			var segmentName string
+			var year, month int
+			var value float64
+			if scanErr := ecomRows.Scan(&segmentName, &year, &month, &value); scanErr == nil {
+				value, scanErr = convertValue(value, year, month)
+				if scanErr != nil {
+					ecomRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard Ecom currency conversion failed"})
+					return
+				}
+				if year == analysisYear {
+					if segmentName == ecomFamily {
+						ecomShare.Full += value
+					} else if segmentName == withoutEcomSegment {
+						ecomShare.WithoutEcom += value
+					}
+				} else if year == analysisYear-1 {
+					if segmentName == ecomFamily {
+						ecomShare.PreviousFull += value
+					} else if segmentName == withoutEcomSegment {
+						ecomShare.PreviousEcom -= value
+					}
+				}
+			}
+		}
+		ecomRows.Close()
+		ecomShare.Ecom = ecomShare.Full - ecomShare.WithoutEcom
+		ecomShare.PreviousEcom += ecomShare.PreviousFull
+		if ecomShare.Full != 0 {
+			share := ecomShare.Ecom / ecomShare.Full * 100
+			ecomShare.Share = &share
+		}
+		if ecomShare.PreviousFull != 0 {
+			share := ecomShare.PreviousEcom / ecomShare.PreviousFull * 100
+			ecomShare.PreviousShare = &share
+		}
 	}
 
 	var latestValue, previousPeriodValue, yearAgoValue *float64
@@ -448,7 +945,11 @@ func GetSalesDashboard(c *gin.Context) {
 			if queryErr := config.DB.QueryRow(query, queryArgs...).Scan(&value, &count); queryErr != nil || count == 0 {
 				return nil
 			}
-			return &value
+			converted, convertErr := convertValue(value, year, month)
+			if convertErr != nil {
+				return nil
+			}
+			return &converted
 		}
 
 		previousYear, previousMonth := latestYear, latestMonth-1
@@ -480,6 +981,10 @@ func GetSalesDashboard(c *gin.Context) {
 			var point salesDashboardFocusPoint
 			point.Type = focusType
 			if scanErr := rows.Scan(&point.Name, &point.Year, &point.Month, &point.Value); scanErr == nil {
+				point.Value, scanErr = convertValue(point.Value, point.Year, point.Month)
+				if scanErr != nil {
+					return scanErr
+				}
 				focusTrends = append(focusTrends, point)
 			}
 		}
@@ -511,20 +1016,37 @@ func GetSalesDashboard(c *gin.Context) {
 		return result, rows.Err()
 	}
 
-	topNetworks, err := loadRank("networkName")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard networks query failed"})
-		return
-	}
-	topProducts, err := loadRank("productName")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard products query failed"})
-		return
+	topNetworks := make([]salesDashboardRank, 0, 8)
+	topProducts := make([]salesDashboardRank, 0, 8)
+	if unit == "евро" {
+		for index, item := range networkRanking {
+			if index >= 8 {
+				break
+			}
+			topNetworks = append(topNetworks, salesDashboardRank{Name: item.Name, Value: item.Value})
+		}
+		for index, item := range productRanking {
+			if index >= 8 {
+				break
+			}
+			topProducts = append(topProducts, salesDashboardRank{Name: item.Name, Value: item.Value})
+		}
+	} else {
+		topNetworks, err = loadRank("networkName")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard networks query failed"})
+			return
+		}
+		topProducts, err = loadRank("productName")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard products query failed"})
+			return
+		}
 	}
 
 	channelSegments := make([]string, 0)
 	if channel != "" {
-		segmentRows, queryErr := config.DB.Query("SELECT DISTINCT segment FROM dbo.tbl_ChannelSegmentMapping WHERE channel = ? AND un_rub = ? AND segment IS NOT NULL ORDER BY segment", channel, unit)
+		segmentRows, queryErr := config.DB.Query("SELECT DISTINCT segment FROM dbo.tbl_ChannelSegmentMapping WHERE channel = ? AND un_rub = ? AND segment IS NOT NULL ORDER BY segment", channel, dbUnit)
 		if queryErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard channel mapping query failed"})
 			return
@@ -538,25 +1060,38 @@ func GetSalesDashboard(c *gin.Context) {
 		segmentRows.Close()
 	}
 	if len(channelSegments) == 0 {
-		channelSegments = append(channelSegments, segment)
+		channelSegments = append(channelSegments, segments...)
 	}
 
 	segmentFilter := baseFilter
 	segmentFilter.Segments = channelSegments
 	segmentWhere, segmentArgs := buildSalesWhere(segmentFilter)
-	segmentRows, err := config.DB.Query("SELECT n.segment, SUM(n.metric_value) AS total_value FROM dbo.tbl_EcomSalesNormalized n"+segmentWhere+" GROUP BY n.segment ORDER BY total_value DESC", segmentArgs...)
+	segmentRows, err := config.DB.Query("SELECT n.segment, n.[year], n.[month], SUM(n.metric_value) AS total_value FROM dbo.tbl_EcomSalesNormalized n"+segmentWhere+" GROUP BY n.segment, n.[year], n.[month]", segmentArgs...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard segment totals query failed"})
 		return
 	}
-	segmentTotals := make([]salesDashboardRank, 0)
+	segmentValues := make(map[string]float64)
 	for segmentRows.Next() {
-		var item salesDashboardRank
-		if scanErr := segmentRows.Scan(&item.Name, &item.Value); scanErr == nil {
-			segmentTotals = append(segmentTotals, item)
+		var name string
+		var year, month int
+		var value float64
+		if scanErr := segmentRows.Scan(&name, &year, &month, &value); scanErr == nil {
+			value, scanErr = convertValue(value, year, month)
+			if scanErr != nil {
+				segmentRows.Close()
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard segment currency conversion failed"})
+				return
+			}
+			segmentValues[name] += value
 		}
 	}
 	segmentRows.Close()
+	segmentTotals := make([]salesDashboardRank, 0, len(segmentValues))
+	for name, value := range segmentValues {
+		segmentTotals = append(segmentTotals, salesDashboardRank{Name: name, Value: value})
+	}
+	sort.SliceStable(segmentTotals, func(i, j int) bool { return segmentTotals[i].Value > segmentTotals[j].Value })
 
 	networkTrends := make([]salesDashboardSeriesPoint, 0)
 	if len(topNetworks) > 0 {
@@ -578,6 +1113,12 @@ func GetSalesDashboard(c *gin.Context) {
 		for networkRows.Next() {
 			var point salesDashboardSeriesPoint
 			if scanErr := networkRows.Scan(&point.Name, &point.Year, &point.Month, &point.Value); scanErr == nil {
+				point.Value, scanErr = convertValue(point.Value, point.Year, point.Month)
+				if scanErr != nil {
+					networkRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard network currency conversion failed"})
+					return
+				}
 				networkTrends = append(networkTrends, point)
 			}
 		}
@@ -605,6 +1146,12 @@ func GetSalesDashboard(c *gin.Context) {
 		for channelRows.Next() {
 			var point salesDashboardSeriesPoint
 			if scanErr := channelRows.Scan(&point.Name, &point.Year, &point.Month, &point.Value); scanErr == nil {
+				point.Value, scanErr = convertValue(point.Value, point.Year, point.Month)
+				if scanErr != nil {
+					channelRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard channel currency conversion failed"})
+					return
+				}
 				channelTrends = append(channelTrends, point)
 			}
 		}
@@ -624,21 +1171,43 @@ func GetSalesDashboard(c *gin.Context) {
 				breakdownArgs = append(breakdownArgs, network)
 			}
 		}
-		breakdownQuery := `SELECT TOP 16 n.networkName, n.channel, n.segment, SUM(n.metric_value) AS total_value
+		breakdownQuery := `SELECT n.networkName, n.channel, n.segment, n.[year], n.[month], SUM(n.metric_value) AS total_value
 			FROM dbo.tbl_EcomSalesNormalized n` + breakdownWhere + exactNetworkCondition +
-			" GROUP BY n.networkName, n.channel, n.segment ORDER BY total_value DESC"
+			" GROUP BY n.networkName, n.channel, n.segment, n.[year], n.[month]"
 		breakdownRows, queryErr := config.DB.Query(breakdownQuery, breakdownArgs...)
 		if queryErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard network breakdown query failed"})
 			return
 		}
+		breakdownValues := make(map[string]*salesDashboardNetworkBreakdown)
 		for breakdownRows.Next() {
-			var item salesDashboardNetworkBreakdown
-			if scanErr := breakdownRows.Scan(&item.Network, &item.Channel, &item.Segment, &item.Value); scanErr == nil {
-				networkBreakdown = append(networkBreakdown, item)
+			var network, channelName, segmentName string
+			var year, month int
+			var value float64
+			if scanErr := breakdownRows.Scan(&network, &channelName, &segmentName, &year, &month, &value); scanErr == nil {
+				value, scanErr = convertValue(value, year, month)
+				if scanErr != nil {
+					breakdownRows.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Dashboard breakdown currency conversion failed"})
+					return
+				}
+				key := network + "\x00" + channelName + "\x00" + segmentName
+				item := breakdownValues[key]
+				if item == nil {
+					item = &salesDashboardNetworkBreakdown{Network: network, Channel: channelName, Segment: segmentName}
+					breakdownValues[key] = item
+				}
+				item.Value += value
 			}
 		}
 		breakdownRows.Close()
+		for _, item := range breakdownValues {
+			networkBreakdown = append(networkBreakdown, *item)
+		}
+		sort.SliceStable(networkBreakdown, func(i, j int) bool { return networkBreakdown[i].Value > networkBreakdown[j].Value })
+		if len(networkBreakdown) > 16 {
+			networkBreakdown = networkBreakdown[:16]
+		}
 	}
 
 	average := 0.0
@@ -646,9 +1215,11 @@ func GetSalesDashboard(c *gin.Context) {
 		average = total / float64(periods)
 	}
 	c.JSON(http.StatusOK, gin.H{
+		"analysisYear":    analysisYear,
 		"channel":         channel,
 		"channelSegments": channelSegments,
-		"segment":         segment,
+		"segment":         strings.Join(segments, ", "),
+		"segments":        segments,
 		"unit":            unit,
 		"summary": gin.H{
 			"total":           total,
@@ -662,7 +1233,24 @@ func GetSalesDashboard(c *gin.Context) {
 			"previousValue":   previousPeriodValue,
 			"yearAgoValue":    yearAgoValue,
 		},
-		"trend":            trend,
+		"trend":             trend,
+		"previousYearTrend": previousYearTrend,
+		"metricComparisons": gin.H{
+			"rub":   rubComparison,
+			"eur":   eurComparison,
+			"units": unitsComparison,
+		},
+		"currencySource": func() string {
+			if unit == "евро" {
+				return "ЦБ РФ · средний официальный курс EUR за месяц"
+			}
+			return ""
+		}(),
+		"ecomShare":        ecomShare,
+		"networkDrivers":   networkDrivers,
+		"productDrivers":   productDrivers,
+		"networkRanking":   networkRanking,
+		"productRanking":   productRanking,
 		"focusTrends":      focusTrends,
 		"topNetworks":      topNetworks,
 		"topProducts":      topProducts,

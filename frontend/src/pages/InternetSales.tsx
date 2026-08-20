@@ -1,11 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Autocomplete, Box, Button, CircularProgress, Paper, Stack, Tab, Tabs,
-  TextField, ToggleButton, ToggleButtonGroup, Typography,
+  Autocomplete, Box, Button, Chip, CircularProgress, Collapse, FormControlLabel,
+  Paper, Stack, Switch, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
+  Tooltip, Typography,
 } from '@mui/material';
-import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
-import FilterPanel from '../components/FilterPanel';
+import {
+  ArrowBack as ArrowBackIcon,
+  ExpandMore as ExpandMoreIcon,
+  RestartAlt as RestartAltIcon,
+  Tune as TuneIcon,
+} from '@mui/icons-material';
 import DataTable from '../components/DataTable';
 import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
 import { salesAPI } from '../api/promo';
@@ -13,8 +18,8 @@ import { salesAPI } from '../api/promo';
 const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
-const FILTERS_STORAGE_KEY = 'internet_sales_filters_v8';
-const PERSIST_FLAG_KEY = 'internet_sales_persist_v8';
+const FILTERS_STORAGE_KEY = 'internet_sales_filters_v9';
+const PERSIST_FLAG_KEY = 'internet_sales_persist_v9';
 
 const COLUMNS = [
   { field: 'year', headerName: 'Год', width: 90, type: 'number', valueFormatter: (v) => v },
@@ -47,17 +52,10 @@ const EMPTY_FILTERS: SalesFilters = {
   brandName: [], productName: [], networkName: [],
 };
 
-const EXTRA_FILTERS = [
-  { type: 'year' as const, field: 'yearFrom', label: 'Год от' },
-  { type: 'year' as const, field: 'yearTo', label: 'Год до' },
-  { type: 'months' as const, field: 'months', label: 'Месяцы' },
-  { type: 'quarters' as const, field: 'quarters', label: 'Кварталы' },
-];
-
 interface SalesMeta {
+  year: string[];
   brandName: string[];
   productName: string[];
-  networkName: string[];
   segment: string[];
   channel: string[];
   channelSegmentMap: Record<string, string[]>;
@@ -65,16 +63,22 @@ interface SalesMeta {
   error: string | null;
 }
 
+const normalizeStringList = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
 export default function InternetSales() {
   const navigate = useNavigate();
   const [view, setView] = useState<'dashboard' | 'details'>('dashboard');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [meta, setMeta] = useState<SalesMeta>({
-    brandName: [], productName: [], networkName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
+    year: [], brandName: [], productName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
   });
+  const [networkOptions, setNetworkOptions] = useState<string[]>([]);
+  const [networkOptionsLoading, setNetworkOptionsLoading] = useState(false);
+  const [analysisYear, setAnalysisYear] = useState('');
   const [focusChannel, setFocusChannel] = useState('OLAP SS');
-  const [focusSegment, setFocusSegment] = useState('OLAP SS');
+  const [focusSegments, setFocusSegments] = useState<string[]>(['OLAP SS']);
   const [comparisonChannels, setComparisonChannels] = useState<string[]>([]);
-  const [unit, setUnit] = useState<'руб' | 'уп'>('руб');
+  const [unit, setUnit] = useState<'руб' | 'евро' | 'уп'>('руб');
   const [dashboardFocus, setDashboardFocus] = useState<DashboardFocus[]>([]);
   const [dashboard, setDashboard] = useState<InternetSalesDashboardData | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
@@ -101,35 +105,74 @@ export default function InternetSales() {
     salesAPI.getFilters()
       .then(raw => {
         const data = raw as Record<string, unknown>;
-        const segments = (data.segment as string[]) || [];
-        const channels = (data.channel as string[]) || [];
+        const years = normalizeStringList(data.year).sort((a, b) => Number(a) - Number(b));
+        const segments = normalizeStringList(data.segment);
+        const channels = normalizeStringList(data.channel);
         const channelSegmentMap = (data.channelSegmentMap as Record<string, string[]>) || {};
         setMeta({
-          brandName: (data.brandName as string[]) || [],
-          productName: (data.productName as string[]) || [],
-          networkName: (data.networkName as string[]) || [],
+          year: years,
+          brandName: normalizeStringList(data.brandName),
+          productName: normalizeStringList(data.productName),
           segment: segments,
           channel: channels,
           channelSegmentMap,
           loading: false,
           error: null,
         });
+        const latestYear = filters.yearTo || filters.yearFrom || years.at(-1) || '';
+        setAnalysisYear(latestYear);
+        setFilters(current => ({ ...current, yearFrom: latestYear, yearTo: latestYear }));
         const defaultChannel = channelSegmentMap['OLAP SS'] ? 'OLAP SS' : (channels[0] || '');
         const defaultSegments = channelSegmentMap[defaultChannel] || segments;
         setFocusChannel(defaultChannel);
-        setFocusSegment(defaultSegments.includes('OLAP SS') ? 'OLAP SS' : (defaultSegments[0] || ''));
+        setFocusSegments(defaultSegments.includes('OLAP SS') ? ['OLAP SS'] : defaultSegments);
       })
       .catch((err: Error) => setMeta(prev => ({ ...prev, loading: false, error: err.message })));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setAppliedFilters(filters);
+      if (persistFilters) sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [filters, persistFilters]);
+
+  useEffect(() => {
+    if (focusSegments.length === 0 || !analysisYear) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setNetworkOptionsLoading(true);
+      const filtersWithoutNetworks = { ...filters } as Partial<SalesFilters>;
+      delete filtersWithoutNetworks.networkName;
+      salesAPI.getNetworkOptions({ ...filtersWithoutNetworks, focusSegments, unit })
+        .then(raw => {
+          if (!active) return;
+          const options = normalizeStringList((raw as Record<string, unknown>).networkName);
+          setNetworkOptions(options);
+          const available = new Set(options);
+          setFilters(current => {
+            const validNetworks = current.networkName.filter(name => available.has(name));
+            return validNetworks.length === current.networkName.length ? current : { ...current, networkName: validNetworks };
+          });
+          setDashboardFocus(current => current.filter(item => item.type !== 'network' || available.has(item.name)));
+        })
+        .catch(() => { if (active) setNetworkOptions([]); })
+        .finally(() => { if (active) setNetworkOptionsLoading(false); });
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusSegments, unit]);
+
+  useEffect(() => {
+    if (!analysisYear || focusSegments.length === 0) return;
     let active = true;
     setDashboardLoading(true);
     setDashboardError('');
     salesAPI.getDashboard({
       ...appliedFilters,
+      analysisYear,
       focusChannel,
-      focusSegment,
+      focusSegments,
       unit,
       compareChannels: comparisonChannels,
       focusProducts: dashboardFocus.filter(item => item.type === 'product').map(item => item.name),
@@ -139,51 +182,45 @@ export default function InternetSales() {
       .catch((err: { message?: string }) => { if (active) setDashboardError(err.message || 'Не удалось загрузить дашборд'); })
       .finally(() => { if (active) setDashboardLoading(false); });
     return () => { active = false; };
-  }, [appliedFilters, focusChannel, focusSegment, unit, comparisonChannels, dashboardFocus]);
+  }, [analysisYear, appliedFilters, focusChannel, focusSegments, unit, comparisonChannels, dashboardFocus]);
 
   const segmentOptions = useMemo(
     () => meta.channelSegmentMap[focusChannel] || meta.segment,
     [meta.channelSegmentMap, meta.segment, focusChannel],
   );
 
-  const filterOptions = useMemo(() => ({
-    brandName: meta.brandName,
-    productName: meta.productName,
-    networkName: meta.networkName,
-  }), [meta]);
-
   const detailFilters = useMemo(() => ({
     ...appliedFilters,
-    segment: focusSegment ? [focusSegment] : [],
-    un_rub: [unit],
-  }), [appliedFilters, focusSegment, unit]);
+    segment: focusSegments,
+    un_rub: [unit === 'евро' ? 'руб' : unit],
+  }), [appliedFilters, focusSegments, unit]);
 
-  const handleSearch = useCallback(() => {
-    setAppliedFilters({ ...filters });
+  const updateYear = useCallback((year: string) => {
+    setAnalysisYear(year);
+    setFilters(current => ({ ...current, yearFrom: year, yearTo: year }));
     setDashboardFocus([]);
-    if (persistFilters) sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
-  }, [filters, persistFilters]);
+  }, []);
 
   const handleReset = useCallback(() => {
-    const empty = { ...EMPTY_FILTERS };
-    setFilters(empty);
-    setAppliedFilters(empty);
+    const latestYear = meta.year.at(-1) || analysisYear;
+    setAnalysisYear(latestYear);
+    setFilters({ ...EMPTY_FILTERS, yearFrom: latestYear, yearTo: latestYear });
     const defaultChannel = meta.channelSegmentMap['OLAP SS'] ? 'OLAP SS' : (meta.channel[0] || '');
     const defaultSegments = meta.channelSegmentMap[defaultChannel] || meta.segment;
     setFocusChannel(defaultChannel);
-    setFocusSegment(defaultSegments.includes('OLAP SS') ? 'OLAP SS' : (defaultSegments[0] || ''));
+    setFocusSegments(defaultSegments.includes('OLAP SS') ? ['OLAP SS'] : defaultSegments);
     setComparisonChannels([]);
     setUnit('руб');
     setDashboardFocus([]);
     setRowCount(0);
     setDrilldownRow(null);
     sessionStorage.removeItem(FILTERS_STORAGE_KEY);
-  }, [meta.channel, meta.channelSegmentMap, meta.segment]);
+  }, [analysisYear, meta.channel, meta.channelSegmentMap, meta.segment, meta.year]);
 
   const handleChannelChange = useCallback((value: string) => {
     const nextSegments = meta.channelSegmentMap[value] || [];
     setFocusChannel(value);
-    setFocusSegment(nextSegments[0] || '');
+    setFocusSegments(nextSegments);
     setDashboardFocus([]);
   }, [meta.channelSegmentMap]);
 
@@ -191,17 +228,11 @@ export default function InternetSales() {
     setDashboardFocus(current => {
       const sameType = current.filter(item => item.type === type);
       const exists = sameType.some(item => item.name === name);
-      if (!additive) {
-        return exists && sameType.length === 1 && current.length === 1 ? [] : [{ type, name }];
-      }
+      if (!additive) return exists && sameType.length === 1 && current.length === 1 ? [] : [{ type, name }];
       if (current.some(item => item.type !== type)) return [{ type, name }];
       if (exists) return current.filter(item => !(item.type === type && item.name === name));
       return current.length >= 5 ? current : [...current, { type, name }];
     });
-  }, []);
-
-  const removeDashboardFocus = useCallback((focus: DashboardFocus) => {
-    setDashboardFocus(current => current.filter(item => item.type !== focus.type || item.name !== focus.name));
   }, []);
 
   const handlePersistChange = useCallback((checked: boolean) => {
@@ -211,83 +242,93 @@ export default function InternetSales() {
     else sessionStorage.removeItem(FILTERS_STORAGE_KEY);
   }, [filters]);
 
-  const handleRowClick = useCallback((params) => {
-    if (params.row.networkName && params.row.brandName) setDrilldownRow(params.row);
-  }, []);
+  const activeFilterCount = filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: '#f8fafc' }}>
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: '#f6f8fb' }}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1.5 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Box>
-          <Typography variant="h5" sx={{ fontWeight: 700 }}>Интернет-продажи</Typography>
-          <Typography variant="caption" color="text.secondary">Динамика, лидеры и детализация онлайн-канала</Typography>
+          <Typography variant="h5" sx={{ fontWeight: 750 }}>Интернет-продажи</Typography>
+          <Typography variant="caption" color="text.secondary">Динамика, вклад в изменение и структура онлайн-каналов</Typography>
         </Box>
         {meta.loading && <CircularProgress size={20} />}
         <Box sx={{ flex: 1 }} />
         {view === 'details' && rowCount > 0 && <Typography variant="body2" color="text.secondary">{rowCount.toLocaleString('ru-RU')} строк</Typography>}
+        <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}>
+          <Tab value="dashboard" label="Аналитика" />
+          <Tab value="details" label="Таблица" />
+        </Tabs>
       </Stack>
 
-      <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, borderRadius: 3, borderColor: '#e2e8f0' }}>
-        <FilterPanel
-          filters={filters}
-          filterOptions={filterOptions}
-          onFiltersChange={(next) => setFilters(next as SalesFilters)}
-          onSearch={handleSearch}
-          onReset={handleReset}
-          loading={dashboardLoading}
-          extraFilters={EXTRA_FILTERS}
-          persistFilters={persistFilters}
-          onPersistChange={handlePersistChange}
-          labels={{ productName: 'SKU' }}
-        />
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', md: 'center' }} sx={{ mt: 1.5, pt: 1.5, borderTop: '1px solid #e2e8f0' }}>
-          <Autocomplete
-            size="small"
-            options={meta.channel}
-            value={focusChannel || null}
-            onChange={(_, value) => value && handleChannelChange(value)}
-            renderInput={(params) => <TextField {...params} label="Канал" />}
-            sx={{ minWidth: 210 }}
-            disableClearable
-          />
-          <Autocomplete
-            size="small"
-            options={segmentOptions}
-            value={focusSegment || null}
-            onChange={(_, value) => {
-              if (value) {
-                setFocusSegment(value);
-                setDashboardFocus([]);
-              }
-            }}
-            renderInput={(params) => <TextField {...params} label="Сегмент канала" />}
-            sx={{ minWidth: 240 }}
-            disableClearable
-          />
-          <Autocomplete
-            multiple
-            size="small"
-            options={meta.channel}
-            value={comparisonChannels}
-            onChange={(_, values) => setComparisonChannels(values.slice(0, 5))}
-            renderInput={(params) => <TextField {...params} label="Сравнить каналы" placeholder={comparisonChannels.length ? '' : 'До 5 каналов'} />}
-            limitTags={1}
-            sx={{ minWidth: 245 }}
-          />
-          <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => value && setUnit(value)}>
-            <ToggleButton value="руб">Рубли</ToggleButton>
-            <ToggleButton value="уп">Упаковки</ToggleButton>
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, borderRadius: 3, borderColor: '#dfe5ee' }}>
+        <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.25} alignItems={{ xs: 'stretch', lg: 'center' }}>
+          <ToggleButtonGroup size="small" exclusive value={analysisYear} onChange={(_, value) => value && updateYear(value)}>
+            {meta.year.slice(-4).map(year => <ToggleButton key={year} value={year}>{year}</ToggleButton>)}
           </ToggleButtonGroup>
-          <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 310 }}>
-            Ctrl/⌘ + клик добавляет SKU или сеть на основной график.
-          </Typography>
-          <Box sx={{ flex: 1 }} />
-          <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}>
-            <Tab value="dashboard" label="Обзор" />
-            <Tab value="details" label="Детализация" />
-          </Tabs>
+          <ToggleButtonGroup size="small" value={filters.quarters.length ? filters.quarters.map(String) : ['all']}
+            onChange={(_, values: string[]) => setFilters(current => {
+              if (current.quarters.length > 0 && values.includes('all')) return { ...current, quarters: [], months: [] };
+              const quarters = values.filter(value => value !== 'all').map(Number).filter(value => value >= 1 && value <= 4);
+              return { ...current, quarters, months: [] };
+            })}>
+            <ToggleButton value="all">Весь год</ToggleButton>
+            {[1, 2, 3, 4].map(quarter => <ToggleButton key={quarter} value={String(quarter)}>Q{quarter}</ToggleButton>)}
+          </ToggleButtonGroup>
+          <Autocomplete multiple size="small" options={meta.brandName} value={filters.brandName}
+            onChange={(_, values) => setFilters(current => ({ ...current, brandName: values }))}
+            renderInput={(params) => <TextField {...params} label="Бренд" />}
+            limitTags={1} sx={{ minWidth: 190, flex: 1 }} />
+          <Autocomplete multiple size="small" options={meta.productName} value={filters.productName}
+            onChange={(_, values) => setFilters(current => ({ ...current, productName: values }))}
+            renderInput={(params) => <TextField {...params} label="SKU" />}
+            limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
+          <Autocomplete multiple size="small" options={networkOptions} value={filters.networkName} loading={networkOptionsLoading}
+            onChange={(_, values) => setFilters(current => ({ ...current, networkName: values }))}
+            renderInput={(params) => <TextField {...params} label="Сеть" helperText="Только сети с данными" />}
+            limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
+          <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => value && setUnit(value)}>
+            <ToggleButton value="руб">₽</ToggleButton>
+            <ToggleButton value="уп">Шт.</ToggleButton>
+            <Tooltip title="Расчёт по среднему официальному курсу ЦБ РФ за месяц">
+              <ToggleButton value="евро">€</ToggleButton>
+            </Tooltip>
+          </ToggleButtonGroup>
         </Stack>
+
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1 }}>
+          <Button size="small" startIcon={<TuneIcon />} endIcon={<ExpandMoreIcon sx={{ transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: '0.2s' }} />}
+            onClick={() => setAdvancedOpen(value => !value)}>Дополнительные фильтры</Button>
+          {activeFilterCount > 0 && <Chip size="small" label={`Активно: ${activeFilterCount}`} />}
+          <Button size="small" color="inherit" startIcon={<RestartAltIcon />} onClick={handleReset}>Сбросить</Button>
+          <Box sx={{ flex: 1 }} />
+          {dashboardLoading && <Stack direction="row" spacing={0.75} alignItems="center"><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
+        </Stack>
+
+        <Collapse in={advancedOpen}>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.25} alignItems={{ xs: 'stretch', md: 'center' }} sx={{ mt: 1.25, pt: 1.25, borderTop: '1px solid #e7ebf1' }}>
+            <Autocomplete size="small" options={meta.channel} value={focusChannel || null} disableClearable
+              onChange={(_, value) => value && handleChannelChange(value)}
+              renderInput={(params) => <TextField {...params} label="Канал" />} sx={{ minWidth: 190 }} />
+            <Autocomplete multiple size="small" options={segmentOptions} value={focusSegments} disableClearable
+              onChange={(_, values) => { if (values.length > 0) { setFocusSegments(values); setDashboardFocus([]); } }}
+              renderInput={(params) => <TextField {...params} label="Сегменты канала" />}
+              limitTags={2} sx={{ minWidth: 245 }} />
+            <Autocomplete multiple size="small" options={meta.channel} value={comparisonChannels}
+              onChange={(_, values) => setComparisonChannels(values.slice(0, 5))}
+              renderInput={(params) => <TextField {...params} label="Сравнить каналы" />}
+              limitTags={1} sx={{ minWidth: 230, flex: 1 }} />
+            <Autocomplete multiple size="small" options={Array.from({ length: 12 }, (_, index) => index + 1)} value={filters.months}
+              getOptionLabel={(value) => new Intl.DateTimeFormat('ru-RU', { month: 'short' }).format(new Date(2026, value - 1, 1))}
+              onChange={(_, values) => setFilters(current => ({ ...current, months: values, quarters: [] }))}
+              renderInput={(params) => <TextField {...params} label="Отдельные месяцы" />}
+              limitTags={1} sx={{ minWidth: 210 }} />
+            <FormControlLabel control={<Switch size="small" checked={persistFilters} onChange={(_, checked) => handlePersistChange(checked)} />} label={<Typography variant="caption">Запомнить</Typography>} />
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+            Ctrl/⌘ + клик по сети или SKU добавляет до пяти рядов на сравнительный график.
+          </Typography>
+        </Collapse>
       </Paper>
 
       {meta.error && <Typography color="error" sx={{ mb: 1 }}>{meta.error}</Typography>}
@@ -300,24 +341,16 @@ export default function InternetSales() {
           focuses={dashboardFocus}
           onProductSelect={(name, additive) => toggleDashboardFocus('product', name, additive)}
           onNetworkSelect={(name, additive) => toggleDashboardFocus('network', name, additive)}
-          onSegmentSelect={(name) => {
-            setFocusSegment(name);
-            setDashboardFocus([]);
-          }}
-          onRemoveFocus={removeDashboardFocus}
+          onSegmentSelect={(name) => { setFocusSegments([name]); setDashboardFocus([]); }}
+          onRemoveFocus={(focus) => setDashboardFocus(current => current.filter(item => item.type !== focus.type || item.name !== focus.name))}
           onClearFocus={() => setDashboardFocus([])}
         />
       ) : (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <DataTable
-            columns={COLUMNS}
-            apiUrl={`${API_BASE}/api/data`}
-            filters={detailFilters}
-            exportFileName="internet-sales"
-            exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
+          <DataTable columns={COLUMNS} apiUrl={`${API_BASE}/api/data`} filters={detailFilters}
+            exportFileName="internet-sales" exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
             onDataLoaded={(data) => setRowCount(data.length)}
-            onRowClick={handleRowClick}
-          />
+            onRowClick={(params) => { if (params.row.networkName && params.row.brandName) setDrilldownRow(params.row); }} />
         </Box>
       )}
 

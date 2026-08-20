@@ -283,6 +283,9 @@ export const salesAPI = {
   getDashboard: (filters: Record<string, unknown> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/sales/dashboard?${buildParams(filters)}`).then(r => parseJSONResponse(r, 'Ошибка загрузки дашборда')),
 
+  getNetworkOptions: (filters: Record<string, unknown> = {}): Promise<unknown> =>
+    fetchWithAuth(`${API_BASE}/api/sales/network-options?${buildParams(filters)}`).then(r => parseJSONResponse(r, 'Ошибка загрузки списка сетей')),
+
   getDrilldown: (params: Record<string, string> = {}): Promise<unknown> =>
     fetchWithAuth(`${API_BASE}/api/drilldown?${new URLSearchParams(params)}`).then(r => r.json()),
 };
