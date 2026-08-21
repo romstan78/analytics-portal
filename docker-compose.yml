@@ -6,6 +6,9 @@ x-backend-environment: &backend-environment
   DB_NAME: ${DB_NAME:-local_project_db}
   DB_AUTO_CREATE: ${DB_AUTO_CREATE:-true}
   DB_STARTUP_TIMEOUT_SECONDS: "120"
+  DB_ENCRYPT: ${DB_ENCRYPT:-true}
+  # Локальный SQL Server использует самоподписанный сертификат.
+  DB_TRUST_SERVER_CERT: ${DB_TRUST_SERVER_CERT:-true}
   APP_ENV: ${APP_ENV:-development}
   JWT_SECRET: ${JWT_SECRET:?Укажите JWT_SECRET в .env}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-5173}}

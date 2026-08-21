@@ -24,18 +24,43 @@ var Logger *slog.Logger
 
 var databaseNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// dbEncrypt — режим шифрования соединения с SQL Server: true (по умолчанию),
+// false или strict. Значение передаётся драйверу как есть.
+func dbEncrypt() string {
+	if value := strings.TrimSpace(os.Getenv("DB_ENCRYPT")); value != "" {
+		return value
+	}
+	return "true"
+}
+
+// dbTrustServerCert разрешает самоподписанный сертификат SQL Server.
+// Второе значение показывает, задана ли переменная явно: в production
+// ValidateRuntime требует осознанного выбора вместо молчаливого доверия.
+func dbTrustServerCert() (trust bool, explicit bool) {
+	if value := strings.TrimSpace(os.Getenv("DB_TRUST_SERVER_CERT")); value != "" {
+		return envEnabled("DB_TRUST_SERVER_CERT"), true
+	}
+	return true, false
+}
+
 func buildConnString(database string) string {
 	port := strings.TrimSpace(os.Getenv("DB_PORT"))
 	if port == "" {
 		port = "1433"
 	}
+	trust := "0"
+	if trusted, _ := dbTrustServerCert(); trusted {
+		trust = "1"
+	}
 	return fmt.Sprintf(
-		"server=%s;user id=%s;password=%s;database=%s;port=%s;TrustServerCertificate=1;",
+		"server=%s;user id=%s;password=%s;database=%s;port=%s;encrypt=%s;TrustServerCertificate=%s;",
 		os.Getenv("DB_SERVER"),
 		os.Getenv("DB_USER"),
 		os.Getenv("DB_PASSWORD"),
 		database,
 		port,
+		dbEncrypt(),
+		trust,
 	)
 }
 

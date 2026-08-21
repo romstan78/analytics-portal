@@ -11,6 +11,10 @@ services:
       DB_AUTO_CREATE: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:?Укажите публичный HTTPS origin портала}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:?Укажите адреса только доверенных reverse proxy}
+      DB_ENCRYPT: ${DB_ENCRYPT:-true}
+      # false — сертификат SQL Server проверяется по доверенным корням.
+      # true — осознанное доверие самоподписанному сертификату во внутренней сети.
+      DB_TRUST_SERVER_CERT: ${DB_TRUST_SERVER_CERT:?Укажите false для проверяемого сертификата SQL Server или true для внутреннего самоподписанного}
 
   frontend:
     build:

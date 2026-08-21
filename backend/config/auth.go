@@ -57,6 +57,15 @@ func ValidateRuntime() error {
 	if envEnabled("DB_AUTO_CREATE") {
 		return errors.New("DB_AUTO_CREATE должен быть выключен в production")
 	}
+	// Молчаливое доверие любому сертификату SQL Server в production недопустимо:
+	// требуем явного решения. false — сертификат проверяется по доверенным
+	// корням, true — осознанный выбор для SQL Server во внутренней сети.
+	if _, explicit := dbTrustServerCert(); !explicit {
+		return errors.New("DB_TRUST_SERVER_CERT должен быть задан явно в production: false для проверяемого сертификата SQL Server или true для внутреннего самоподписанного")
+	}
+	if encrypt := strings.ToLower(strings.TrimSpace(dbEncrypt())); encrypt != "true" && encrypt != "strict" {
+		return fmt.Errorf("DB_ENCRYPT в production должен быть true или strict, получено %q", encrypt)
+	}
 	origins := strings.TrimSpace(os.Getenv("CORS_ORIGINS"))
 	if origins == "" {
 		return errors.New("CORS_ORIGINS должен быть явно задан в production")

@@ -71,11 +71,62 @@ func TestValidateRuntimeRejectsUnsafeProductionDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeRejectsUnsafeDatabaseTLS(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DB_AUTO_CREATE", "false")
+	t.Setenv("CORS_ORIGINS", "https://portal.example.com")
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.10")
+
+	// Незаданное значение означает молчаливое доверие любому сертификату.
+	t.Setenv("DB_TRUST_SERVER_CERT", "")
+	if err := ValidateRuntime(); err == nil {
+		t.Fatal("production без явного DB_TRUST_SERVER_CERT должен быть отклонён")
+	}
+
+	// Осознанный выбор допустим в обе стороны.
+	t.Setenv("DB_TRUST_SERVER_CERT", "true")
+	if err := ValidateRuntime(); err != nil {
+		t.Fatalf("явный DB_TRUST_SERVER_CERT=true должен приниматься: %v", err)
+	}
+
+	t.Setenv("DB_TRUST_SERVER_CERT", "false")
+	t.Setenv("DB_ENCRYPT", "disable")
+	if err := ValidateRuntime(); err == nil {
+		t.Fatal("production с выключенным шифрованием должен быть отклонён")
+	}
+
+	t.Setenv("DB_ENCRYPT", "strict")
+	if err := ValidateRuntime(); err != nil {
+		t.Fatalf("strict-шифрование должно приниматься: %v", err)
+	}
+}
+
+func TestBuildConnStringReflectsTLSSettings(t *testing.T) {
+	t.Setenv("DB_SERVER", "sql.example.com")
+	t.Setenv("DB_USER", "portal")
+	t.Setenv("DB_PASSWORD", "irrelevant")
+	t.Setenv("DB_PORT", "1433")
+
+	t.Setenv("DB_ENCRYPT", "")
+	t.Setenv("DB_TRUST_SERVER_CERT", "")
+	if got := buildConnString("db"); !strings.Contains(got, "encrypt=true;") || !strings.Contains(got, "TrustServerCertificate=1;") {
+		t.Fatalf("значения по умолчанию не попали в строку подключения: %q", got)
+	}
+
+	t.Setenv("DB_ENCRYPT", "strict")
+	t.Setenv("DB_TRUST_SERVER_CERT", "false")
+	if got := buildConnString("db"); !strings.Contains(got, "encrypt=strict;") || !strings.Contains(got, "TrustServerCertificate=0;") {
+		t.Fatalf("явные настройки TLS не попали в строку подключения: %q", got)
+	}
+}
+
 func TestValidateRuntimeAcceptsExplicitProductionConfig(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DB_AUTO_CREATE", "false")
 	t.Setenv("CORS_ORIGINS", "https://portal.example.com")
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.10, 10.0.0.11")
+	t.Setenv("DB_TRUST_SERVER_CERT", "false")
+	t.Setenv("DB_ENCRYPT", "true")
 	if err := ValidateRuntime(); err != nil {
 		t.Fatalf("безопасная production-конфигурация отклонена: %v", err)
 	}
