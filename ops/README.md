@@ -41,7 +41,13 @@ make test-e2e
 make config-prod
 ```
 
-Шаблон `ops/github-actions-ci.yml.example` дополнительно поднимает чистый SQL Server, применяет все Goose-миграции и запускает интеграционные тесты только на БД с суффиксом `_test`. Для активации скопируйте его в `.github/workflows/ci.yml` с GitHub-токеном, имеющим scope `workflow`.
+CI описан в `.github/workflows/ci.yml` и состоит из трёх задач:
+
+- `quality` — `go vet` и Go-тесты, тайпчек, линт, модульные тесты и сборка фронтенда, Python-тесты, проверка всех трёх сочетаний compose-файлов;
+- `browser-smoke` — Playwright в Chromium;
+- `clean-database` — поднимает чистый SQL Server, применяет все Goose-миграции и запускает интеграционные тесты; имя базы оканчивается на `_test`, иначе тесты сами откажутся стартовать.
+
+Обновление workflow требует GitHub-токена со scope `workflow`.
 
 ## Резервное копирование
 
