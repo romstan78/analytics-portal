@@ -84,11 +84,16 @@ Goose-миграции встроены в backend-бинарник и прим�
 - `tbl_PromoActivities`, `tbl_PromoComments`, `tbl_AuditLog`;
 - `tbl_EcomSalesConsolidated`, `tbl_EcomSalesNormalized`;
 - `tbl_ChannelSegmentMapping`, `tbl_SKUMapping`, `tbl_KAMNetworkMapping`, `tbl_MechanicsChannelMapping`, `tbl_NetworkGeoMapping`;
+- `tbl_Networks`, `tbl_NetworkPeriods`, `tbl_NetworkPlans`, `tbl_NetworkComments`;
 - `tbl_Users`.
 
 Основные проверки месяцев, кварталов, ролей и статусов согласования закреплены ограничениями SQL Server. Для часто используемых фильтров и связей созданы индексы.
 
 Dev-seed находится в `backend/cmd/seed_dev/dev.sql`, не содержит пользователей и повторно применяется безопасно.
+
+## Выгрузка интернет-продаж
+
+`GET /api/data?all=true` отдаёт выборку целиком, построчно, не собирая её в памяти сервера. Размер ограничен переменной `SALES_EXPORT_MAX_ROWS` (по умолчанию 200000): при превышении запрос отклоняется с кодом `413` и текстом, сколько строк запрошено и каков лимит. Для больших объёмов используйте `GET /api/data/export-xlsx` — этот эндпоинт формирует файл потоком и лимитом не ограничен.
 
 ## Синхронизация данных
 

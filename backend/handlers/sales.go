@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"os"
 	"math"
 	"net/http"
 	"net/url"
@@ -392,6 +394,92 @@ func filterNonEmpty(vals []string) []interface{} {
 	return res
 }
 
+// defaultSalesExportMaxRows — потолок выгрузки для all=true. Ответ отдаётся
+// потоком, поэтому память сервера не растёт, но неограниченная выборка всё
+// равно способна занять соединение с БД надолго.
+const defaultSalesExportMaxRows = 200000
+
+func salesExportMaxRows() int {
+	if raw := strings.TrimSpace(os.Getenv("SALES_EXPORT_MAX_ROWS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultSalesExportMaxRows
+}
+
+// streamAllSalesRows отдаёт выборку целиком построчно, не накапливая её в
+// памяти. Слишком большая выгрузка отклоняется до начала чтения.
+func streamAllSalesRows(c *gin.Context, baseSelect, baseWhere string, args []interface{}) {
+	limit := salesExportMaxRows()
+
+	countArgs := make([]interface{}, len(args))
+	copy(countArgs, args)
+	var totalRows int
+	if err := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_EcomSalesNormalized n"+baseWhere, countArgs...).Scan(&totalRows); err != nil {
+		config.Logger.Error("sales_export_count_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	if totalRows > limit {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": fmt.Sprintf(
+				"Выгрузка слишком большая: %d строк при лимите %d. Уточните фильтры или используйте выгрузку в Excel.",
+				totalRows, limit,
+			),
+			"total": totalRows,
+			"limit": limit,
+			"data":  []interface{}{},
+		})
+		return
+	}
+
+	query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		config.Logger.Error("sales_export_query_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	c.Header("Content-Type", "application/json; charset=utf-8")
+	c.Status(http.StatusOK)
+	writer := c.Writer
+	encoder := json.NewEncoder(writer)
+
+	if _, err := io.WriteString(writer, `{"data":[`); err != nil {
+		return
+	}
+	first := true
+	for rows.Next() {
+		var r models.Row
+		if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
+			// Заголовки уже отправлены, поэтому статус не изменить: обрываем
+			// ответ незакрытым JSON, чтобы клиент увидел ошибку, а не тишину.
+			config.Logger.Error("sales_export_scan_failed", "error", err.Error())
+			return
+		}
+		if !first {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return
+			}
+		}
+		first = false
+		if err := encoder.Encode(r); err != nil {
+			config.Logger.Error("sales_export_encode_failed", "error", err.Error())
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		config.Logger.Error("sales_export_rows_failed", "error", err.Error())
+		return
+	}
+	if _, err := io.WriteString(writer, "]}"); err != nil {
+		config.Logger.Error("sales_export_write_failed", "error", err.Error())
+	}
+}
+
 func GetData(c *gin.Context) {
 	baseWhere, args := buildSalesWhere(salesFilter{
 		YearFromStr:  c.Query("yearFrom"),
@@ -411,27 +499,7 @@ func GetData(c *gin.Context) {
 	all := c.Query("all")
 
 	if all == "true" {
-		// Экспорт — возвращаем всё
-		query := baseSelect + baseWhere + " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
-		rows, err := config.DB.Query(query, args...)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
-			return
-		}
-		defer rows.Close()
-
-		var results []models.Row
-		for rows.Next() {
-			var r models.Row
-			if err := rows.Scan(&r.ID, &r.Year, &r.Month, &r.BrandName, &r.ProductName, &r.NetworkName, &r.MetricType, &r.MetricValue, &r.UnRub, &r.Segment, &r.Channel, &r.UpdatedAt); err != nil {
-				continue
-			}
-			results = append(results, r)
-		}
-		if results == nil {
-			results = []models.Row{}
-		}
-		c.JSON(http.StatusOK, gin.H{"data": results})
+		streamAllSalesRows(c, baseSelect, baseWhere, args)
 		return
 	}
 
