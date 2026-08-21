@@ -32,7 +32,7 @@ seed-dev:
 	docker compose --profile tools run --rm seed-dev
 
 test:
-	cd backend && go test ./config ./middleware ./handlers ./repository
+	cd backend && go vet ./... && go test ./config ./middleware ./handlers ./repository ./services
 	cd frontend && npm run lint && npm run test:unit && npm run build
 	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py
 

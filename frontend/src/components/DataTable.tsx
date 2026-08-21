@@ -109,9 +109,14 @@ export default function DataTable({
         'Authorization': `Bearer ${localStorage.getItem('token')}`,
       },
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    return (json.data || []) as unknown[];
+    if (!response.ok) {
+      // Сервер отклоняет слишком большую выгрузку с понятным текстом —
+      // показываем его, а не безликое «HTTP 413».
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    const json = await response.json() as { data?: unknown[] };
+    return json.data || [];
   };
 
   const handleExportCSV = async () => {
@@ -150,7 +155,7 @@ export default function DataTable({
       saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.csv`);
     } catch (err) {
       console.error('Ошибка экспорта CSV:', err);
-      window.alert('Ошибка при выгрузке CSV.');
+      window.alert(err instanceof Error ? err.message : 'Ошибка при выгрузке CSV.');
     } finally {
       setExporting(false);
     }
@@ -164,8 +169,9 @@ export default function DataTable({
     }
     setExporting(true);
     try {
-      const data = await fetchExportData();
-      const count = Array.isArray(data) ? data.length : 0;
+      // Число строк берём из основного запроса: выгружать всё ради подсчёта не
+      // нужно, сам XLSX сервер отдаёт потоком.
+      const count = totalRows;
       if (!count) {
         window.alert('Нет данных для выгрузки.');
         return;
@@ -189,12 +195,15 @@ export default function DataTable({
       const resp = await fetch(`${exportXlsxUrl}?${params.toString()}`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || `HTTP ${resp.status}`);
+      }
       const blob = await resp.blob();
       saveAs(blob, `${exportFileName}_${new Date().toISOString().split('T')[0]}.xlsx`);
     } catch (err) {
       console.error('Ошибка экспорта Excel:', err);
-      window.alert('Ошибка при выгрузке Excel.');
+      window.alert(err instanceof Error ? err.message : 'Ошибка при выгрузке Excel.');
     } finally {
       setExporting(false);
     }
