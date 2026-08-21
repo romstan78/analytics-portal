@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -46,17 +47,19 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Refresh token в httpOnly cookie. SameSite явно задан для защиты refresh endpoint.
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(
-		"refresh_token",
-		refreshToken,
-		int(7*24*time.Hour.Seconds()), // 7 дней
-		"/api/auth",                   // доступен только для /api/auth/*
-		"",                            // domain (текущий)
-		config.IsProduction(),         // secure (true только на проде)
-		true,                          // httpOnly
-	)
+	// Регистрируем сессию: без записи в реестре refresh-токен не сработает,
+	// поэтому ошибку здесь нельзя проглатывать.
+	if err := repository.CreateRefreshSession(req.Username, refreshToken, time.Now().Add(config.RefreshTokenTTL)); err != nil {
+		config.Logger.Error("refresh_session_create_failed", "error", err.Error(), "username", req.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+	// Обслуживание реестра: убираем записи, истёкшие более суток назад.
+	if err := repository.DeleteExpiredRefreshSessions(24 * time.Hour); err != nil {
+		config.Logger.Error("refresh_session_cleanup_failed", "error", err.Error())
+	}
+
+	setRefreshCookie(c, refreshToken)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":    accessToken,
@@ -77,6 +80,35 @@ func RefreshToken(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "недействительный refresh token"})
 		return
 	}
+
+	// Токен одноразовый: гасим сессию до выдачи новой пары. Если активной
+	// сессии нет, значит этот refresh уже использовали или отозвали — при
+	// корректной работе клиента такого не бывает, поэтому считаем это признаком
+	// компрометации и гасим все сессии пользователя.
+	sessionUser, err := repository.ConsumeRefreshSession(refreshToken)
+	if errors.Is(err, repository.ErrSessionNotActive) {
+		revoked, revokeErr := repository.RevokeAllUserSessions(claims.Username, repository.RevokeCauseReuseDetected)
+		if revokeErr != nil {
+			config.Logger.Error("refresh_revoke_all_failed", "error", revokeErr.Error(), "username", claims.Username)
+		}
+		config.Logger.Warn("refresh_token_reuse_detected", "username", claims.Username, "revoked_sessions", revoked)
+		clearRefreshCookie(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "сессия завершена, войдите заново"})
+		return
+	}
+	if err != nil {
+		config.Logger.Error("refresh_session_consume_failed", "error", err.Error(), "username", claims.Username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
+	if sessionUser != claims.Username {
+		// Подпись и реестр разошлись — доверять такой паре нельзя.
+		config.Logger.Warn("refresh_session_user_mismatch", "token_user", claims.Username, "session_user", sessionUser)
+		clearRefreshCookie(c)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "сессия завершена, войдите заново"})
+		return
+	}
+
 	user, err := repository.GetUserByUsername(claims.Username)
 	if err != nil {
 		config.Logger.Error("refresh_user_lookup_failed", "error", err.Error(), "username", claims.Username)
@@ -100,24 +132,35 @@ func RefreshToken(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка генерации токена"})
 		return
 	}
+	if err := repository.CreateRefreshSession(user.Username, newRefreshToken, time.Now().Add(config.RefreshTokenTTL)); err != nil {
+		config.Logger.Error("refresh_session_rotate_failed", "error", err.Error(), "username", user.Username)
+		clearRefreshCookie(c)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ошибка сервера"})
+		return
+	}
 
-	// Обновляем refresh cookie
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(
-		"refresh_token",
-		newRefreshToken,
-		int(7*24*time.Hour.Seconds()),
-		"/api/auth",
-		"",
-		config.IsProduction(),
-		true,
-	)
+	setRefreshCookie(c, newRefreshToken)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":    newAccessToken,
 		"username": user.Username,
 		"role":     user.Role,
 	})
+}
+
+// setRefreshCookie кладёт refresh-токен в httpOnly cookie, доступную только
+// эндпоинтам /api/auth/*. SameSite задан явно.
+func setRefreshCookie(c *gin.Context, token string) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(
+		"refresh_token",
+		token,
+		int(config.RefreshTokenTTL.Seconds()),
+		"/api/auth",
+		"",
+		config.IsProduction(), // secure только на проде
+		true,                  // httpOnly
+	)
 }
 
 func clearRefreshCookie(c *gin.Context) {
@@ -133,9 +176,16 @@ func clearRefreshCookie(c *gin.Context) {
 	)
 }
 
-// Logout очищает refresh cookie. Серверное хранение и отзыв refresh-сессий
-// будут добавлены отдельным этапом; текущий endpoint закрывает браузерную сессию.
+// Logout отзывает refresh-сессию на сервере и очищает cookie. Отзыв означает,
+// что даже перехваченный ранее токен после выхода бесполезен.
 func Logout(c *gin.Context) {
+	if refreshToken, err := c.Cookie("refresh_token"); err == nil && refreshToken != "" {
+		if err := repository.RevokeRefreshSession(refreshToken, repository.RevokeCauseLogout); err != nil {
+			// Выход не должен падать из-за недоступной базы: cookie всё равно
+			// очищаем, но факт неудачного отзыва фиксируем.
+			config.Logger.Error("refresh_session_revoke_failed", "error", err.Error())
+		}
+	}
 	clearRefreshCookie(c)
 	c.Status(http.StatusNoContent)
 }

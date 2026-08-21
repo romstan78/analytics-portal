@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 )
 
@@ -878,5 +879,125 @@ func TestBatchApproveUpdatesEntireValidBatch(t *testing.T) {
 	}
 	if approved != 2 {
 		t.Fatalf("согласовано записей: %d, ожидалось 2", approved)
+	}
+}
+
+// ==================== REFRESH-СЕССИИ ====================
+
+func setupAuthRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/auth/login", handlers.Login)
+	r.POST("/api/auth/refresh", handlers.RefreshToken)
+	r.POST("/api/auth/logout", handlers.Logout)
+	return r
+}
+
+// createAuthTestUser заводит временного пользователя и возвращает функцию очистки.
+func createAuthTestUser(t *testing.T, username, password string) func() {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	cleanup := func() {
+		if _, err := config.DB.Exec("DELETE FROM dbo.tbl_RefreshSessions WHERE username = ?", username); err != nil {
+			t.Logf("[WARN] не удалось удалить сессии %s: %v", username, err)
+		}
+		if _, err := config.DB.Exec("DELETE FROM dbo.tbl_Users WHERE username = ?", username); err != nil {
+			t.Logf("[WARN] не удалось удалить пользователя %s: %v", username, err)
+		}
+	}
+	cleanup()
+	if _, err := config.DB.Exec(
+		"INSERT INTO dbo.tbl_Users (username, password_hash, role) VALUES (?, ?, 'admin')",
+		username, string(hash),
+	); err != nil {
+		t.Fatalf("создание тестового пользователя: %v", err)
+	}
+	return cleanup
+}
+
+func loginForRefreshCookie(t *testing.T, router *gin.Engine, username, password string) string {
+	t.Helper()
+	body := fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login: код %d, тело %s", w.Code, w.Body.String())
+	}
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == "refresh_token" && cookie.Value != "" {
+			return cookie.Value
+		}
+	}
+	t.Fatal("login не вернул refresh_token cookie")
+	return ""
+}
+
+func postWithRefreshCookie(router *gin.Engine, path, token string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.AddCookie(&http.Cookie{Name: "refresh_token", Value: token})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func TestRefreshRotatesSessionAndRejectsReuse(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("k", 40))
+	if err := config.InitAuth(); err != nil {
+		t.Fatalf("InitAuth: %v", err)
+	}
+	const username, password = "TEST-refresh-user", "test-password-123"
+	defer createAuthTestUser(t, username, password)()
+
+	router := setupAuthRouter()
+	firstToken := loginForRefreshCookie(t, router, username, password)
+
+	// Штатное обновление выдаёт новый refresh-токен.
+	w := postWithRefreshCookie(router, "/api/auth/refresh", firstToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("первое обновление: код %d, тело %s", w.Code, w.Body.String())
+	}
+	var secondToken string
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == "refresh_token" {
+			secondToken = cookie.Value
+		}
+	}
+	if secondToken == "" || secondToken == firstToken {
+		t.Fatal("обновление должно выдавать новый refresh-токен")
+	}
+
+	// Повторное использование уже потраченного токена — признак кражи.
+	if w := postWithRefreshCookie(router, "/api/auth/refresh", firstToken); w.Code != http.StatusUnauthorized {
+		t.Fatalf("повторное использование старого токена: код %d, ожидался 401", w.Code)
+	}
+
+	// После обнаружения повтора гасится вся цепочка, включая свежий токен.
+	if w := postWithRefreshCookie(router, "/api/auth/refresh", secondToken); w.Code != http.StatusUnauthorized {
+		t.Fatalf("после обнаружения повтора активный токен: код %d, ожидался 401", w.Code)
+	}
+}
+
+func TestLogoutRevokesRefreshSession(t *testing.T) {
+	t.Setenv("JWT_SECRET", strings.Repeat("k", 40))
+	if err := config.InitAuth(); err != nil {
+		t.Fatalf("InitAuth: %v", err)
+	}
+	const username, password = "TEST-logout-user", "test-password-123"
+	defer createAuthTestUser(t, username, password)()
+
+	router := setupAuthRouter()
+	token := loginForRefreshCookie(t, router, username, password)
+
+	if w := postWithRefreshCookie(router, "/api/auth/logout", token); w.Code != http.StatusNoContent {
+		t.Fatalf("logout: код %d", w.Code)
+	}
+	// Главное отличие от прежнего поведения: токен мёртв на сервере.
+	if w := postWithRefreshCookie(router, "/api/auth/refresh", token); w.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh после выхода: код %d, ожидался 401", w.Code)
 	}
 }

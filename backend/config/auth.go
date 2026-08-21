@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +21,10 @@ const (
 	refreshTokenType = "refresh"
 	minJWTSecretLen  = 32
 )
+
+// RefreshTokenTTL — срок жизни refresh-токена. Используется и при выпуске
+// токена, и при регистрации серверной сессии, чтобы сроки не разъезжались.
+const RefreshTokenTTL = 7 * 24 * time.Hour
 
 var jwtSecret []byte
 
@@ -122,8 +128,24 @@ func GenerateAccessToken(username, role string) (string, error) {
 	return token.SignedString(secret)
 }
 
+// newTokenID возвращает случайный идентификатор токена. Без него два
+// refresh-токена, выпущенных в одну секунду для одного пользователя,
+// оказываются идентичными: все остальные поля совпадают, а время в JWT
+// хранится с точностью до секунды.
+func newTokenID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("генерация идентификатора токена: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
 func GenerateRefreshToken(username, role string) (string, error) {
 	secret, err := signingSecret()
+	if err != nil {
+		return "", err
+	}
+	tokenID, err := newTokenID()
 	if err != nil {
 		return "", err
 	}
@@ -132,7 +154,8 @@ func GenerateRefreshToken(username, role string) (string, error) {
 		Role:      role,
 		TokenType: refreshTokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+			ID:        tokenID,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(RefreshTokenTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    jwtIssuer,
 			Audience:  jwt.ClaimStrings{jwtAudience},

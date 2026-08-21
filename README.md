@@ -85,7 +85,7 @@ Goose-миграции встроены в backend-бинарник и прим�
 - `tbl_EcomSalesConsolidated`, `tbl_EcomSalesNormalized`;
 - `tbl_ChannelSegmentMapping`, `tbl_SKUMapping`, `tbl_KAMNetworkMapping`, `tbl_MechanicsChannelMapping`, `tbl_NetworkGeoMapping`;
 - `tbl_Networks`, `tbl_NetworkPeriods`, `tbl_NetworkPlans`, `tbl_NetworkComments`;
-- `tbl_Users`.
+- `tbl_Users`, `tbl_RefreshSessions`.
 
 Основные проверки месяцев, кварталов, ролей и статусов согласования закреплены ограничениями SQL Server. Для часто используемых фильтров и связей созданы индексы.
 
