@@ -1,5 +1,10 @@
 import { useState, useCallback } from 'react';
 import { promoAPI } from '../api/promo';
+import type { PromoRow } from '../types/promo';
+
+// Строка промо из таблицы или из GET /api/promo/:id. Часть полей может
+// отсутствовать, поэтому обязателен только id.
+export type PromoRowLike = Partial<PromoRow> & { id: number };
 
 export interface PromoFormValues {
   id: number | null;
@@ -83,7 +88,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
   const [deleting, setDeleting] = useState(false);
 
   // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
-  const handleRowClick = useCallback((row: Record<string, unknown>) => {
+  const handleRowClick = useCallback((row: PromoRowLike) => {
     setForm({
       id: row.id as number,
       network_name: (row.network_name as string) ?? '',

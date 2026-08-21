@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { DataGrid, type GridColDef, type GridPaginationModel, type GridRowParams } from '@mui/x-data-grid';
 import {
   Box, Alert, TextField, Button, Menu, MenuItem,
@@ -30,9 +31,6 @@ export default function DataTable({
   exportFileName = 'export', exportXlsxUrl, onDataLoaded,
   onRowClick, refreshKey,
 }: DataTableProps) {
-  const [rawRows, setRawRows] = useState<unknown[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   // Серверная пагинация
@@ -40,7 +38,6 @@ export default function DataTable({
     page: 0,
     pageSize: defaultPageSize,
   });
-  const [totalRows, setTotalRows] = useState(0);
 
   // Тулбар
   const [searchText, setSearchText] = useState('');
@@ -52,14 +49,17 @@ export default function DataTable({
     return map;
   });
   const apiRef = useRef(null);
+  // Индикатор выгрузки: раньше переиспользовался loading от загрузки страницы.
+  const [exporting, setExporting] = useState(false);
 
-  // Уникальные ключи
-  const rows = useMemo(() => {
-    return rawRows.map((row, idx) => ({
-      ...(row as Record<string, unknown>),
-      _rowId: `${(row as Record<string, unknown>).id ?? 'row'}_${paginationModel.page}_${idx}`,
-    }));
-  }, [rawRows, paginationModel.page]);
+  // Сброс страницы при смене фильтров или поискового запроса. Правка состояния
+  // во время рендера — рекомендованная React альтернатива эффекту-синхронизатору.
+  const resetKey = `${filtersKey}|${debouncedSearch}`;
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey);
+    if (paginationModel.page !== 0) setPaginationModel(prev => ({ ...prev, page: 0 }));
+  }
 
   // Debounce поиска (400ms)
   useEffect(() => {
@@ -68,11 +68,6 @@ export default function DataTable({
     }, 400);
     return () => clearTimeout(timer);
   }, [searchText]);
-
-  // Сброс страницы при изменении поиска
-  useEffect(() => {
-    setPaginationModel(prev => ({ ...prev, page: 0 }));
-  }, [debouncedSearch]);
 
   const visibleCols = useMemo(
     () => columns.filter(c => visibleColumns[c.field] !== false),
@@ -120,7 +115,7 @@ export default function DataTable({
   };
 
   const handleExportCSV = async () => {
-    setLoading(true);
+    setExporting(true);
     try {
       const data = await fetchExportData();
       if (!data.length) {
@@ -157,7 +152,7 @@ export default function DataTable({
       console.error('Ошибка экспорта CSV:', err);
       window.alert('Ошибка при выгрузке CSV.');
     } finally {
-      setLoading(false);
+      setExporting(false);
     }
   };
 
@@ -167,7 +162,7 @@ export default function DataTable({
       window.alert('Экспорт в Excel не настроен для этой страницы.');
       return;
     }
-    setLoading(true);
+    setExporting(true);
     try {
       const data = await fetchExportData();
       const count = Array.isArray(data) ? data.length : 0;
@@ -201,14 +196,15 @@ export default function DataTable({
       console.error('Ошибка экспорта Excel:', err);
       window.alert('Ошибка при выгрузке Excel.');
     } finally {
-      setLoading(false);
+      setExporting(false);
     }
   };
 
-  // Загрузка данных с пагинацией
-  const fetchData = useCallback(async () => {
-    setLoading(true); setError(null);
-    try {
+  // Загрузка данных с пагинацией через React Query: запрос перезапускается
+  // при изменении любой части ключа.
+  const pageQuery = useQuery({
+    queryKey: ['dataTable', apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch, refreshKey] as const,
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams();
       params.set('page', String(paginationModel.page));
       params.set('pageSize', String(paginationModel.pageSize));
@@ -226,27 +222,43 @@ export default function DataTable({
       const qs = params.toString();
       const url = `${apiUrl}?${qs}`;
       const response = await fetch(url, {
+        signal,
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      const data = (json.data || []) as unknown[];
-      setRawRows(data);
-      setTotalRows((json.totalRows || data.length) as number);
-      if (onDataLoaded) onDataLoaded(data);
-    } catch (err) { setError((err as Error).message); } finally { setLoading(false); }
-  }, [apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch]);
+      const json = await response.json() as { data?: unknown[]; totalRows?: number };
+      const rows = json.data || [];
+      return { rows, totalRows: json.totalRows || rows.length };
+    },
+  });
 
-  // Сброс страницы при смене фильтров
+  const { data: pageData, isFetching, error: queryError } = pageQuery;
+
+  const totalRows = pageData?.totalRows ?? 0;
+  const loading = isFetching || exporting;
+
+  // Уникальные ключи строк
+  const rows = useMemo(() => {
+    return (pageData?.rows ?? []).map((row, idx) => ({
+      ...(row as Record<string, unknown>),
+      _rowId: `${(row as Record<string, unknown>).id ?? 'row'}_${paginationModel.page}_${idx}`,
+    }));
+  }, [pageData, paginationModel.page]);
+
+  // onDataLoaded — побочный эффект для родителя, вызываем после успешной загрузки.
   useEffect(() => {
-    setPaginationModel(prev => ({ ...prev, page: 0 }));
-  }, [filtersKey]);
+    if (pageData && onDataLoaded) onDataLoaded(pageData.rows);
+  }, [pageData, onDataLoaded]);
 
-  useEffect(() => { fetchData(); }, [fetchData, refreshKey]);
+  // Сетевой сбой переводит запрос в paused без ошибки — показываем отдельно.
+  const connectionPaused = pageQuery.fetchStatus === 'paused' && pageQuery.failureCount > 0;
+  const error = queryError
+    ? (queryError as Error).message
+    : (connectionPaused ? 'Нет связи с сервером' : null);
 
-  if (error) return <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>Ошибка загрузки: {error}</Alert>;
+  if (error) return <Alert severity="error" sx={{ mb: 2 }}>Ошибка загрузки: {error}</Alert>;
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>

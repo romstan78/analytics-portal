@@ -54,7 +54,11 @@ const blocks = [
   },
 ];
 
-export default function Home({ onLogout }) {
+interface HomeProps {
+  onLogout: () => void;
+}
+
+export default function Home({ onLogout }: HomeProps) {
   const navigate = useNavigate();
 
   return (

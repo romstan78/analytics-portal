@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRef } from 'react';
+import type { PromoDataResponse, PromoRow } from '../types/promo';
 
 export interface PromoDataResult {
-  rows: unknown[];
+  rows: PromoRow[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -17,16 +17,15 @@ export interface PromoDataResult {
 export function usePromoData(
   filters: Record<string, unknown>,
 ): PromoDataResult {
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
-
   // Стабильный queryKey — без refreshTrigger. Инвалидация через invalidateQueries.
   const queryKey = ['promoData', filters] as const;
 
   const { data: rows = [], isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async ({ signal }) => {
-      const currentFilters = filtersRef.current;
+      // filters берём из замыкания: queryKey уже содержит их, поэтому запрос
+      // пересоздаётся при любом изменении фильтров.
+      const currentFilters = filters;
       const params = new URLSearchParams();
       Object.entries(currentFilters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
@@ -48,8 +47,8 @@ export function usePromoData(
       );
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const json = await response.json();
-      return (json.data || []) as unknown[];
+      const json = await response.json() as PromoDataResponse;
+      return json.data || [];
     },
   });
 

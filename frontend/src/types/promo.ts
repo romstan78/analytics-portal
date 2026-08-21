@@ -49,6 +49,7 @@ export interface PromoRow {
   date: string | null;
   created_at: string | null;
   updated_at: string | null;
+  deleted_at: string | null;
 }
 
 export interface CommentRow {
@@ -57,7 +58,26 @@ export interface CommentRow {
   user_name: string;
   role: string;
   comment_text: string;
-  created_at: string;
+  created_at: string | null;
+}
+
+// models.HistoryRow — история промо по SKU/сети/механике
+export interface HistoryRow {
+  id: number;
+  network_name: string | null;
+  year: number;
+  month: number;
+  mechanics: string | null;
+  sku: string | null;
+  baseline_units: number | null;
+  plan_promo_units: number | null;
+  actual_promo_sales_units: number | null;
+  plan_investments_rub: number | null;
+  actual_investments: number | null;
+  plan_promo_uplift_units: number | null;
+  actual_promo_uplift_units: number | null;
+  plan_roi: number | null;
+  actual_roi: number | null;
 }
 
 export interface ApprovalRow {
@@ -131,4 +151,81 @@ export interface PromoFormData {
   actual_promo_uplift_rub?: number;
   actual_external_ecom_units?: number;
   actual_corrected_baseline?: number;
+}
+
+// ─── Ответы API промо ──────────────────────────────────────────────────────
+// Соответствуют gin.H в backend/handlers/promo.go.
+
+export interface PromoDataResponse {
+  data: PromoRow[];
+}
+
+export interface PromoHistoryResponse {
+  data: HistoryRow[];
+}
+
+export interface PromoCommentsResponse {
+  data: CommentRow[];
+}
+
+export interface StringListResponse {
+  data: string[];
+}
+
+export interface PromoSaveResponse {
+  message: string;
+  id: number;
+  data: Record<string, unknown>;
+}
+
+export interface MessageResponse {
+  message: string;
+}
+
+export interface BatchApproveResponse {
+  message: string;
+  affected: number;
+}
+
+export interface SKUInfoResponse {
+  brand: string | null;
+  brand_as: string | null;
+}
+
+export interface LastContractPriceResponse {
+  price: number | null;
+}
+
+// Пустой объект, если данных по SKU нет.
+export interface LastSKUDataResponse {
+  contract_price?: number;
+  gm?: number;
+  total_pharmacies?: number;
+  key_region?: string;
+  top20_segment?: string;
+  olap_price?: number;
+}
+
+// Пустой объект, если сеть не передана; total_pharmacies = 0, если данных нет.
+export interface LastNetworkDataResponse {
+  total_pharmacies?: number;
+}
+
+export interface NetworkGeoResponse {
+  kam: string | null;
+  network_type: string | null;
+  top20_segment: string | null;
+  key_region: string | null;
+}
+
+export interface ApprovalsResponse {
+  data: ApprovalRow[];
+  total: number;
+}
+
+export interface ApprovalFiltersResponse {
+  networks: string[];
+  brands: string[];
+  mechanics: string[];
+  kams: string[];
 }

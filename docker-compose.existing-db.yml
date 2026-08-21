@@ -1,0 +1,33 @@
+# Override для работы с уже существующим SQL Server на хосте
+# (контейнер my_local_mssql, том my_project_mssql_data_volume).
+#
+# Compose-сервис mssql_db в этом режиме не запускается: база живёт отдельно и
+# переживает пересоздание backend/frontend. Контейнер my_local_mssql уже
+# подключён к сети my_project_default под алиасом mssql_db, поэтому DB_SERVER
+# из базового файла резолвится в него без изменений.
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.existing-db.yml up -d --build
+#
+# Без этого override обычный `make up` поднимет собственный mssql_db на пустом
+# томе mssql_data, и портал не увидит рабочие данные.
+
+services:
+  mssql_db:
+    # Профиль, который никогда не активируется, — сервис остаётся выключенным.
+    profiles: ["external-db-unused"]
+
+  backend:
+    environment:
+      DB_AUTO_CREATE: "false"
+    depends_on: !reset []
+
+  bootstrap-user:
+    environment:
+      DB_AUTO_CREATE: "false"
+    depends_on: !reset []
+
+  seed-dev:
+    environment:
+      DB_AUTO_CREATE: "false"
+    depends_on: !reset []

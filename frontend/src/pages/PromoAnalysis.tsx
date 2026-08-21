@@ -14,9 +14,10 @@ import {
 } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
-import { DataGrid } from '@mui/x-data-grid';
+import { DataGrid, type GridColDef, type GridRenderCellParams, type GridRowParams } from '@mui/x-data-grid';
 import { useQueryClient } from '@tanstack/react-query';
-import FilterPanel from '../components/FilterPanel';
+import FilterPanel, { type ExtraFilter } from '../components/FilterPanel';
+import type { PromoRow } from '../types/promo';
 import PromoEditDialog from '../components/PromoEditDialog';
 import { promoAPI } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
@@ -32,7 +33,7 @@ const PERSIST_FLAG_KEY = 'promo_persist_v20';
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const EXPORT_WARNING_THRESHOLD = 10000;
 
-const renderAgreement = (value) => {
+const renderAgreement = (value: unknown) => {
   if (value == null || value === '' || value === '0') return '';
   const v = String(value);
   const lower = v.toLowerCase();
@@ -82,61 +83,65 @@ const renderAgreement = (value) => {
 };
 
 // ─── Колонки таблицы просмотра данных ──────────────────────────────────────
-const COLUMNS = [
-  { field: 'year', headerName: 'Год', width: 70, type: 'number', valueFormatter: (v) => v },
-  { field: 'month', headerName: 'Мес', width: 60, type: 'number' }, 
+const COLUMNS: GridColDef[] = [
+  { field: 'year', headerName: 'Год', width: 70, type: 'number', valueFormatter: (v: number) => v },
+  { field: 'month', headerName: 'Мес', width: 60, type: 'number' },
   { field: 'channel', headerName: 'Канал', width: 90 },
-  { field: 'network_name', headerName: 'Сеть', width: 180 }, 
+  { field: 'network_name', headerName: 'Сеть', width: 180 },
   { field: 'brand_as', headerName: 'Бренд', width: 130 },
-  { field: 'sku', headerName: 'SKU', width: 130 }, 
+  { field: 'sku', headerName: 'SKU', width: 130 },
   { field: 'mechanics', headerName: 'Механика', width: 180 },
-  { field: 'plan_promo_units', headerName: 'План (уп)', width: 110, type: 'number', 
-    valueFormatter: (v) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 0 }) : '' },
-  { field: 'actual_promo_sales_units', headerName: 'Факт (уп)', width: 110, type: 'number', 
-    valueFormatter: (v) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 0 }) : '' },
-  { field: 'plan_investments_rub', headerName: 'План инвест.', width: 130, type: 'number', 
-    valueFormatter: (v) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
-  { field: 'actual_investments', headerName: 'Факт инвест.', width: 130, type: 'number', 
-    valueFormatter: (v) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
+  { field: 'plan_promo_units', headerName: 'План (уп)', width: 110, type: 'number',
+    valueFormatter: (v: number | null) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 0 }) : '' },
+  { field: 'actual_promo_sales_units', headerName: 'Факт (уп)', width: 110, type: 'number',
+    valueFormatter: (v: number | null) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 0 }) : '' },
+  { field: 'plan_investments_rub', headerName: 'План инвест.', width: 130, type: 'number',
+    valueFormatter: (v: number | null) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
+  { field: 'actual_investments', headerName: 'Факт инвест.', width: 130, type: 'number',
+    valueFormatter: (v: number | null) => (v != null && v !== 0) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 }) : '' },
   { field: 'agreement1', headerName: 'Согласование 1', width: 160,
-    renderCell: (params) => renderAgreement(params.value) },
+    renderCell: (params: GridRenderCellParams) => renderAgreement(params.value) },
   { field: 'agreement2', headerName: 'Согласование 2', width: 160,
-    renderCell: (params) => renderAgreement(params.value) },
+    renderCell: (params: GridRenderCellParams) => renderAgreement(params.value) },
   { field: 'status', headerName: 'Статус', width: 140 },
 ];
 
-const EMPTY_FILTERS = { 
-  yearFrom: '', yearTo: '', months: [], kam: [], brand: [], sku: [], 
-  network_name: [], mechanics: [], channel: [], status: [] 
+const EMPTY_FILTERS: Record<string, unknown> = {
+  yearFrom: '', yearTo: '', months: [], kam: [], brand: [], sku: [],
+  network_name: [], mechanics: [], channel: [], status: []
 };
-const EXTRA_FILTERS = [
-  { type: 'year', field: 'yearFrom', label: 'Год от' }, 
-  { type: 'year', field: 'yearTo', label: 'Год до' }, 
+const EXTRA_FILTERS: ExtraFilter[] = [
+  { type: 'year', field: 'yearFrom', label: 'Год от' },
+  { type: 'year', field: 'yearTo', label: 'Год до' },
   { type: 'months', field: 'months', label: 'Месяцы' }
 ];
 const PROMO_VISIBLE_FILTERS = ['kam', 'network_name', 'brand', 'sku', 'mechanics', 'channel', 'status'];
 
 // ─── Компонент ─────────────────────────────────────────────────────────────
 // role — передаётся из App.jsx (admin / agreement1 / agreement2)
-export default function PromoAnalysis({ role }) {
+interface PromoAnalysisProps {
+  role: string | null;
+}
+
+export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState(0);
-  const [allSkuOptions, setAllSkuOptions] = useState([]);
-  const [allNetworkOptions, setAllNetworkOptions] = useState([]);
-  const [investmentTypes, setInvestmentTypes] = useState([]);
+  const [allSkuOptions, setAllSkuOptions] = useState<string[]>([]);
+  const [allNetworkOptions, setAllNetworkOptions] = useState<string[]>([]);
+  const [investmentTypes, setInvestmentTypes] = useState<string[]>([]);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [promoViewOnly, setPromoViewOnly] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' });
   const [deletedFilter, setDeletedFilter] = useState(''); // "" = active, "deleted" = only deleted, "all" = both
 
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [columnsAnchor, setColumnsAnchor] = useState(null);
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    const map = {};
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
     COLUMNS.forEach(c => { map[c.field] = true; });
     return map;
   });
@@ -168,7 +173,7 @@ export default function PromoAnalysis({ role }) {
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
   useEffect(() => {
     if (tab === 0) refetch();
-  }, [tab]);
+  }, [tab, refetch]);
 
   // ─── Загрузка справочников ────────────────────────────────────────────
   useEffect(() => { promoAPI.getInvestmentTypes().then(data => setInvestmentTypes(data.data || [])); }, []);
@@ -186,9 +191,9 @@ export default function PromoAnalysis({ role }) {
   }), [meta]);
 
   // ─── Обработчики действий ─────────────────────────────────────────────
-  const handleRowClick = (params) => { formHandleRowClick(params.row); setPromoViewOnly(false); setEditDialogOpen(true); };
+  const handleRowClick = (params: GridRowParams) => { formHandleRowClick(params.row as PromoRow); setPromoViewOnly(false); setEditDialogOpen(true); };
 
-  const handleSave = async (commentOverride) => { 
+  const handleSave = async (commentOverride?: string | null) => {
     const result = await formHandleSave(commentOverride); 
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
   };
@@ -203,14 +208,15 @@ export default function PromoAnalysis({ role }) {
     queryClient.invalidateQueries({ queryKey: ['promoData'] });
   };
 
-  const handleHistoryPromoOpen = async (id) => {
+  const handleHistoryPromoOpen = async (id: number) => {
     try {
       const promo = await promoAPI.getById(id);
       formHandleRowClick(promo);
       setPromoViewOnly(true);
       setEditDialogOpen(true);
-    } catch (err) {
-      setSnackbar({ open: true, message: `❌ Не удалось открыть промо: ${err.message}`, severity: 'error' });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSnackbar({ open: true, message: `❌ Не удалось открыть промо: ${message}`, severity: 'error' });
     }
   };
 
@@ -238,10 +244,10 @@ export default function PromoAnalysis({ role }) {
     [visibleColumns]
   );
 
-  const toggleColumn = (f) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
+  const toggleColumn = (f: string) => setVisibleColumns(prev => ({ ...prev, [f]: !prev[f] }));
 
-  const getRowClassName = (params) => {
-    const row = params.row as Record<string, unknown>;
+  const getRowClassName = (params: GridRowParams) => {
+    const row = params.row as PromoRow;
     return row.deleted_at != null ? 'deleted-row' : '';
   };
 
@@ -260,9 +266,10 @@ export default function PromoAnalysis({ role }) {
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';
       data.forEach(row => {
+        const cells = row as unknown as Record<string, unknown>;
         csv += fields.map(f => {
-          let v = row[f]; if (v == null) return '';
-          v = String(v);
+          const raw = cells[f]; if (raw == null) return '';
+          let v = String(raw);
           if (v.includes(';') || v.includes('"') || v.includes('\n')) v = '"' + v.replace(/"/g, '""') + '"';
           return v;
         }).join(';') + '\n';
@@ -329,7 +336,7 @@ export default function PromoAnalysis({ role }) {
             visibleFilters={PROMO_VISIBLE_FILTERS} />
         </Box>
         {meta.error && 
-          <Button variant="outlined" color="warning" onClick={() => fetchMeta(filters)} sx={{ mb: 2 }}>
+          <Button variant="outlined" color="warning" onClick={() => fetchMeta()} sx={{ mb: 2 }}>
             Ошибка загрузки справочников. Повторить
           </Button>}
 
@@ -354,7 +361,7 @@ export default function PromoAnalysis({ role }) {
               {COLUMNS.map(col => (
                 <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
                   <Checkbox size="small" checked={visibleColumns[col.field] !== false} />
-                  <ListItemText primary={col.headerName || col.field} primaryTypographyProps={{ fontSize: 13 }} />
+                  <ListItemText primary={col.headerName || col.field} slotProps={{ primary: { sx: { fontSize: 13 } } }} />
                 </MenuItem>
               ))}
             </Menu>

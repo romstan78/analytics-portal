@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { promoAPI } from '../api/promo';
 
 export interface FilterMeta {
@@ -18,18 +19,13 @@ export function usePromoFilters(
   storageKey: string,
   persistFlagKey: string,
 ) {
-  const [meta, setMeta] = useState<FilterMeta>({
-    kam: [], brand: [], sku: [], network_name: [], mechanics: [], channel: [], status: [],
-    loading: true, error: null,
-  });
-
   const [filters, setFilters] = useState<Record<string, unknown>>(() => {
     try {
       if (localStorage.getItem(persistFlagKey) === 'true') {
         const saved = sessionStorage.getItem(storageKey);
         if (saved) return JSON.parse(saved);
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* повреждённый сохранённый фильтр — берём значения по умолчанию */ }
     return { ...initialFilters };
   });
 
@@ -37,36 +33,33 @@ export function usePromoFilters(
   const [persistFilters, setPersistFilters] = useState(
     () => localStorage.getItem(persistFlagKey) === 'true',
   );
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Загрузка метаданных
-  const fetchMeta = useCallback(async (currentFilters: Record<string, unknown>) => {
-    setMeta(prev => ({ ...prev, loading: true }));
-    try {
-      const json = await promoAPI.getFilters(currentFilters) as Record<string, string[]>;
-      setMeta({
-        kam: json.kam || [], brand: json.brand || [], sku: json.sku || [],
-        network_name: json.network_name || [], mechanics: json.mechanics || [],
-        channel: json.channel || [], status: json.status || [],
-        loading: false, error: null,
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setMeta(prev => ({ ...prev, loading: false, error: message }));
-    }
-  }, []);
-
-  // Первичная загрузка
-  useEffect(() => { fetchMeta(filters); }, []);
-
-  // Обновление с debounce при изменении фильтров
+  // Справочники перезапрашиваются с задержкой после изменения фильтров.
+  // Первое значение равно текущим фильтрам, поэтому стартовая загрузка идёт сразу.
+  const [debouncedFilters, setDebouncedFilters] = useState<Record<string, unknown>>(filters);
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchMeta(filters), 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [filters, fetchMeta]);
+    const timer = setTimeout(() => setDebouncedFilters(filters), 300);
+    return () => clearTimeout(timer);
+  }, [filters]);
+
+  const { data, isFetching, error, refetch } = useQuery({
+    queryKey: ['promoFilters', debouncedFilters] as const,
+    queryFn: () => promoAPI.getFilters(debouncedFilters),
+  });
+
+  const meta: FilterMeta = useMemo(() => ({
+    kam: data?.kam || [],
+    brand: data?.brand || [],
+    sku: data?.sku || [],
+    network_name: data?.network_name || [],
+    mechanics: data?.mechanics || [],
+    channel: data?.channel || [],
+    status: data?.status || [],
+    loading: isFetching,
+    error: error ? (error instanceof Error ? error.message : String(error)) : null,
+  }), [data, isFetching, error]);
+
+  // Ручное обновление справочников (кнопка «Повторить» при ошибке).
+  const fetchMeta = useCallback(() => { void refetch(); }, [refetch]);
 
   const handleSearch = useCallback(() => {
     setAppliedFilters({ ...filters });

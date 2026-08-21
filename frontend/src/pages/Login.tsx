@@ -34,7 +34,7 @@ export default function Login({ onLogin }: LoginProps) {
       }
       saveSession(data);
       onLogin(data);
-    } catch (_err) {
+    } catch {
       setError('Сервер недоступен');
     } finally {
       setLoading(false);

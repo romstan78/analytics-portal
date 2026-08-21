@@ -1,5 +1,8 @@
+import type { ApprovalRow } from '../types/promo';
+
 export interface CardField {
-  id: string;
+  // Ограничение по ApprovalRow ловит опечатки в идентификаторах полей карточки.
+  id: keyof ApprovalRow;
   label: string;
   isMoney?: boolean;
   isRoi?: boolean;
@@ -47,7 +50,7 @@ export const DEFAULT_VISIBLE_FIELDS: string[] = [
   'actual_promo_sales_units', 'actual_roi',
 ];
 
-const VALID_FIELD_IDS = new Set(ALL_FIELDS_FLAT.map(field => field.id));
+const VALID_FIELD_IDS: Set<string> = new Set(ALL_FIELDS_FLAT.map(field => field.id));
 
 export function normalizeVisibleFields(value: unknown): string[] {
   if (!Array.isArray(value)) return [...DEFAULT_VISIBLE_FIELDS];

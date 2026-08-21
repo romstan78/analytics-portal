@@ -1,7 +1,20 @@
+import type { HTMLAttributes, Key, SyntheticEvent } from 'react';
 import {
   TextField, Stack, Autocomplete,
   FormControlLabel, Checkbox, ListItemText, Button
 } from '@mui/material';
+
+interface NumberOption {
+  label: string;
+  value: number;
+}
+
+// filters приходит как Record<string, unknown>, поэтому значения нормализуем.
+const asNumberArray = (value: unknown): number[] =>
+  Array.isArray(value) ? value.filter((item): item is number => typeof item === 'number') : [];
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
 const DEFAULT_MONTH_OPTIONS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 },
@@ -17,7 +30,7 @@ const DEFAULT_QUARTER_OPTIONS = [
   { label: 'III квартал', value: 3 }, { label: 'IV квартал', value: 4 },
 ];
 
-interface ExtraFilter {
+export interface ExtraFilter {
   type: 'year' | 'months' | 'quarters';
   field: string;
   label: string;
@@ -52,17 +65,23 @@ export default function FilterPanel({
   labels = {},
 }: FilterPanelProps) {
 
-  const handleTextChange = (field) => (e) => onFiltersChange({ ...filters, [field]: e.target.value });
-  const handleArrayChange = (field) => (_, newValue) => onFiltersChange({ ...filters, [field]: newValue });
+  const handleTextChange = (field: string) => (e: { target: { value: string } }) =>
+    onFiltersChange({ ...filters, [field]: e.target.value });
+  const handleArrayChange = (field: string) => (_: SyntheticEvent, newValue: string[]) =>
+    onFiltersChange({ ...filters, [field]: newValue });
 
-  const renderCheckboxOption = (props, option, { selected }) => {
-    const { key, item, ...rest } = props;
+  const renderCheckboxOption = (
+    props: HTMLAttributes<HTMLLIElement> & { key?: Key },
+    option: string | NumberOption,
+    { selected }: { selected: boolean },
+  ) => {
+    const { key, ...rest } = props;
     return (
       <li key={key} {...rest} style={{ padding: '2px 8px' }}>
         <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
-        <ListItemText 
-          primary={option?.label ?? option} 
-          primaryTypographyProps={{ fontSize: 13 }} 
+        <ListItemText
+          primary={typeof option === 'string' ? option : option.label}
+          slotProps={{ primary: { sx: { fontSize: 13 } } }}
         />
       </li>
     );
@@ -70,14 +89,14 @@ export default function FilterPanel({
 
   const filterKeys = visibleFilters || Object.keys(filterOptions);
 
-  const defaultLabels = {
+  const defaultLabels: Record<string, string> = {
     brandName: 'Бренд', brand: 'Бренд', networkName: 'Сеть', network_name: 'Сеть',
     un_rub: 'Уп/Руб', segment: 'Сегмент', channel: 'Канал',
     productName: 'Продукт', metricType: 'Показатель', sku: 'SKU',
     mechanics: 'Механика', status: 'Статус', kam: 'KAM', gtn_opex: 'GTN/OPEX',
   };
 
-  const getLabel = (key) => labels[key] || defaultLabels[key] || key;
+  const getLabel = (key: string) => labels[key] || defaultLabels[key] || key;
 
   return (
     <Stack spacing={1.5}>
@@ -94,7 +113,7 @@ export default function FilterPanel({
                 label={filter.label} 
                 size="small" 
                 type="number"
-                value={filters[filter.field] || ''} 
+                value={typeof filters[filter.field] === 'string' || typeof filters[filter.field] === 'number' ? filters[filter.field] : ''}
                 onChange={handleTextChange(filter.field)}
                 sx={{ width: 90 }} 
                 slotProps={{ htmlInput: { min: 2018, max: 2030 } }} 
@@ -104,7 +123,7 @@ export default function FilterPanel({
 
           // Месяцы и кварталы
           if (filter.type === 'months' || filter.type === 'quarters') {
-            const selectedValues = filters[filter.field] || [];
+            const selectedValues = asNumberArray(filters[filter.field]);
             const options = filter.options || (filter.type === 'quarters' ? DEFAULT_QUARTER_OPTIONS : DEFAULT_MONTH_OPTIONS);
             
             const displayText = selectedValues.length === 0
@@ -114,10 +133,10 @@ export default function FilterPanel({
                 : `Выбрано: ${selectedValues.length}`;
 
             return (
-              <Autocomplete 
-                key={filter.field} 
-                multiple 
-                disableCloseOnSelect 
+              <Autocomplete<NumberOption, true, false, false>
+                key={filter.field}
+                multiple
+                disableCloseOnSelect
                 size="small"
                 options={options}
                 getOptionLabel={(opt) => opt.label}
@@ -157,8 +176,8 @@ export default function FilterPanel({
           const options = filterOptions[key];
           if (!options || options.length === 0) return null;
 
-          const selected = filters[key] || [];
-          const displayText = selected.length === 0 
+          const selected = asStringArray(filters[key]);
+          const displayText = selected.length === 0
             ? '' 
             : selected.length === 1 
               ? selected[0] 

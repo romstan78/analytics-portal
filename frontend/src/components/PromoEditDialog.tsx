@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Box, Typography, TextField, Paper, Dialog, DialogTitle,
@@ -9,6 +9,7 @@ import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon, RestoreOutl
 import { promoAPI } from '../api/promo';
 import type { CommentRow } from '../types/promo';
 import type { PromoFormValues } from '../hooks/usePromoForm';
+import type { ActualFields, PlanFields } from '../hooks/usePromoCalculations';
 import type { FilterMeta } from '../hooks/usePromoFilters';
 
 // ─── Месяцы ────────────────────────────────────────────────────────────────
@@ -19,13 +20,13 @@ const MONTH_OPTIONS = [
 ];
 
 // ─── Форматирование ────────────────────────────────────────────────────────
-const fmtDisplay = (v) => {
+const fmtDisplay = (v: string | number | null | undefined) => {
   if (v == null || v === '') return '';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 // ─── Чип статуса согласования (для KAM — компактный, с Tooltip и скроллингом) ─
-const AgreementChip = ({ label, value }) => {
+const AgreementChip = ({ label, value }: { label: string; value: string | null | undefined }) => {
   const text = value || '';
   if (!text || text === '0') return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
@@ -65,7 +66,7 @@ const AgreementChip = ({ label, value }) => {
 
 // ─── Компонент ─────────────────────────────────────────────────────────────
 // Цвета по ролям (для отображения истории)
-const ROLE_COLORS = {
+const ROLE_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
   'agreement1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
   'agreement2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
@@ -73,15 +74,47 @@ const ROLE_COLORS = {
   'согласование2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
   'КАМ': { bg: '#f5f3ff', text: '#7c3aed', dot: '#7c3aed' },
 };
-const ROLE_ICONS = { 'admin': '👑', 'agreement1': '✅', 'agreement2': '✅', 'согласование1': '✅', 'согласование2': '✅', 'КАМ': '💬' };
+const ROLE_ICONS: Record<string, string> = { 'admin': '👑', 'agreement1': '✅', 'agreement2': '✅', 'согласование1': '✅', 'согласование2': '✅', 'КАМ': '💬' };
+
+type FormField = keyof PromoFormValues;
+
+interface EditableFieldSpec {
+  label: string;
+  field: FormField;
+  editable: boolean;
+}
+
+const PLAN_FIELDS: EditableFieldSpec[] = [
+  { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
+  { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
+  { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
+  { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
+  { label: 'Сумма скидки', field: 'discount_amount', editable: true },
+  { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
+  { label: 'Цена контракта', field: 'contract_price', editable: true },
+  { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
+  { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
+  { label: 'ROI план %', field: 'plan_roi', editable: false },
+];
+
+const ACTUAL_FIELDS: EditableFieldSpec[] = [
+  { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
+  { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
+  { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
+  { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
+  { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
+  { label: 'Факт ROI %', field: 'actual_roi', editable: false },
+  { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
+  { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
+];
 
 interface PromoEditDialogProps {
   open: boolean;
   onClose: () => void;
   form: PromoFormValues | null;
   setForm: React.Dispatch<React.SetStateAction<PromoFormValues>>;
-  recalcPlan: (updates: Partial<PromoFormValues>) => Record<string, string>;
-  recalcActual: (updates: Partial<PromoFormValues>) => Record<string, string>;
+  recalcPlan: (updates: Partial<PromoFormValues>) => PlanFields;
+  recalcActual: (updates: Partial<PromoFormValues>) => ActualFields;
   onSave: (commentOverride?: string | null) => Promise<void> | void;
   onDelete: () => void;
   saving: boolean;
@@ -101,7 +134,7 @@ export default function PromoEditDialog({
   role, readOnly = false,
 }: PromoEditDialogProps) {
   const queryClient = useQueryClient();
-  const [editingFields, setEditingFields] = useState({});
+  const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [restoring, setRestoring] = useState(false);
@@ -117,24 +150,35 @@ export default function PromoEditDialog({
     enabled: !!open && !!form?.id,
   });
 
-  const fetchSKUInfoForEdit = async (sku) => {
-    try { const data = await promoAPI.getSKUInfo(sku); if (data.brand) setForm(prev => ({ ...prev, brand: data.brand })); } catch (e) {}
+  const fetchSKUInfoForEdit = async (sku: string) => {
+    try {
+      const data = await promoAPI.getSKUInfo(sku);
+      if (data.brand) setForm(prev => ({ ...prev, brand: data.brand ?? '' }));
+    } catch {
+      // Бренд остаётся прежним, если справочник недоступен.
+    }
   };
 
-  useEffect(() => { setEditingFields({}); }, [open]);
+  // Сброс режима редактирования полей при открытии/закрытии диалога.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    setEditingFields({});
+  }
 
   if (!form) return null;
 
   const isDeleted = Boolean(form.deleted_at);
   const isLocked = isDeleted || readOnly;
 
-  const updateField = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
+  const updateField = (field: FormField) => (e: { target: { value: string } }) =>
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
 
-  const planTriggers = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
-  const actualTriggers = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
-  const textFields = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
+  const planTriggers: string[] = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
+  const actualTriggers: string[] = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
+  const textFields: string[] = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
 
-  const handleFieldChange = (field) => (e) => {
+  const handleFieldChange = (field: FormField) => (e: { target: { value: string } }) => {
     const rawValue = e.target.value;
     const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
     if (planTriggers.includes(field)) {
@@ -146,10 +190,10 @@ export default function PromoEditDialog({
     }
   };
 
-  const handleFocus = (field) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
-  const handleBlur = (field) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
+  const handleFocus = (field: FormField) => () => setEditingFields(prev => ({ ...prev, [field]: true }));
+  const handleBlur = (field: FormField) => () => setEditingFields(prev => ({ ...prev, [field]: false }));
 
-  const getDisplayValue = (field, editable) => {
+  const getDisplayValue = (field: FormField, editable: boolean) => {
     if (!editable) return form[field] != null ? fmtDisplay(form[field]) : '';
     if (editingFields[field]) return form[field] != null ? String(form[field]) : '';
     return form[field] != null ? fmtDisplay(form[field]) : '';
@@ -198,7 +242,7 @@ export default function PromoEditDialog({
       maxWidth="lg" 
       fullWidth 
       // Растягиваем окно почти на всю высоту экрана
-      PaperProps={{ sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } }}
+      slotProps={{ paper: { sx: { height: '96vh', maxHeight: '96vh', bgcolor: '#f5f7fa' } } }}
     >
       
       {/* Чуть уменьшили отступы (py: 1.5) в шапке */}
@@ -302,18 +346,7 @@ export default function PromoEditDialog({
                 <Paper sx={{ ...paperStyles, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
                   <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1a237e' }}>📊 Плановые показатели</Typography>
                   <Box sx={gridStyles}>
-                    {[
-                      { label: 'Baseline (уп)', field: 'baseline_units', editable: true },
-                      { label: 'Baseline (руб)', field: 'baseline_rub', editable: true },
-                      { label: 'План промо (уп)', field: 'plan_promo_units', editable: true },
-                      { label: 'План промо (руб)', field: 'plan_promo_rub', editable: true },
-                      { label: 'Сумма скидки', field: 'discount_amount', editable: true },
-                      { label: 'План инвестиций (руб)', field: 'plan_investments_rub', editable: true },
-                      { label: 'Цена контракта', field: 'contract_price', editable: true },
-                      { label: 'Uplift (уп)', field: 'plan_promo_uplift_units', editable: true },
-                      { label: 'Uplift (руб)', field: 'plan_promo_uplift_rub', editable: true },
-                      { label: 'ROI план %', field: 'plan_roi', editable: false },
-                    ].map(({ label, field, editable }) => {
+                    {PLAN_FIELDS.map(({ label, field, editable }) => {
                       const canEdit = editable && !isLocked;
                       return (
                         <TextField key={field} label={label} type="text" size="small" fullWidth
@@ -333,16 +366,7 @@ export default function PromoEditDialog({
                 <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
                   <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
                   <Box sx={gridStyles}>
-                    {[
-                      { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
-                      { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
-                      { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
-                      { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
-                      { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
-                      { label: 'Факт ROI %', field: 'actual_roi', editable: false },
-                      { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
-                      { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
-                    ].map(({ label, field, editable }) => {
+                    {ACTUAL_FIELDS.map(({ label, field, editable }) => {
                       const canEdit = editable && !isLocked;
                       return (
                         <TextField key={field} label={label} type="text" size="small" fullWidth

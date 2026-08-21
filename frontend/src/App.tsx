@@ -2,12 +2,16 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
 import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button, CircularProgress } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
+// Подключает стили MuiDataGrid к типу темы MUI.
+import type {} from '@mui/x-data-grid/themeAugmentation';
 import { getToken, logout } from './api/auth';
+import type { SessionData } from './api/auth';
 
 const Login = lazy(() => import('./pages/Login'));
 const Home = lazy(() => import('./pages/Home'));
 const InternetSales = lazy(() => import('./pages/InternetSales'));
 const PromoAnalysis = lazy(() => import('./pages/PromoAnalysis'));
+const NetworkRegistry = lazy(() => import('./pages/NetworkRegistry'));
 
 const modernTheme = createTheme({
   palette: {
@@ -116,7 +120,12 @@ function PageLoader() {
   );
 }
 
-function PlaceholderPage({ title, description }) {
+interface PlaceholderPageProps {
+  title: string;
+  description: string;
+}
+
+function PlaceholderPage({ title, description }: PlaceholderPageProps) {
   const navigate = useNavigate();
 
   return (
@@ -133,15 +142,25 @@ function PlaceholderPage({ title, description }) {
   );
 }
 
+interface AuthState {
+  token: string | null;
+  username: string | null;
+  role: string | null;
+}
+
 export default function App() {
-  const [auth, setAuth] = useState(() => ({
+  const [auth, setAuth] = useState<AuthState>(() => ({
     token: getToken(),
     username: localStorage.getItem('username'),
     role: localStorage.getItem('role'),
   }));
 
-  const handleLogin = (data) => {
-    setAuth({ token: data.token, username: data.username, role: data.role });
+  const handleLogin = (data: SessionData) => {
+    setAuth({
+      token: data.token ?? null,
+      username: data.username ?? null,
+      role: data.role ?? null,
+    });
   };
 
   const handleLogout = () => {
@@ -177,7 +196,7 @@ export default function App() {
             <Route path="/internet-sales" element={<InternetSales />} />
             <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
             <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
-            <Route path="/network-registry" element={<PlaceholderPage title="Реестр сетей" description="Справочник торговых сетей" />} />
+            <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
             <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
             <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
           </Routes>

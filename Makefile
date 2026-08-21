@@ -1,5 +1,7 @@
-.PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod
+.PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod \
+	up-existing-db down-existing-db logs-existing-db
 
+# Полный стек, включая собственный контейнер SQL Server на томе mssql_data.
 up:
 	docker compose up -d --build
 
@@ -8,6 +10,20 @@ down:
 
 logs:
 	docker compose logs -f --tail=200
+
+# Режим внешней базы: SQL Server уже запущен отдельно (контейнер my_local_mssql
+# на томе my_project_mssql_data_volume, алиас mssql_db в сети my_project_default).
+# Поднимаются только backend и frontend, база не пересоздаётся.
+EXISTING_DB_COMPOSE := -f docker-compose.yml -f docker-compose.existing-db.yml
+
+up-existing-db:
+	docker compose $(EXISTING_DB_COMPOSE) up -d --build
+
+down-existing-db:
+	docker compose $(EXISTING_DB_COMPOSE) down
+
+logs-existing-db:
+	docker compose $(EXISTING_DB_COMPOSE) logs -f --tail=200
 
 bootstrap-user:
 	docker compose --profile tools run --rm bootstrap-user

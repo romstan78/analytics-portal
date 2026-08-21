@@ -1,0 +1,128 @@
+import { useState } from 'react';
+import {
+  Alert,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  MenuItem,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import type { ContractType, NetworkType } from '../types/network';
+
+export interface NewNetworkValues {
+  name: string;
+  kam: string;
+  network_type: NetworkType;
+  contract_type: ContractType;
+  vat_included: boolean;
+  vat_rate: number;
+  year: number;
+}
+
+interface NewNetworkDialogProps {
+  open: boolean;
+  saving: boolean;
+  error?: string | null;
+  onClose: () => void;
+  onSubmit: (values: NewNetworkValues) => void;
+}
+
+// Заведение сети: тип, контракт и первый год открываются сразу,
+// чтобы КАМ попал в готовую сетку планов, а не в пустой экран.
+export default function NewNetworkDialog({ open, saving, error, onClose, onSubmit }: NewNetworkDialogProps) {
+  const [values, setValues] = useState<NewNetworkValues>({
+    name: '',
+    kam: '',
+    network_type: 'regular',
+    contract_type: 'regular',
+    vat_included: true,
+    vat_rate: 20,
+    year: new Date().getFullYear(),
+  });
+
+  const set = <K extends keyof NewNetworkValues>(key: K, value: NewNetworkValues[K]) =>
+    setValues((prev) => ({ ...prev, [key]: value }));
+
+  const nameError = values.name.trim() === '';
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Новая сеть</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+        {error && <Alert severity="error">{error}</Alert>}
+
+        <TextField
+          label="Название сети"
+          value={values.name}
+          onChange={(e) => set('name', e.target.value)}
+          error={nameError}
+          helperText={nameError ? 'Название обязательно' : ' '}
+          autoFocus
+        />
+        <TextField label="КАМ" value={values.kam} onChange={(e) => set('kam', e.target.value)} />
+
+        <TextField
+          select
+          label="Тип сети"
+          value={values.network_type}
+          onChange={(e) => set('network_type', e.target.value as NetworkType)}
+          helperText="У складской сети свой процесс прогнозирования объёмов"
+        >
+          <MenuItem value="regular">Обычная</MenuItem>
+          <MenuItem value="warehouse">Складская</MenuItem>
+        </TextField>
+
+        <TextField
+          select
+          label="Тип контракта"
+          value={values.contract_type}
+          onChange={(e) => set('contract_type', e.target.value as ContractType)}
+          helperText="Валовый: общий объём распределяется по брендам"
+        >
+          <MenuItem value="regular">Обычный — планирование по брендам</MenuItem>
+          <MenuItem value="gross">Валовый — общий объём на бренды</MenuItem>
+        </TextField>
+
+        <FormControlLabel
+          control={<Switch checked={values.vat_included} onChange={(e) => set('vat_included', e.target.checked)} />}
+          label="Сеть работает с НДС"
+        />
+        <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+          НДС применяется только к инвестициям: помимо суммы до вычета показывается сумма с вычетом ставки.
+        </Typography>
+        {values.vat_included && (
+          <TextField
+            label="Ставка НДС, %"
+            value={values.vat_rate}
+            onChange={(e) => set('vat_rate', Number(e.target.value.replace(',', '.')) || 0)}
+          />
+        )}
+
+        <TextField
+          label="Открыть год"
+          value={values.year}
+          onChange={(e) => set('year', Number(e.target.value) || new Date().getFullYear())}
+        />
+        <Typography variant="caption" color="text.secondary">
+          Настройки применяются ко всем четырём кварталам года. Позже НДС и тип контракта
+          меняются по отдельным кварталам во вкладке «Планы».
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Отмена</Button>
+        <Button
+          variant="contained"
+          disabled={saving || nameError}
+          onClick={() => onSubmit({ ...values, name: values.name.trim() })}
+        >
+          Создать
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}

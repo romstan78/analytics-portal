@@ -13,14 +13,14 @@ import {
 } from '@mui/icons-material';
 import { ALL_FIELDS_FLAT } from '../utils/cardFields';
 import { promoAPI } from '../api/promo';
-import type { CommentRow } from '../types/promo';
+import type { ApprovalRow, CommentRow } from '../types/promo';
 
-const fmtNum = (v, decimals = 0) => {
+const fmtNum = (v: number | string | null | undefined, decimals = 0) => {
   if (v == null) return '—';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 };
 
-const roiColor = (roi) => {
+const roiColor = (roi: number | null | undefined) => {
   if (roi == null) return '#94a3b8';
   return roi >= 0 ? '#16a34a' : '#dc2626';
 };
@@ -34,7 +34,13 @@ const MONTHS = [
 
 const HEADER_FIELDS = new Set(['network_name', 'sku', 'mechanics', 'brand_as']);
 
-const ROLE_COLORS = {
+interface RoleStyle {
+  bg: string;
+  text: string;
+  dot: string;
+}
+
+const ROLE_COLORS: Record<string, RoleStyle> = {
   'admin': { bg: '#fef2f2', text: '#dc2626', dot: '#dc2626' },
   'agreement1': { bg: '#f0fdf4', text: '#16a34a', dot: '#16a34a' },
   'agreement2': { bg: '#eff6ff', text: '#2563eb', dot: '#2563eb' },
@@ -43,7 +49,7 @@ const ROLE_COLORS = {
   'КАМ': { bg: '#f5f3ff', text: '#7c3aed', dot: '#7c3aed' },
 };
 
-const ROLE_ICONS = {
+const ROLE_ICONS: Record<string, string> = {
   'admin': '👑',
   'agreement1': '✅',
   'agreement2': '✅',
@@ -53,11 +59,21 @@ const ROLE_ICONS = {
 };
 
 
+export interface ApprovalCardProps {
+  item: ApprovalRow;
+  expanded: boolean;
+  submitting: Record<number, boolean>;
+  onToggleExpand: (id: number) => void;
+  onOpenConfirm: (id: number, status: string, comment: string) => void;
+  onCommentOnly: (id: number, comment: string) => Promise<boolean>;
+  visibleFields: string[];
+}
+
 const ApprovalCard = memo(function ApprovalCard({
   item, expanded, submitting,
   onToggleExpand, onOpenConfirm, onCommentOnly,
   visibleFields,
-}) {
+}: ApprovalCardProps) {
   const id = item.id;
   const isSubmitting = submitting[id] || false;
   const [localComment, setLocalComment] = useState('');
@@ -77,7 +93,7 @@ const ApprovalCard = memo(function ApprovalCard({
     enabled: !!id,
   });
 
-  const [historyAnchor, setHistoryAnchor] = useState(null);
+  const [historyAnchor, setHistoryAnchor] = useState<HTMLElement | null>(null);
 
   const leftBorderColor = item.plan_roi != null
     ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
@@ -114,19 +130,23 @@ const ApprovalCard = memo(function ApprovalCard({
 
           {visibleData.length > 0 && (
             <Grid container spacing={1.5} sx={{ mb: 1 }}>
-              {visibleData.map(fieldConfig => (
-                <Grid size={6} key={fieldConfig.id}>
-                  <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
-                  <Typography variant="body2" sx={{
-                    fontWeight: 600,
-                    color: fieldConfig.isRoi ? roiColor(item[fieldConfig.id]) : 'inherit',
-                  }}>
-                    {fieldConfig.isRoi || fieldConfig.isPercent
-                      ? (item[fieldConfig.id] != null ? `${Number(item[fieldConfig.id]).toFixed(1)}%` : '—')
-                      : (item[fieldConfig.id] != null ? fmtNum(item[fieldConfig.id], fieldConfig.isMoney ? 2 : 0) : '—')}
-                  </Typography>
-                </Grid>
-              ))}
+              {visibleData.map(fieldConfig => {
+                const raw = item[fieldConfig.id];
+                const numeric = typeof raw === 'number' ? raw : null;
+                return (
+                  <Grid size={6} key={fieldConfig.id}>
+                    <Typography variant="caption" color="text.secondary">{fieldConfig.label}</Typography>
+                    <Typography variant="body2" sx={{
+                      fontWeight: 600,
+                      color: fieldConfig.isRoi ? roiColor(numeric) : 'inherit',
+                    }}>
+                      {fieldConfig.isRoi || fieldConfig.isPercent
+                        ? (numeric != null ? `${numeric.toFixed(1)}%` : '—')
+                        : (raw != null ? fmtNum(raw, fieldConfig.isMoney ? 2 : 0) : '—')}
+                    </Typography>
+                  </Grid>
+                );
+              })}
             </Grid>
           )}
 

@@ -1,16 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Dialog, DialogTitle, DialogContent, IconButton, Typography,
   Box, Tabs, Tab, CircularProgress, Alert
 } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
-import { DataGrid } from '@mui/x-data-grid';
+import { DataGrid, type GridColDef } from '@mui/x-data-grid';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer
 } from 'recharts';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+import { salesAPI } from '../api/promo';
+import type { DrilldownRow } from '../types/sales';
 
 const COLORS = [
   '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c',
@@ -41,47 +42,35 @@ interface DrilldownModalProps {
 export default function DrilldownModal({ open, onClose, rowData, appliedFilters = {} }: DrilldownModalProps) {
   const [tab, setTab] = useState(0);
   const [viewType, setViewType] = useState('total');
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    if (open && rowData) fetchDrilldownData();
-  }, [open, rowData, appliedFilters]);
+  const brandName = rowData?.brandName;
+  const networkName = rowData?.networkName;
 
-  const fetchDrilldownData = async () => {
-    if (!rowData?.brandName || !rowData?.networkName) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({
-        brandName: rowData.brandName,
-        networkName: rowData.networkName,
-      });
-      if (appliedFilters.yearFrom) params.set('yearFrom', appliedFilters.yearFrom);
-      if (appliedFilters.yearTo) params.set('yearTo', appliedFilters.yearTo);
-      if (appliedFilters.months?.length > 0) appliedFilters.months.forEach(m => params.append('months', String(m)));
-      if (appliedFilters.segment?.length > 0) appliedFilters.segment.forEach(s => params.append('segment', s));
-      if (appliedFilters.channel?.length > 0) appliedFilters.channel.forEach(c => params.append('channel', c));
+  const { data: response, isFetching: loading, error: queryError } = useQuery({
+    queryKey: ['drilldown', brandName, networkName, appliedFilters] as const,
+    enabled: Boolean(open && brandName && networkName),
+    queryFn: () => salesAPI.getDrilldown({
+      brandName,
+      networkName,
+      yearFrom: appliedFilters.yearFrom,
+      yearTo: appliedFilters.yearTo,
+      months: appliedFilters.months,
+      segment: appliedFilters.segment,
+      channel: appliedFilters.channel,
+    }),
+  });
 
-      const response = await fetch(`${API_BASE}/api/drilldown?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      const json = await response.json();
-      setData(json.data || []);
-    } catch (err) { setError(err.message); } finally { setLoading(false); }
-  };
+  const data = useMemo(() => response?.data ?? [], [response]);
+  const error = queryError ? (queryError instanceof Error ? queryError.message : String(queryError)) : null;
 
   const chartData = prepareChartData(data);
 
-  const columns = [
-    { field: 'year', headerName: 'Год', width: 80, type: 'number', valueFormatter: (value) => value },
+  const columns: GridColDef[] = [
+    { field: 'year', headerName: 'Год', width: 80, type: 'number', valueFormatter: (value: number) => value },
     { field: 'month', headerName: 'Месяц', width: 80, type: 'number' },
     { field: 'metricType', headerName: 'Показатель', width: 130 },
     { field: 'totalValue', headerName: 'Значение', width: 140, type: 'number',
-      valueFormatter: (value) => value != null ? Number(value).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
+      valueFormatter: (value: number | null) => value != null ? Number(value).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
     { field: 'un_rub', headerName: 'Уп/Руб', width: 90 },
     { field: 'segment', headerName: 'Сегмент', width: 140 },
     { field: 'channel', headerName: 'Канал', width: 140 },
@@ -90,7 +79,7 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
   if (!rowData) return null;
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth PaperProps={{ sx: { height: '80vh' } }}>
+    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth slotProps={{ paper: { sx: { height: '80vh' } } }}>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Box>
           <Typography variant="h6">Детализация: {rowData.brandName}</Typography>
@@ -185,8 +174,16 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
   );
 }
 
-function prepareChartData(data) {
-  const grouped = {};
+interface ChartPoint {
+  period: string;
+  упаковки: number;
+  рубли: number;
+  segments: Record<string, number>;
+  channels: Record<string, number>;
+}
+
+function prepareChartData(data: DrilldownRow[]): ChartPoint[] {
+  const grouped: Record<string, ChartPoint> = {};
   data.forEach((row) => {
     const key = `${row.year}-${String(row.month).padStart(2, '0')}`;
     if (!grouped[key]) grouped[key] = { period: key, упаковки: 0, рубли: 0, segments: {}, channels: {} };
@@ -202,8 +199,8 @@ function prepareChartData(data) {
   return Object.values(grouped).sort((a, b) => a.period.localeCompare(b.period));
 }
 
-function getUniqueKeys(data, type) {
-  const keys = new Set();
+function getUniqueKeys(data: ChartPoint[], type: 'segments' | 'channels'): string[] {
+  const keys = new Set<string>();
   data.forEach(item => { Object.keys(item[type] || {}).forEach(key => keys.add(key)); });
   return Array.from(keys).sort();
 }

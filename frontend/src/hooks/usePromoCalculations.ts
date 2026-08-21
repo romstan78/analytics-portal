@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import type { PromoFormValues } from './usePromoForm';
 import { calcPlan, calcActual } from '../utils/calcUtils';
 
-interface PlanFields {
+export interface PlanFields {
   plan_promo_rub: string;
   plan_promo_uplift_units: string;
   plan_promo_uplift_rub: string;
@@ -10,7 +10,7 @@ interface PlanFields {
   baseline_rub: string;
 }
 
-interface ActualFields {
+export interface ActualFields {
   actual_promo_rub: string;
   actual_promo_uplift_units: string;
   actual_promo_uplift_rub: string;

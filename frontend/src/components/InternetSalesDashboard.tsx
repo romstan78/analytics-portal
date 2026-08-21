@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert, Box, Chip, CircularProgress, Grid, Paper, Stack, Tab, Table, TableBody,
   TableCell, TableHead, TableRow, Tabs, ToggleButton, ToggleButtonGroup, Typography,
@@ -94,7 +94,7 @@ function KpiCard({ label, value, previous, change, accent }: { label: string; va
       {change === undefined ? (
         <Typography variant="caption" color="text.secondary">{previous}</Typography>
       ) : (
-        <Stack direction="row" spacing={0.75} alignItems="baseline">
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'baseline' }}>
           <Typography variant="caption" sx={{ color: change == null ? 'text.secondary' : positive ? '#12805c' : '#c14545', fontWeight: 700 }}>{percentLabel(change)}</Typography>
           <Typography variant="caption" color="text.secondary">к {previous}</Typography>
         </Stack>
@@ -132,7 +132,7 @@ function NetworkHeatmap({ rows, networkOrder, unit, selectedNames, onSelect }: {
       <Box sx={{ minWidth: 690 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.4fr) repeat(12, minmax(34px, 1fr))', gap: 0.5, mb: 0.5 }}>
           <Box />
-          {MONTHS.map(month => <Typography key={month} variant="caption" color="text.secondary" textAlign="center">{month}</Typography>)}
+          {MONTHS.map(month => <Typography key={month} variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>{month}</Typography>)}
         </Box>
         {networkOrder.map(name => (
           <Box key={name} sx={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.4fr) repeat(12, minmax(34px, 1fr))', gap: 0.5, mb: 0.5 }}>
@@ -165,16 +165,24 @@ export default function InternetSalesDashboard({
   const [bottomTab, setBottomTab] = useState<'ranking' | 'heatmap' | 'detail'>('ranking');
   const [rankDimension, setRankDimension] = useState<'network' | 'product'>('network');
 
-  useEffect(() => {
+  // Появление фокусов или трендов по каналам переключает режим на сравнение.
+  // Синхронизация во время рендера вместо эффекта — правило set-state-in-effect.
+  const trendSignal = `${focuses.length}|${data?.channelTrends.length || 0}`;
+  const [prevTrendSignal, setPrevTrendSignal] = useState(trendSignal);
+  if (prevTrendSignal !== trendSignal) {
+    setPrevTrendSignal(trendSignal);
     if (focuses.length > 0 || (data?.channelTrends.length || 0) > 0) setTrendMode('comparison');
-  }, [focuses.length, data?.channelTrends.length]);
+  }
 
   const yearTrend = useMemo(() => {
     const currentByMonth = new Map((data?.trend || []).map(point => [point.month, point.value]));
     const previousByMonth = new Map((data?.previousYearTrend || []).map(point => [point.month, point.value]));
+    // Накопительные суммы считаем обычным циклом: мутация внутри callback
+    // нарушает правило react-hooks/immutability.
+    const rows = [];
     let currentSum = 0;
     let previousSum = 0;
-    return Array.from({ length: 12 }, (_, index) => {
+    for (let index = 0; index < 12; index += 1) {
       const month = index + 1;
       const currentRaw = currentByMonth.get(month);
       const previousRaw = previousByMonth.get(month);
@@ -182,8 +190,9 @@ export default function InternetSalesDashboard({
       if (previousRaw != null) previousSum += previousRaw;
       const current = currentRaw == null ? null : cumulative ? currentSum : currentRaw;
       const previous = previousRaw == null ? null : cumulative ? previousSum : previousRaw;
-      return { month, label: MONTHS[index], current, previous, yoy: current != null && previous != null && previous !== 0 ? ((current - previous) / previous) * 100 : null };
-    });
+      rows.push({ month, label: MONTHS[index], current, previous, yoy: current != null && previous != null && previous !== 0 ? ((current - previous) / previous) * 100 : null });
+    }
+    return rows;
   }, [cumulative, data]);
 
   const comparisonData = useMemo(() => {
@@ -235,15 +244,22 @@ export default function InternetSalesDashboard({
   const maxSelected = Math.max(...data.focusTrends.map(point => point.value), 0);
   const useFocusAxis = focuses.length > 0 && maxSelected > 0 && maxOverall / maxSelected >= 4;
 
-  const comparisonTooltip = (value: number | string, name: string, item: { payload?: Record<string, unknown> }) => {
+  // Сигнатура соответствует Formatter из recharts: value и name приходят
+  // расширенными типами, поэтому приводим их локально.
+  const comparisonTooltip = (
+    value: number | string | ReadonlyArray<number | string> | undefined,
+    name: number | string | undefined,
+    item: { payload?: Record<string, unknown> },
+  ): [string, string] => {
     const numericValue = Number(value);
-    const focusIndex = focuses.findIndex(focus => focus.name === name);
+    const seriesName = String(name);
+    const focusIndex = focuses.findIndex(focus => focus.name === seriesName);
     if (focusIndex >= 0 && focuses[focusIndex].type === 'network') {
       const total = Number(item.payload?.overall || 0);
       const share = total > 0 ? ` · доля ${((numericValue / total) * 100).toFixed(1)}%` : '';
-      return [`${fullNumber(numericValue, data.unit)}${share}`, name];
+      return [`${fullNumber(numericValue, data.unit)}${share}`, seriesName];
     }
-    return [fullNumber(numericValue, data.unit), name];
+    return [fullNumber(numericValue, data.unit), seriesName];
   };
 
   return (
@@ -262,9 +278,9 @@ export default function InternetSalesDashboard({
       <Grid container spacing={1.25} sx={{ mb: 1.25 }}>
         <Grid size={{ xs: 12, lg: 8 }}>
           <Paper variant="outlined" sx={{ p: 1.75, height: 455, borderRadius: 3, borderColor: '#dfe5ee' }}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} spacing={1}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', sm: 'flex-start' } }}>
               <Box sx={{ minWidth: 0 }}>
-                <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Stack direction="row" spacing={0.75} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Динамика и сравнение</Typography>
                   {focuses.map(focus => <Chip key={`${focus.type}:${focus.name}`} size="small" variant="outlined" color="primary"
                     label={`${focus.type === 'product' ? 'SKU' : 'Сеть'}: ${focus.name}`} onDelete={() => onRemoveFocus(focus)} />)}
@@ -329,9 +345,9 @@ export default function InternetSalesDashboard({
 
         <Grid size={{ xs: 12, lg: 4 }}>
           <Paper variant="outlined" sx={{ p: 1.75, height: 455, borderRadius: 3, borderColor: '#dfe5ee' }}>
-            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+            <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <Box><Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Что изменило результат</Typography><Typography variant="caption" color="text.secondary">Вклад относительно {previousLabel}</Typography></Box>
-              <Stack spacing={0.65} alignItems="flex-end">
+              <Stack spacing={0.65} sx={{ alignItems: 'flex-end' }}>
                 <ToggleButtonGroup size="small" exclusive value={driverDimension} onChange={(_, value) => value && setDriverDimension(value)}><ToggleButton value="network">Сети</ToggleButton><ToggleButton value="product">SKU</ToggleButton></ToggleButtonGroup>
                 <ToggleButtonGroup size="small" exclusive value={driverMetric} onChange={(_, value) => value && setDriverMetric(value)}><ToggleButton value="delta">Вклад</ToggleButton><ToggleButton value="percent">YoY %</ToggleButton></ToggleButtonGroup>
               </Stack>
@@ -351,7 +367,7 @@ export default function InternetSalesDashboard({
       </Grid>
 
       <Paper variant="outlined" sx={{ borderRadius: 3, borderColor: '#dfe5ee', overflow: 'hidden', mb: 1.25 }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ px: 1.75, borderBottom: '1px solid #e7ebf1' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', sm: 'center' }, px: 1.75, borderBottom: '1px solid #e7ebf1' }}>
           <Tabs value={bottomTab} onChange={(_, value) => setBottomTab(value)}>
             <Tab value="ranking" label="Рейтинг" /><Tab value="heatmap" label="Сезонность" /><Tab value="detail" label="Детализация" />
           </Tabs>

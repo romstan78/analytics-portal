@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   Autocomplete, Box, Button, Chip, CircularProgress, Collapse, FormControlLabel,
   Paper, Stack, Switch, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
@@ -11,6 +12,7 @@ import {
   RestartAlt as RestartAltIcon,
   Tune as TuneIcon,
 } from '@mui/icons-material';
+import type { GridColDef } from '@mui/x-data-grid';
 import DataTable from '../components/DataTable';
 import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
 import { salesAPI } from '../api/promo';
@@ -21,15 +23,15 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const FILTERS_STORAGE_KEY = 'internet_sales_filters_v9';
 const PERSIST_FLAG_KEY = 'internet_sales_persist_v9';
 
-const COLUMNS = [
-  { field: 'year', headerName: 'Год', width: 90, type: 'number', valueFormatter: (v) => v },
+const COLUMNS: GridColDef[] = [
+  { field: 'year', headerName: 'Год', width: 90, type: 'number', valueFormatter: (v: number) => v },
   { field: 'month', headerName: 'Месяц', width: 80, type: 'number' },
   { field: 'brandName', headerName: 'Бренд', width: 150 },
   { field: 'productName', headerName: 'SKU', width: 250 },
   { field: 'networkName', headerName: 'Сеть', width: 200 },
   { field: 'metricType', headerName: 'Показатель', width: 140 },
   { field: 'metricValue', headerName: 'Значение', width: 130, type: 'number',
-    valueFormatter: (v) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
+    valueFormatter: (v: number | null) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
   { field: 'un_rub', headerName: 'Уп/Руб', width: 100 },
   { field: 'segment', headerName: 'Сегмент', width: 170 },
   { field: 'channel', headerName: 'Канал', width: 160 },
@@ -80,9 +82,6 @@ export default function InternetSales() {
   const [comparisonChannels, setComparisonChannels] = useState<string[]>([]);
   const [unit, setUnit] = useState<'руб' | 'евро' | 'уп'>('руб');
   const [dashboardFocus, setDashboardFocus] = useState<DashboardFocus[]>([]);
-  const [dashboard, setDashboard] = useState<InternetSalesDashboardData | null>(null);
-  const [dashboardLoading, setDashboardLoading] = useState(true);
-  const [dashboardError, setDashboardError] = useState('');
   const [rowCount, setRowCount] = useState(0);
   const [drilldownRow, setDrilldownRow] = useState(null);
 
@@ -103,12 +102,11 @@ export default function InternetSales() {
 
   useEffect(() => {
     salesAPI.getFilters()
-      .then(raw => {
-        const data = raw as Record<string, unknown>;
+      .then(data => {
         const years = normalizeStringList(data.year).sort((a, b) => Number(a) - Number(b));
         const segments = normalizeStringList(data.segment);
         const channels = normalizeStringList(data.channel);
-        const channelSegmentMap = (data.channelSegmentMap as Record<string, string[]>) || {};
+        const channelSegmentMap = data.channelSegmentMap || {};
         setMeta({
           year: years,
           brandName: normalizeStringList(data.brandName),
@@ -148,7 +146,7 @@ export default function InternetSales() {
       salesAPI.getNetworkOptions({ ...filtersWithoutNetworks, focusSegments, unit })
         .then(raw => {
           if (!active) return;
-          const options = normalizeStringList((raw as Record<string, unknown>).networkName);
+          const options = normalizeStringList(raw.networkName);
           setNetworkOptions(options);
           const available = new Set(options);
           setFilters(current => {
@@ -161,14 +159,16 @@ export default function InternetSales() {
         .finally(() => { if (active) setNetworkOptionsLoading(false); });
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
+    // Зависимости перечислены по полям намеренно: эффект сам правит
+    // filters.networkName, и полный объект filters зациклил бы его.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusSegments, unit]);
 
-  useEffect(() => {
-    if (!analysisYear || focusSegments.length === 0) return;
-    let active = true;
-    setDashboardLoading(true);
-    setDashboardError('');
-    salesAPI.getDashboard({
+  const dashboardEnabled = Boolean(analysisYear) && focusSegments.length > 0;
+  const { data: dashboardData, isFetching: dashboardFetching, error: dashboardQueryError } = useQuery({
+    queryKey: ['salesDashboard', analysisYear, appliedFilters, focusChannel, focusSegments, unit, comparisonChannels, dashboardFocus] as const,
+    enabled: dashboardEnabled,
+    queryFn: () => salesAPI.getDashboard({
       ...appliedFilters,
       analysisYear,
       focusChannel,
@@ -177,12 +177,15 @@ export default function InternetSales() {
       compareChannels: comparisonChannels,
       focusProducts: dashboardFocus.filter(item => item.type === 'product').map(item => item.name),
       focusNetworks: dashboardFocus.filter(item => item.type === 'network').map(item => item.name),
-    })
-      .then(raw => { if (active) setDashboard(raw as InternetSalesDashboardData); })
-      .catch((err: { message?: string }) => { if (active) setDashboardError(err.message || 'Не удалось загрузить дашборд'); })
-      .finally(() => { if (active) setDashboardLoading(false); });
-    return () => { active = false; };
-  }, [analysisYear, appliedFilters, focusChannel, focusSegments, unit, comparisonChannels, dashboardFocus]);
+    }),
+  });
+
+  const dashboard = (dashboardData as InternetSalesDashboardData | undefined) ?? null;
+  // До первой применимой комбинации фильтров показываем индикатор, как раньше.
+  const dashboardLoading = dashboardEnabled ? dashboardFetching : true;
+  const dashboardError = dashboardQueryError
+    ? ((dashboardQueryError as { message?: string }).message || 'Не удалось загрузить дашборд')
+    : '';
 
   const segmentOptions = useMemo(
     () => meta.channelSegmentMap[focusChannel] || meta.segment,
@@ -246,7 +249,7 @@ export default function InternetSales() {
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: '#f6f8fb' }}>
-      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1.5 }}>
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 750 }}>Интернет-продажи</Typography>
@@ -262,7 +265,7 @@ export default function InternetSales() {
       </Stack>
 
       <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, borderRadius: 3, borderColor: '#dfe5ee' }}>
-        <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.25} alignItems={{ xs: 'stretch', lg: 'center' }}>
+        <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.25} sx={{ alignItems: { xs: 'stretch', lg: 'center' } }}>
           <ToggleButtonGroup size="small" exclusive value={analysisYear} onChange={(_, value) => value && updateYear(value)}>
             {meta.year.slice(-4).map(year => <ToggleButton key={year} value={year}>{year}</ToggleButton>)}
           </ToggleButtonGroup>
@@ -296,18 +299,18 @@ export default function InternetSales() {
           </ToggleButtonGroup>
         </Stack>
 
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mt: 1 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1 }}>
           <Button size="small" startIcon={<TuneIcon />} endIcon={<ExpandMoreIcon sx={{ transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: '0.2s' }} />}
             onClick={() => setAdvancedOpen(value => !value)}>Дополнительные фильтры</Button>
           {activeFilterCount > 0 && <Chip size="small" label={`Активно: ${activeFilterCount}`} />}
           <Button size="small" color="inherit" startIcon={<RestartAltIcon />} onClick={handleReset}>Сбросить</Button>
           <Box sx={{ flex: 1 }} />
-          {dashboardLoading && <Stack direction="row" spacing={0.75} alignItems="center"><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
+          {dashboardLoading && <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
         </Stack>
 
         <Collapse in={advancedOpen}>
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.25} alignItems={{ xs: 'stretch', md: 'center' }} sx={{ mt: 1.25, pt: 1.25, borderTop: '1px solid #e7ebf1' }}>
-            <Autocomplete size="small" options={meta.channel} value={focusChannel || null} disableClearable
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.25} sx={{ alignItems: { xs: 'stretch', md: 'center' }, mt: 1.25, pt: 1.25, borderTop: '1px solid #e7ebf1' }}>
+            <Autocomplete size="small" options={meta.channel} value={focusChannel || undefined} disableClearable
               onChange={(_, value) => value && handleChannelChange(value)}
               renderInput={(params) => <TextField {...params} label="Канал" />} sx={{ minWidth: 190 }} />
             <Autocomplete multiple size="small" options={segmentOptions} value={focusSegments} disableClearable

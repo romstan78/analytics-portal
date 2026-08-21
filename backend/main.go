@@ -165,6 +165,19 @@ func main() {
 		api.POST("/promo/approve", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.ApprovePromo)
 		api.POST("/promo/approve/batch", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.BatchApprovePromo)
 
+		// Реестр сетей — чтение
+		api.GET("/networks", handlers.GetNetworks)
+		api.GET("/networks/brands", handlers.GetNetworkBrands)
+		api.GET("/networks/:id/plan", handlers.GetNetworkPlan)
+		api.GET("/networks/:id/comments", handlers.GetNetworkComments)
+		api.GET("/networks/:id/audit", handlers.GetNetworkAudit)
+
+		// Реестр сетей — запись (планы вносят КАМы)
+		api.POST("/networks", middleware.RoleRequired("admin", "kam"), handlers.CreateNetwork)
+		api.PATCH("/networks/:id", middleware.RoleRequired("admin", "kam"), handlers.UpdateNetwork)
+		api.POST("/networks/:id/plan", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPlan)
+		api.POST("/networks/:id/comments", middleware.RoleRequired("admin", "kam", "agreement1", "agreement2"), handlers.AddNetworkComment)
+
 		// Промо — удаление/восстановление (только admin)
 		api.DELETE("/promo/:id", middleware.RoleRequired("admin"), handlers.DeletePromo)
 		api.PATCH("/promo/:id/restore", middleware.RoleRequired("admin"), handlers.RestorePromo)

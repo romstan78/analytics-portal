@@ -1,12 +1,68 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Button, Stack, Box, Typography, TextField, Autocomplete, Grid, Paper, Alert, Snackbar,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, CircularProgress,
   ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
+import type { TextFieldProps } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { promoAPI } from '../api/promo';
+import type { HistoryRow, LastNetworkDataResponse, LastSKUDataResponse, NetworkGeoResponse, SKUInfoResponse } from '../types/promo';
+
+// Значения формы хранятся строками: поля ввода отдают строки,
+// приведение к числам выполняется один раз при сохранении.
+interface PromoFormState {
+  id: number | null;
+  network_name: string;
+  kam: string;
+  brand: string;
+  sku: string;
+  year: string;
+  month: string;
+  mechanics: string;
+  gtn_opex: string;
+  baseline_units: string;
+  plan_promo_units: string;
+  plan_investments_rub: string;
+  contract_price: string;
+  id_directum: string;
+  ds_number: string;
+  discount_amount: string;
+  conditions: string;
+  comments: string;
+  ecom_segment: string;
+  total_pharmacies: string;
+  promo_pharmacies: string;
+  actual_promo_sales_units: string;
+  actual_investments: string;
+  actual_promo_rub: string;
+  actual_promo_uplift_units: string;
+  actual_promo_uplift_rub: string;
+  actual_external_ecom_units: string;
+  actual_corrected_baseline: string;
+  key_region: string;
+  top20_segment: string;
+  status: string;
+}
+
+type ManualOverrides = { contract_price: boolean; total_pharmacies: boolean };
+
+type HistoryMetric = 'units' | 'investments' | 'roi';
+
+interface HistoryChartConfig {
+  planKey: string;
+  factKey: string;
+  planLabel: string;
+  factLabel: string;
+}
+
+const HISTORY_CHART_CONFIG: Record<HistoryMetric, HistoryChartConfig> = {
+  units: { planKey: 'plan', factKey: 'fact', planLabel: 'План (уп)', factLabel: 'Факт (уп)' },
+  investments: { planKey: 'planInvestments', factKey: 'factInvestments', planLabel: 'Инвестиции план (руб)', factLabel: 'Инвестиции факт (руб)' },
+  roi: { planKey: 'planRoi', factKey: 'factRoi', planLabel: 'ROI план (%)', factLabel: 'ROI факт (%)' },
+};
 
 const MONTH_OPTIONS = [
   { label: 'Январь', value: 1 }, { label: 'Февраль', value: 2 }, { label: 'Март', value: 3 }, { label: 'Апрель', value: 4 },
@@ -23,13 +79,13 @@ const ECOM_SEGMENT_OPTIONS = [
   'нет данных',
 ];
 
-const REQUIRED_FIELDS = [
+const REQUIRED_FIELDS: Array<keyof PromoFormState> = [
   'network_name', 'sku', 'year', 'month', 'mechanics', 'gtn_opex', 'contract_price',
   'baseline_units', 'plan_promo_units', 'plan_investments_rub', 'id_directum', 'ds_number',
   'discount_amount', 'conditions', 'ecom_segment', 'total_pharmacies', 'promo_pharmacies'
 ];
 
-const FIELD_LABELS = {
+const FIELD_LABELS: Record<string, string> = {
   network_name: 'Сеть', sku: 'SKU', year: 'Год', month: 'Месяц', mechanics: 'Механика',
   gtn_opex: 'Тип инвестиций', contract_price: 'Цена контракта', baseline_units: 'Baseline (уп)',
   plan_promo_units: 'План промо (уп)', plan_investments_rub: 'Инвестиции (руб)',
@@ -38,7 +94,7 @@ const FIELD_LABELS = {
   promo_pharmacies: 'Аптек в промо',
 };
 
-const EMPTY_FORM = {
+const EMPTY_FORM: PromoFormState = {
   id: null, network_name: '', kam: '', brand: '', sku: '',
   year: '2027', month: '', mechanics: '', gtn_opex: '', baseline_units: '',
   plan_promo_units: '', plan_investments_rub: '', contract_price: '',
@@ -52,30 +108,35 @@ const EMPTY_FORM = {
   status: 'Планируется',
 };
 
-const fmt = (v) => {
+const fmt = (v: string | number | null | undefined) => {
   if (v == null || v === '') return '';
   return Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const historyValue = (value, fractionDigits = 0) => value != null
+const historyValue = (value: number | null | undefined, fractionDigits = 0) => value != null
   ? Number(value).toLocaleString('ru-RU', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })
   : '—';
 
-const cleanNumber = (v) => v.replace(/\s/g, '').replace(',', '.');
+const cleanNumber = (v: string) => v.replace(/\s/g, '').replace(',', '.');
 
-const safeNumber = (val) => {
+const safeNumber = (val: string) => {
   const n = parseInt(val);
   return isNaN(n) ? null : n;
 };
 
-const safeFloatNull = (val) => {
+const safeFloatNull = (val: string) => {
   const n = parseFloat(val);
   return isNaN(n) ? null : n;
 };
 
-const requiredLabel = (label) => `${label} *`;
+const requiredLabel = (label: string) => `${label} *`;
 
-const NumberField = ({ label, value, onChange, ...props }) => (
+type NumberFieldProps = Omit<TextFieldProps, 'value' | 'onChange'> & {
+  value: string | null | undefined;
+  onChange: (value: string) => void;
+};
+
+const NumberField = ({ label, value, onChange, ...props }: NumberFieldProps) => (
   <TextField
     label={label}
     type="text"
@@ -91,7 +152,14 @@ const NumberField = ({ label, value, onChange, ...props }) => (
   />
 );
 
-const HistoryPair = ({ plan, fact, fractionDigits = 0, suffix = '' }) => (
+interface HistoryPairProps {
+  plan: number | null | undefined;
+  fact: number | null | undefined;
+  fractionDigits?: number;
+  suffix?: string;
+}
+
+const HistoryPair = ({ plan, fact, fractionDigits = 0, suffix = '' }: HistoryPairProps) => (
   <Box sx={{ display: 'grid', gap: 0.35, minWidth: 82 }}>
     <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 0.5, px: 0.6, py: 0.35, borderRadius: 1, bgcolor: '#eef2ff' }}>
       <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.1 }}>План</Typography>
@@ -108,20 +176,21 @@ const HistoryPair = ({ plan, fact, fractionDigits = 0, suffix = '' }) => (
   </Box>
 );
 
-export default function PromoForm({ onSave, onOpenPromo }) {
-  const [form, setForm] = useState({ ...EMPTY_FORM });
-  const [allSkuOptions, setAllSkuOptions] = useState([]);
-  const [allNetworkOptions, setAllNetworkOptions] = useState([]);
-  const [mechanicsOptions, setMechanicsOptions] = useState([]);
-  const [investmentTypes, setInvestmentTypes] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyMetric, setHistoryMetric] = useState('units');
+interface PromoFormProps {
+  onSave?: () => void;
+  onOpenPromo?: (id: number) => void;
+}
+
+export default function PromoForm({ onSave, onOpenPromo }: PromoFormProps) {
+  const [form, setForm] = useState<PromoFormState>({ ...EMPTY_FORM });
+  const [allSkuOptions, setAllSkuOptions] = useState<string[]>([]);
+  const [allNetworkOptions, setAllNetworkOptions] = useState<string[]>([]);
+  const [mechanicsOptions, setMechanicsOptions] = useState<string[]>([]);
+  const [investmentTypes, setInvestmentTypes] = useState<string[]>([]);
+  const [historyMetric, setHistoryMetric] = useState<HistoryMetric>('units');
   const [saving, setSaving] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-  const [lastSKUData, setLastSKUData] = useState({});
-  const [skuDataLoading, setSkuDataLoading] = useState(false);
-  const [manualOverrides, setManualOverrides] = useState({ contract_price: false, total_pharmacies: false });
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
+  const [manualOverrides, setManualOverrides] = useState<ManualOverrides>({ contract_price: false, total_pharmacies: false });
 
   // Загрузка справочников
   useEffect(() => {
@@ -136,99 +205,96 @@ export default function PromoForm({ onSave, onOpenPromo }) {
     }).catch(() => setInvestmentTypes(['GTN', 'GTN в ОС', 'OPEX', 'OPEX Marketing']));
   }, []);
 
-  // Данные SKU и сети подтягиваем после короткой паузы: это исключает запросы на каждый символ
-  // и не даёт опоздавшему ответу перезаписать уже выбранное значение.
+  // Данные SKU и сети подтягиваем после короткой паузы: это исключает запросы
+  // на каждый символ. Debounce-значения служат ключами запросов.
+  const [debouncedSku, setDebouncedSku] = useState('');
   useEffect(() => {
-    const sku = form.sku.trim();
-    if (!sku) {
-      setLastSKUData({});
-      setSkuDataLoading(false);
-      return undefined;
-    }
+    const timer = window.setTimeout(() => setDebouncedSku(form.sku.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [form.sku]);
 
-    let active = true;
-    setSkuDataLoading(true);
-    const timer = window.setTimeout(async () => {
+  const [debouncedNetwork, setDebouncedNetwork] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedNetwork(form.network_name.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [form.network_name]);
+
+  const { data: skuBundle, isFetching: skuFetching } = useQuery({
+    queryKey: ['promoFormSku', debouncedSku] as const,
+    enabled: Boolean(debouncedSku),
+    queryFn: async () => {
       const [skuInfo, lastData] = await Promise.all([
-        promoAPI.getSKUInfo(sku).catch(() => ({})),
-        promoAPI.getLastSKUData(sku).catch(() => ({})),
+        promoAPI.getSKUInfo(debouncedSku).catch((): SKUInfoResponse => ({ brand: null, brand_as: null })),
+        promoAPI.getLastSKUData(debouncedSku).catch((): LastSKUDataResponse => ({})),
       ]);
-      if (!active) return;
+      return { sku: debouncedSku, skuInfo, lastData: lastData || {} };
+    },
+  });
 
-      setLastSKUData(lastData || {});
-      setSkuDataLoading(false);
-      setForm(prev => {
-        if (prev.sku !== sku) return prev;
-        const updates = {};
-        if (skuInfo.brand) updates.brand = skuInfo.brand;
-        if (!manualOverrides.contract_price && lastData.contract_price != null) updates.contract_price = String(lastData.contract_price);
-        return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
-      });
-    }, 300);
-
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [form.sku, manualOverrides.contract_price]);
-
-  useEffect(() => {
-    const network = form.network_name.trim();
-    if (!network) return undefined;
-
-    let active = true;
-    const timer = window.setTimeout(async () => {
+  const { data: networkBundle } = useQuery({
+    queryKey: ['promoFormNetwork', debouncedNetwork] as const,
+    enabled: Boolean(debouncedNetwork),
+    queryFn: async () => {
       const [geo, lastNetworkData] = await Promise.all([
-        promoAPI.getNetworkGeo(network).catch(() => ({})),
-        promoAPI.getLastNetworkData(network).catch(() => ({})),
+        promoAPI.getNetworkGeo(debouncedNetwork).catch((): NetworkGeoResponse => ({ kam: null, network_type: null, top20_segment: null, key_region: null })),
+        promoAPI.getLastNetworkData(debouncedNetwork).catch((): LastNetworkDataResponse => ({})),
       ]);
-      if (!active) return;
+      return { network: debouncedNetwork, geo, lastNetworkData };
+    },
+  });
 
-      setForm(prev => {
-        if (prev.network_name !== network) return prev;
-        const updates = {};
-        if (geo.kam) updates.kam = geo.kam;
-        if (geo.key_region) updates.key_region = geo.key_region;
-        if (geo.top20_segment) updates.top20_segment = geo.top20_segment;
-        if (!manualOverrides.total_pharmacies && lastNetworkData.total_pharmacies != null) {
-          updates.total_pharmacies = String(lastNetworkData.total_pharmacies);
-        }
-        return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
-      });
-    }, 300);
+  const lastSKUData: LastSKUDataResponse = debouncedSku ? (skuBundle?.lastData ?? {}) : {};
+  const skuDataLoading = Boolean(debouncedSku) && skuFetching;
 
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [form.network_name, manualOverrides.total_pharmacies]);
+  // Подстановка справочных значений в форму. Выполняется при появлении новых
+  // данных, во время рендера — эффект здесь нарушал бы set-state-in-effect.
+  const [appliedSkuBundle, setAppliedSkuBundle] = useState<typeof skuBundle>(undefined);
+  if (skuBundle && skuBundle !== appliedSkuBundle) {
+    setAppliedSkuBundle(skuBundle);
+    setForm(prev => {
+      if (prev.sku.trim() !== skuBundle.sku) return prev;
+      const updates: Partial<PromoFormState> = {};
+      if (skuBundle.skuInfo.brand) updates.brand = skuBundle.skuInfo.brand;
+      if (!manualOverrides.contract_price && skuBundle.lastData.contract_price != null) {
+        updates.contract_price = String(skuBundle.lastData.contract_price);
+      }
+      return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
+    });
+  }
+
+  const [appliedNetworkBundle, setAppliedNetworkBundle] = useState<typeof networkBundle>(undefined);
+  if (networkBundle && networkBundle !== appliedNetworkBundle) {
+    setAppliedNetworkBundle(networkBundle);
+    setForm(prev => {
+      if (prev.network_name.trim() !== networkBundle.network) return prev;
+      const updates: Partial<PromoFormState> = {};
+      if (networkBundle.geo.kam) updates.kam = networkBundle.geo.kam;
+      if (networkBundle.geo.key_region) updates.key_region = networkBundle.geo.key_region;
+      if (networkBundle.geo.top20_segment) updates.top20_segment = networkBundle.geo.top20_segment;
+      if (!manualOverrides.total_pharmacies && networkBundle.lastNetworkData.total_pharmacies != null) {
+        updates.total_pharmacies = String(networkBundle.lastNetworkData.total_pharmacies);
+      }
+      return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
+    });
+  }
 
   // История
   const historySelectionComplete = Boolean(form.network_name && form.sku && form.mechanics);
-  useEffect(() => {
-    if (!historySelectionComplete) {
-      setHistory([]);
-      setHistoryLoading(false);
-      return undefined;
-    }
-
-    let active = true;
-    setHistory([]);
-    setHistoryLoading(true);
-    promoAPI.getHistory({
+  const { data: historyResponse, isFetching: historyFetching } = useQuery({
+    queryKey: ['promoFormHistory', form.network_name, form.sku, form.mechanics] as const,
+    enabled: historySelectionComplete,
+    queryFn: () => promoAPI.getHistory({
       network_name: form.network_name,
       sku: form.sku,
       mechanics: form.mechanics,
-    }).then(data => {
-      if (active) setHistory(data.data || []);
-    }).catch(() => {
-      if (active) setHistory([]);
-    }).finally(() => {
-      if (active) setHistoryLoading(false);
-    });
+    }),
+  });
 
-    return () => { active = false; };
-  }, [form.network_name, form.sku, form.mechanics, historySelectionComplete]);
+  const history: HistoryRow[] = useMemo(
+    () => (historySelectionComplete ? (historyResponse?.data ?? []) : []),
+    [historySelectionComplete, historyResponse],
+  );
+  const historyLoading = historySelectionComplete && historyFetching;
 
   // Расчёты
   const calculated = useMemo(() => {
@@ -236,7 +302,7 @@ export default function PromoForm({ onSave, onOpenPromo }) {
     const cp = parseFloat(form.contract_price) || 0;
     const bu = parseFloat(form.baseline_units) || 0;
     const pir = parseFloat(form.plan_investments_rub) || 0;
-    const gm = parseFloat(lastSKUData.gm) || 1;
+    const gm = Number(lastSKUData.gm) || 1;
     const month = parseInt(form.month) || 1;
 
     const plan_promo_rub = ppu * cp;
@@ -292,22 +358,22 @@ export default function PromoForm({ onSave, onOpenPromo }) {
       handleReset();
       setSnackbar({ open: true, message: '✅ Промо создано. Форма очищена для следующей записи.', severity: 'success' });
       if (onSave) onSave();
-    } catch (err) {
-      setSnackbar({ open: true, message: '❌ Ошибка: ' + err.message, severity: 'error' });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? err);
+      setSnackbar({ open: true, message: '❌ Ошибка: ' + message, severity: 'error' });
     } finally { setSaving(false); }
   };
 
   const handleReset = () => {
+    // История и справочные данные производны от полей формы: очистка формы
+    // отключает соответствующие запросы и обнуляет их результаты.
     setForm({ ...EMPTY_FORM });
-    setHistory([]);
-    setLastSKUData({});
-    setSkuDataLoading(false);
     setManualOverrides({ contract_price: false, total_pharmacies: false });
   };
 
-  const updateForm = (field) => (value) => setForm(prev => ({ ...prev, [field]: value }));
+  const updateForm = (field: keyof PromoFormState) => (value: string) => setForm(prev => ({ ...prev, [field]: value }));
 
-  const updateManualNumber = (field) => (value) => {
+  const updateManualNumber = (field: keyof ManualOverrides) => (value: string) => {
     setManualOverrides(prev => ({ ...prev, [field]: true }));
     setForm(prev => ({ ...prev, [field]: value }));
   };
@@ -324,11 +390,7 @@ export default function PromoForm({ onSave, onOpenPromo }) {
     })).reverse();
   }, [history]);
 
-  const chartConfig = {
-    units: { planKey: 'plan', factKey: 'fact', planLabel: 'План (уп)', factLabel: 'Факт (уп)' },
-    investments: { planKey: 'planInvestments', factKey: 'factInvestments', planLabel: 'Инвестиции план (руб)', factLabel: 'Инвестиции факт (руб)' },
-    roi: { planKey: 'planRoi', factKey: 'factRoi', planLabel: 'ROI план (%)', factLabel: 'ROI факт (%)' },
-  }[historyMetric];
+  const chartConfig = HISTORY_CHART_CONFIG[historyMetric];
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -362,7 +424,7 @@ export default function PromoForm({ onSave, onOpenPromo }) {
                   <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, mt: 0.5 }}>Параметры промо</Typography>
                   <Autocomplete size="small" options={MONTH_OPTIONS} getOptionLabel={o => o.label}
                     value={MONTH_OPTIONS.find(m => m.value === parseInt(form.month)) || null}
-                    onChange={(_, v) => setForm(prev => ({ ...prev, month: v?.value || '' }))}
+                    onChange={(_, v) => setForm(prev => ({ ...prev, month: v?.value != null ? String(v.value) : '' }))}
                     renderInput={(p) => <TextField {...p} label={requiredLabel('Месяц')} size="small" />} />
                   <TextField label={requiredLabel('Год')} type="number" size="small" fullWidth value={form.year}
                     onChange={(e) => setForm(prev => ({ ...prev, year: e.target.value }))}
