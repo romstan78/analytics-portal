@@ -2,7 +2,6 @@
 // и gin.H в backend/handlers/network.go.
 
 export type NetworkType = 'regular' | 'warehouse';
-export type ContractType = 'regular' | 'gross';
 
 // models.Network
 export interface Network {
@@ -15,7 +14,8 @@ export interface Network {
   updated_at: string;
 }
 
-// models.NetworkPeriod — настройки квартала: НДС (применяется к инвестициям) и тип контракта
+// models.NetworkPeriod — настройки квартала: НДС применяется только к инвестициям.
+// Тип контракта здесь не хранится: валовый объём — свойство бренда (NetworkPlan.in_gross).
 export interface NetworkPeriod {
   id: number;
   network_id: number;
@@ -23,22 +23,28 @@ export interface NetworkPeriod {
   quarter: number;
   vat_included: boolean;
   vat_rate: number;
-  contract_type: ContractType;
   updated_at: string;
 }
 
-// models.NetworkPlan — строка плана; brand_as = null — общий объём валового контракта
+// models.NetworkPlan — строка плана; brand_as = null — общий объём валового контракта (пул),
+// в который входят бренды с in_gross. Остальные бренды планируются отдельно.
 export interface NetworkPlan {
   id: number;
   network_id: number;
   year: number;
   quarter: number;
   brand_as: string | null;
+  in_gross: boolean;
   plan_rub: number | null;
   plan_units: number | null;
+  fact_rub: number | null;
+  forecast_rub: number | null;
+  fact_investments_rub: number | null;
   investments_pct: number | null;
   investments_rub: number | null;
   investments_rub_net: number | null;
+  forecast_investments_rub: number | null;
+  forecast_investments_rub_net: number | null;
   updated_by: string | null;
   updated_at: string;
 }
@@ -47,10 +53,22 @@ export interface NetworkPlan {
 export interface NetworkPlanTotals {
   quarter: number;
   plan_rub: number;
-  gross_plan_rub: number | null;
+  gross_brands_plan: number;
+  separate_plan_rub: number;
+  gross_pool_rub: number | null;
   undistributed: number | null;
+  contract_plan_rub: number;
+  gross_brands_count: number;
+  fact_rub: number;
+  forecast_rub: number;
+  gross_pool_fact_rub: number;
+  gross_pool_forecast_rub: number | null;
   investments_rub: number;
   investments_rub_net: number;
+  forecast_investments_rub: number;
+  forecast_investments_rub_net: number;
+  fact_investments_rub: number;
+  fact_investments_rub_net: number;
 }
 
 // models.NetworkComment
@@ -102,11 +120,14 @@ export interface NetworkPlanSaveResponse {
   totals: NetworkPlanTotals[];
 }
 
-// Строка плана в запросе на сохранение
+// Строка плана в запросе на сохранение.
+// Факта здесь нет: он приходит загрузкой отгрузок и в интерфейсе не правится.
 export interface NetworkPlanInput {
   quarter: number;
   brand_as: string | null;
+  in_gross: boolean;
   plan_rub: number | null;
+  forecast_rub: number | null;
   investments_pct: number | null;
   updated_at: string;
 }
@@ -117,7 +138,6 @@ export interface NetworkPlanSaveRequest {
     quarter: number;
     vat_included: boolean;
     vat_rate: number;
-    contract_type: ContractType;
   }>;
   plans: NetworkPlanInput[];
 }

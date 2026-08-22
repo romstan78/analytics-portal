@@ -33,7 +33,6 @@ export const networkAPI = {
     name: string;
     kam?: string;
     network_type: string;
-    contract_type?: string;
     vat_included?: boolean;
     vat_rate?: number;
     year?: number;

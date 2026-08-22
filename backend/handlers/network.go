@@ -67,10 +67,6 @@ func validNetworkType(t string) bool {
 	return t == "regular" || t == "warehouse"
 }
 
-func validContractType(t string) bool {
-	return t == "regular" || t == "gross"
-}
-
 // respondNetworkError переводит ошибки репозитория в HTTP-коды.
 func respondNetworkError(c *gin.Context, err error, logEvent string) {
 	switch {
@@ -110,7 +106,6 @@ type networkInput struct {
 	UpdatedAt   string  `json:"updated_at"`
 	VATIncluded *bool   `json:"vat_included"` // настройки первого периода
 	VATRate     float64 `json:"vat_rate"`
-	Contract    string  `json:"contract_type"`
 	Year        int     `json:"year"`
 }
 
@@ -133,13 +128,6 @@ func CreateNetwork(c *gin.Context) {
 	}
 	if !validNetworkType(input.NetworkType) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Тип сети: regular или warehouse"})
-		return
-	}
-	if input.Contract == "" {
-		input.Contract = "regular"
-	}
-	if !validContractType(input.Contract) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Тип контракта: regular или gross"})
 		return
 	}
 
@@ -166,7 +154,7 @@ func CreateNetwork(c *gin.Context) {
 		periods := make([]models.NetworkPeriod, 0, 4)
 		for q := 1; q <= 4; q++ {
 			periods = append(periods, models.NetworkPeriod{
-				Quarter: q, VATIncluded: vatIncluded, VATRate: vatRate, ContractType: input.Contract,
+				Quarter: q, VATIncluded: vatIncluded, VATRate: vatRate,
 			})
 		}
 		if _, err := repository.SaveNetworkPlan(repository.SaveNetworkPlanInput{
@@ -295,10 +283,9 @@ func GetNetworkPlan(c *gin.Context) {
 type savePlanInput struct {
 	Year    int `json:"year"`
 	Periods []struct {
-		Quarter      int     `json:"quarter"`
-		VATIncluded  bool    `json:"vat_included"`
-		VATRate      float64 `json:"vat_rate"`
-		ContractType string  `json:"contract_type"`
+		Quarter     int     `json:"quarter"`
+		VATIncluded bool    `json:"vat_included"`
+		VATRate     float64 `json:"vat_rate"`
 	} `json:"periods"`
 	Plans []repository.NetworkPlanInput `json:"plans"`
 }
@@ -326,16 +313,12 @@ func SaveNetworkPlan(c *gin.Context) {
 
 	periods := make([]models.NetworkPeriod, 0, len(input.Periods))
 	for _, p := range input.Periods {
-		if !validContractType(p.ContractType) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Тип контракта: regular или gross"})
-			return
-		}
 		if p.VATRate < 0 || p.VATRate >= 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Ставка НДС вне диапазона"})
 			return
 		}
 		periods = append(periods, models.NetworkPeriod{
-			Quarter: p.Quarter, VATIncluded: p.VATIncluded, VATRate: p.VATRate, ContractType: p.ContractType,
+			Quarter: p.Quarter, VATIncluded: p.VATIncluded, VATRate: p.VATRate,
 		})
 	}
 

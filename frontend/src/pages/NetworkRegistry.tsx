@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  IconButton,
   InputAdornment,
   List,
   ListItemButton,
@@ -24,11 +25,14 @@ import {
   Tab,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import {
   Add as AddIcon,
   ArrowBack as ArrowBackIcon,
+  Menu as MenuIcon,
+  MenuOpen as MenuOpenIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
@@ -48,10 +52,12 @@ const YEARS = [new Date().getFullYear() - 1, new Date().getFullYear(), new Date(
 
 const FIELD_LABELS: Record<string, string> = {
   plan_rub: 'План, ₽',
+  forecast_rub: 'Прогноз, ₽',
+  fact_rub: 'Факт, ₽',
   investments_pct: 'Инвестиции, %',
+  in_gross: 'Валовый объём',
   vat_included: 'НДС',
   vat_rate: 'Ставка НДС',
-  contract_type: 'Тип контракта',
   period: 'Квартал открыт',
   name: 'Название',
   network_type: 'Тип сети',
@@ -62,7 +68,6 @@ const FIELD_LABELS: Record<string, string> = {
 const TYPE_LABELS: Record<string, string> = {
   regular: 'Обычная',
   warehouse: 'Складская',
-  gross: 'Валовый',
 };
 
 // Значения в истории приходят разных типов: суммы, флаги, коды.
@@ -70,9 +75,10 @@ function formatAuditValue(field: string, value: unknown): string {
   if (value == null || value === '') return '—';
   if (field === 'vat_included') return value ? 'с НДС' : 'без НДС';
   if (field === 'is_active') return value ? 'активна' : 'скрыта';
-  if (field === 'contract_type' || field === 'network_type') return TYPE_LABELS[String(value)] ?? String(value);
+  if (field === 'in_gross') return value ? 'в валовом объёме' : 'отдельно';
+  if (field === 'network_type') return TYPE_LABELS[String(value)] ?? String(value);
   if (field === 'investments_pct' || field === 'vat_rate') return formatPct(Number(value));
-  if (field === 'plan_rub') return formatRub(Number(value));
+  if (field === 'plan_rub' || field === 'forecast_rub' || field === 'fact_rub') return formatRub(Number(value));
   return String(value);
 }
 
@@ -124,6 +130,8 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const canEdit = role === 'admin' || role === 'kam';
 
   const [search, setSearch] = useState('');
+  // Список сетей сворачивается: выбрав сеть, всю ширину отдаём таблице планов.
+  const [listOpen, setListOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [year, setYear] = useState(new Date().getFullYear());
   const [tab, setTab] = useState(0);
@@ -234,19 +242,28 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     return keys;
   }, [comments, year]);
 
+  // Валовый объём применяется к брендам, поэтому подпись считается по строкам
+  // плана: сколько брендов года отнесено к общему объёму контракта.
   const contractLabel = useMemo(() => {
-    const periods = planQuery.data?.periods ?? [];
-    if (periods.length === 0) return null;
-    const gross = periods.filter((p) => p.contract_type === 'gross').length;
-    if (gross === 0) return 'обычный контракт';
-    if (gross === periods.length) return 'валовый контракт';
-    return 'смешанный контракт';
+    const plans = planQuery.data?.plans ?? [];
+    const withBrand = plans.filter((p) => p.brand_as);
+    if (withBrand.length === 0) return null;
+    const grossBrands = new Set(withBrand.filter((p) => p.in_gross).map((p) => p.brand_as));
+    const allBrands = new Set(withBrand.map((p) => p.brand_as));
+    if (grossBrands.size === 0) return 'без валового объёма';
+    if (grossBrands.size === allBrands.size) return 'все бренды в валовом объёме';
+    return `в валовом объёме: ${grossBrands.size} из ${allBrands.size}`;
   }, [planQuery.data]);
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1600, mx: 'auto', width: '100%' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1760, mx: 'auto', width: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
+        <Tooltip title={listOpen ? 'Свернуть список сетей' : 'Показать список сетей'}>
+          <IconButton size="small" onClick={() => setListOpen((open) => !open)}>
+            {listOpen ? <MenuOpenIcon /> : <MenuIcon />}
+          </IconButton>
+        </Tooltip>
         <Typography variant="h5">Реестр сетей</Typography>
         <Box sx={{ flex: 1 }} />
         {canEdit && (
@@ -256,9 +273,16 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
         )}
       </Box>
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '280px 1fr' }, gap: 3, alignItems: 'start' }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: listOpen ? '260px minmax(0, 1fr)' : 'minmax(0, 1fr)' },
+          gap: 2,
+          alignItems: 'start',
+        }}
+      >
         {/* Список сетей */}
-        <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Paper variant="outlined" sx={{ p: 1.5, display: listOpen ? 'block' : 'none' }}>
           <TextField
             fullWidth
             placeholder="Поиск сети"
@@ -298,7 +322,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
         </Paper>
 
         {/* Карточка сети */}
-        <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, minHeight: 420 }}>
+        <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2.5 }, minHeight: 420, minWidth: 0 }}>
           {!selected && (
             <Typography variant="body1" color="text.secondary">
               Выберите сеть слева, чтобы открыть планы, комментарии и историю изменений.

@@ -142,7 +142,7 @@ func nullIfEmpty(v string) interface{} {
 // GetNetworkPeriods возвращает квартальные настройки сети за год.
 func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 	rows, err := config.DB.Query(
-		`SELECT id, network_id, [year], [quarter], vat_included, vat_rate, contract_type,
+		`SELECT id, network_id, [year], [quarter], vat_included, vat_rate,
 			CONVERT(NVARCHAR, updated_at, 121)
 		 FROM dbo.tbl_NetworkPeriods WHERE network_id = ? AND [year] = ? ORDER BY [quarter]`,
 		networkID, year,
@@ -156,7 +156,7 @@ func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 	for rows.Next() {
 		var p models.NetworkPeriod
 		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.VATIncluded,
-			&p.VATRate, &p.ContractType, &p.UpdatedAt); err != nil {
+			&p.VATRate, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, p)
@@ -167,9 +167,9 @@ func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) error {
 	res, err := tx.Exec(
 		`UPDATE dbo.tbl_NetworkPeriods
-		 SET vat_included = ?, vat_rate = ?, contract_type = ?, updated_at = GETDATE()
+		 SET vat_included = ?, vat_rate = ?, updated_at = GETDATE()
 		 WHERE network_id = ? AND [year] = ? AND [quarter] = ?`,
-		p.VATIncluded, p.VATRate, p.ContractType, networkID, year, p.Quarter,
+		p.VATIncluded, p.VATRate, networkID, year, p.Quarter,
 	)
 	if err != nil {
 		return err
@@ -182,9 +182,9 @@ func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) err
 		return nil
 	}
 	_, err = tx.Exec(
-		`INSERT INTO dbo.tbl_NetworkPeriods (network_id, [year], [quarter], vat_included, vat_rate, contract_type)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		networkID, year, p.Quarter, p.VATIncluded, p.VATRate, p.ContractType,
+		`INSERT INTO dbo.tbl_NetworkPeriods (network_id, [year], [quarter], vat_included, vat_rate)
+		 VALUES (?, ?, ?, ?, ?)`,
+		networkID, year, p.Quarter, p.VATIncluded, p.VATRate,
 	)
 	return err
 }
@@ -194,8 +194,9 @@ func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) err
 // GetNetworkPlans возвращает строки плана сети за год.
 func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	rows, err := config.DB.Query(
-		`SELECT id, network_id, [year], [quarter], brand_as, plan_rub, plan_units,
-			investments_pct, updated_by, CONVERT(NVARCHAR, updated_at, 121)
+		`SELECT id, network_id, [year], [quarter], brand_as, in_gross, plan_rub, plan_units,
+			fact_rub, forecast_rub, investments_pct, fact_investments_rub, updated_by,
+			CONVERT(NVARCHAR, updated_at, 121)
 		 FROM dbo.tbl_NetworkPlans WHERE network_id = ? AND [year] = ?
 		 ORDER BY [quarter], brand_as`,
 		networkID, year,
@@ -208,8 +209,9 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	result := []models.NetworkPlan{}
 	for rows.Next() {
 		var p models.NetworkPlan
-		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.BrandAS,
-			&p.PlanRub, &p.PlanUnits, &p.InvestmentsPct, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.BrandAS, &p.InGross,
+			&p.PlanRub, &p.PlanUnits, &p.FactRub, &p.ForecastRub, &p.InvestmentsPct,
+			&p.FactInvestmentsRub, &p.UpdatedBy, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, p)
@@ -219,10 +221,13 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 
 // NetworkPlanInput — строка плана из запроса на сохранение.
 // UpdatedAt — версия строки, полученная клиентом при чтении (для 409).
+// FactRub в запросе нет: факт приходит загрузкой отгрузок, интерфейс его не правит.
 type NetworkPlanInput struct {
 	Quarter        int      `json:"quarter"`
 	BrandAS        *string  `json:"brand_as"`
+	InGross        bool     `json:"in_gross"`
 	PlanRub        *float64 `json:"plan_rub"`
+	ForecastRub    *float64 `json:"forecast_rub"`
 	InvestmentsPct *float64 `json:"investments_pct"`
 	UpdatedAt      string   `json:"updated_at"`
 }
@@ -294,11 +299,8 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			if old.VATRate != p.VATRate {
 				changes = append(changes, planChange{Quarter: p.Quarter, Field: "vat_rate", Old: old.VATRate, New: p.VATRate})
 			}
-			if old.ContractType != p.ContractType {
-				changes = append(changes, planChange{Quarter: p.Quarter, Field: "contract_type", Old: old.ContractType, New: p.ContractType})
-			}
 		} else {
-			changes = append(changes, planChange{Quarter: p.Quarter, Field: "period", Old: nil, New: p.ContractType})
+			changes = append(changes, planChange{Quarter: p.Quarter, Field: "period", Old: nil, New: true})
 		}
 		if err := upsertPeriodTx(tx, in.NetworkID, in.Year, p); err != nil {
 			return "", err
@@ -314,6 +316,13 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		}
 		if p.PlanRub != nil && *p.PlanRub < 0 {
 			return "", fmt.Errorf("план не может быть отрицательным: %.2f", *p.PlanRub)
+		}
+		if p.ForecastRub != nil && *p.ForecastRub < 0 {
+			return "", fmt.Errorf("прогноз не может быть отрицательным: %.2f", *p.ForecastRub)
+		}
+		// Пул сам в себя не входит: признак валового объёма — только у бренда.
+		if p.BrandAS == nil {
+			p.InGross = false
 		}
 
 		key := planKey(p.Quarter, p.BrandAS)
@@ -331,14 +340,21 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			if !floatPtrEqual(old.PlanRub, p.PlanRub) {
 				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "plan_rub", Old: floatPtrValue(old.PlanRub), New: floatPtrValue(p.PlanRub)})
 			}
+			if !floatPtrEqual(old.ForecastRub, p.ForecastRub) {
+				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "forecast_rub", Old: floatPtrValue(old.ForecastRub), New: floatPtrValue(p.ForecastRub)})
+			}
 			if !floatPtrEqual(old.InvestmentsPct, p.InvestmentsPct) {
 				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "investments_pct", Old: floatPtrValue(old.InvestmentsPct), New: floatPtrValue(p.InvestmentsPct)})
 			}
+			if old.InGross != p.InGross {
+				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "in_gross", Old: old.InGross, New: p.InGross})
+			}
 			if _, err := tx.Exec(
 				`UPDATE dbo.tbl_NetworkPlans
-				 SET plan_rub = ?, investments_pct = ?, updated_by = ?, updated_at = GETDATE()
+				 SET plan_rub = ?, forecast_rub = ?, investments_pct = ?, in_gross = ?,
+					 updated_by = ?, updated_at = GETDATE()
 				 WHERE id = ?`,
-				p.PlanRub, p.InvestmentsPct, in.UserName, old.ID,
+				p.PlanRub, p.ForecastRub, p.InvestmentsPct, p.InGross, in.UserName, old.ID,
 			); err != nil {
 				return "", err
 			}
@@ -346,14 +362,18 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		}
 
 		// Пустую строку не заводим — так удаление значения не плодит мусор.
-		if p.PlanRub == nil && p.InvestmentsPct == nil {
+		// Признак валового объёма сам по себе строку тоже создаёт: бренд отнесли
+		// к пулу до того, как появились суммы.
+		if p.PlanRub == nil && p.ForecastRub == nil && p.InvestmentsPct == nil && !p.InGross {
 			continue
 		}
 		changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "plan_rub", Old: nil, New: floatPtrValue(p.PlanRub)})
 		if _, err := tx.Exec(
-			`INSERT INTO dbo.tbl_NetworkPlans (network_id, [year], [quarter], brand_as, plan_rub, investments_pct, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			in.NetworkID, in.Year, p.Quarter, p.BrandAS, p.PlanRub, p.InvestmentsPct, in.UserName,
+			`INSERT INTO dbo.tbl_NetworkPlans (network_id, [year], [quarter], brand_as, in_gross,
+				plan_rub, forecast_rub, investments_pct, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			in.NetworkID, in.Year, p.Quarter, p.BrandAS, p.InGross,
+			p.PlanRub, p.ForecastRub, p.InvestmentsPct, in.UserName,
 		); err != nil {
 			return "", err
 		}
