@@ -21,7 +21,23 @@ const salesTable = "dbo.tbl_EcomSalesNormalized"
 const salesRowColumns = `n.id, n.[year], n.[month], n.brandName, n.productName,
 	n.networkName, n.metric_type, n.metric_value, n.un_rub, n.segment, n.channel, n.updated_at`
 
-const salesRowOrder = " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type"
+// salesRowOrder — порядок выборки строк интернет-продаж.
+// Тай-брейк по первичному ключу n.id обязателен: year/month/metric_type
+// совпадают у множества строк, и без него SQL Server волен возвращать их
+// в произвольном, меняющемся между запросами порядке. При постраничном
+// просмотре OFFSET/FETCH применяется к каждый раз новому порядку, поэтому
+// одна строка может попасть на две страницы, а другая — ни на одну.
+const salesRowOrder = " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type, n.id"
+
+// salesDrilldownGroupBy — группировка агрегатов drilldown.
+const salesDrilldownGroupBy = " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel"
+
+// salesDrilldownOrder — порядок выборки агрегатов drilldown.
+// n.id здесь неприменим: запрос агрегирующий, в ORDER BY допустимы только
+// колонки из GROUP BY (salesDrilldownGroupBy). Полный набор колонок
+// группировки уникален для каждой строки результата и задаёт стабильный
+// порядок без обращения к первичному ключу.
+const salesDrilldownOrder = " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type, n.un_rub, n.segment, n.channel"
 
 // salesDimensionColumns — колонки, которые разрешено подставлять в SQL как имя
 // измерения. Значение приходит из query-параметров, поэтому список закрытый.
@@ -375,7 +391,7 @@ func SalesDrilldown(f SalesFilter) ([]models.DrilldownRow, error) {
 	where, args := BuildSalesWhere(f)
 	query := `SELECT n.[year], n.[month], n.metric_type, SUM(n.metric_value) AS total_value,
 		n.un_rub, n.segment, n.channel FROM ` + salesTable + ` n` + where +
-		` GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel` + salesRowOrder
+		salesDrilldownGroupBy + salesDrilldownOrder
 
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {

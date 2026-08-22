@@ -70,3 +70,69 @@ func TestPlaceholders(t *testing.T) {
 		t.Fatalf("placeholders(3) = %q, want \"?,?,?\"", got)
 	}
 }
+
+// orderColumns разбирает ORDER BY-константу на список колонок без направления сортировки.
+func orderColumns(t *testing.T, order string) []string {
+	t.Helper()
+
+	const prefix = " ORDER BY "
+	if !strings.HasPrefix(order, prefix) {
+		t.Fatalf("порядок сортировки не начинается с %q: %q", prefix, order)
+	}
+
+	var cols []string
+	for _, part := range strings.Split(strings.TrimPrefix(order, prefix), ",") {
+		col := strings.TrimSpace(part)
+		col = strings.TrimSuffix(col, " DESC")
+		col = strings.TrimSuffix(col, " ASC")
+		cols = append(cols, strings.TrimSpace(col))
+	}
+	return cols
+}
+
+// Без тай-брейка по первичному ключу строки с одинаковыми year/month/metric_type
+// возвращаются в произвольном порядке, и OFFSET/FETCH в SalesRowsPage дублирует
+// одни строки между страницами, теряя другие.
+func TestSalesRowOrderHasPrimaryKeyTiebreak(t *testing.T) {
+	cols := orderColumns(t, salesRowOrder)
+
+	want := []string{"n.[year]", "n.[month]", "n.metric_type", "n.id"}
+	if !reflect.DeepEqual(cols, want) {
+		t.Fatalf("колонки ORDER BY = %v, want %v", cols, want)
+	}
+	if !strings.Contains(salesRowOrder, "n.[year] DESC") || !strings.Contains(salesRowOrder, "n.[month] ASC") {
+		t.Fatalf("направление сортировки по году/месяцу изменилось: %q", salesRowOrder)
+	}
+}
+
+// В агрегирующем запросе drilldown первичный ключ недоступен, поэтому стабильность
+// обеспечивают все колонки группировки — каждая из них обязана быть в GROUP BY,
+// иначе SQL Server отвергнет запрос.
+func TestSalesDrilldownOrderIsCoveredByGroupBy(t *testing.T) {
+	if strings.Contains(salesDrilldownOrder, "n.id") {
+		t.Fatalf("n.id не входит в GROUP BY и недопустим в ORDER BY drilldown: %q", salesDrilldownOrder)
+	}
+
+	const groupPrefix = " GROUP BY "
+	if !strings.HasPrefix(salesDrilldownGroupBy, groupPrefix) {
+		t.Fatalf("группировка не начинается с %q: %q", groupPrefix, salesDrilldownGroupBy)
+	}
+
+	grouped := make(map[string]bool)
+	for _, part := range strings.Split(strings.TrimPrefix(salesDrilldownGroupBy, groupPrefix), ",") {
+		grouped[strings.TrimSpace(part)] = true
+	}
+
+	ordered := orderColumns(t, salesDrilldownOrder)
+	for _, col := range ordered {
+		if !grouped[col] {
+			t.Fatalf("колонка %q есть в ORDER BY, но отсутствует в GROUP BY %q", col, salesDrilldownGroupBy)
+		}
+	}
+
+	// Тай-брейк полон только если сортировка покрывает всю группировку:
+	// иначе у строк совпадут все ключи сортировки и порядок снова поплывёт.
+	if len(ordered) != len(grouped) {
+		t.Fatalf("ORDER BY покрывает %d из %d колонок GROUP BY: %q", len(ordered), len(grouped), salesDrilldownOrder)
+	}
+}
