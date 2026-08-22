@@ -170,6 +170,32 @@ export function buildDraft(plans: NetworkPlan[]): Record<string, DraftCell> {
   return draft;
 }
 
+// Перенос объёмов бренда в строку валового пула и обратно.
+//
+// Это не расчёт показателя, а правка введённых значений: бренд, выведенный из
+// валового объёма, уносит из пула свой объём, переведённый в пул — приносит.
+// Так переклассификация бренда не меняет ни обязательство по контракту, ни
+// остаток к распределению: те же рубли просто считаются в другой части.
+//
+// Пустой пул не заполняем: там, где валовый объём не ведут, двигать нечего.
+// Ниже нуля пул не опускаем — отрицательный объём бэкенд не примет, а ноль
+// сразу показывает, что бренды разобрали больше, чем в пуле было.
+export function shiftGrossPool(pool: DraftCell | undefined, brand: DraftCell, intoGross: boolean): DraftCell {
+  const base = pool ?? EMPTY_CELL;
+  const sign = intoGross ? 1 : -1;
+  const shift = (poolValue: string, brandValue: string): string => {
+    const current = parseNumberInput(poolValue);
+    const delta = parseNumberInput(brandValue);
+    if (current == null || delta == null) return poolValue;
+    return formatNumberInput(String(Math.max(0, round2(current + sign * delta))));
+  };
+  return {
+    ...base,
+    planRub: shift(base.planRub, brand.planRub),
+    forecastRub: shift(base.forecastRub, brand.forecastRub),
+  };
+}
+
 // Настройки кварталов: у года, который ещё не открывали, берутся значения по умолчанию.
 export function buildSettings(periods: NetworkPeriod[], fallback: QuarterSettings): Record<number, QuarterSettings> {
   const settings: Record<number, QuarterSettings> = {};

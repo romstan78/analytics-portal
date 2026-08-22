@@ -56,6 +56,7 @@ const FIELD_LABELS: Record<string, string> = {
   fact_rub: 'Факт, ₽',
   investments_pct: 'Инвестиции, %',
   in_gross: 'Валовый объём',
+  brand: 'Бренд в плане',
   vat_included: 'НДС',
   vat_rate: 'Ставка НДС',
   period: 'Квартал открыт',

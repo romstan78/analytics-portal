@@ -33,6 +33,7 @@ import {
   parseNumberInput,
   planKey,
   round2,
+  shiftGrossPool,
 } from '../utils/networkPlan';
 import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
@@ -106,9 +107,16 @@ export default function NetworkPlanGrid({
       // Строку пула отправляем всегда: пустая новая не создастся, а существующая
       // очистится, если валовый объём в квартале отменили.
       const rowBrands: Array<string | null> = [null, ...brands];
-      // Бренд убрали из таблицы, но строка есть в БД — отправляем пустые значения.
+      // Бренд убрали из таблицы: строку с фактом отправляем пустой — значения
+      // снимутся, а факт из отгрузок останется. Строку без факта не отправляем
+      // вовсе: её отсутствие в запросе и есть удаление бренда из плана года.
       data.plans.forEach((plan) => {
-        if (plan.quarter === quarter && plan.brand_as && !brands.includes(plan.brand_as)) {
+        if (
+          plan.quarter === quarter &&
+          plan.brand_as &&
+          !brands.includes(plan.brand_as) &&
+          (plan.fact_rub != null || plan.fact_investments_rub != null)
+        ) {
           rowBrands.push(plan.brand_as);
         }
       });
@@ -174,14 +182,20 @@ export default function NetworkPlanGrid({
     setDirty(true);
   };
 
-  // Признак валового объёма живёт на строке бренд+квартал.
+  // Признак валового объёма живёт на строке бренд+квартал; вместе с ним
+  // двигается и сам пул — объём бренда переходит из общего в отдельный и обратно.
   const toggleGross = (brand: string, next: boolean, allQuarters: boolean, quarter?: number) => {
     const target = allQuarters ? [...QUARTERS] : [quarter ?? (period === 'year' ? 1 : period)];
     setDraft((prev) => {
       const updated = { ...prev };
       target.forEach((q) => {
         const key = planKey(q, brand);
-        updated[key] = { ...(updated[key] ?? EMPTY_CELL), inGross: next };
+        const cell = updated[key] ?? EMPTY_CELL;
+        // Квартал уже в нужном состоянии: пул не трогаем, иначе объём бренда
+        // ушёл бы из него дважды. «Ко всем кварталам» проходит и по таким.
+        if (cell.inGross === next) return;
+        updated[key] = { ...cell, inGross: next };
+        updated[planKey(q, null)] = shiftGrossPool(updated[planKey(q, null)], cell, next);
       });
       return updated;
     });
@@ -355,7 +369,10 @@ export default function NetworkPlanGrid({
       <Typography variant="caption" color="text.secondary">
         Объёмы вводятся в рублях и от НДС не зависят. Валовый объём применяется к брендам:
         отнесённые к нему бренды распределяют общий объём контракта, остальные планируются
-        отдельно и в остаток не попадают. Инвестиции по плану и по прогнозу считаются одним
+        отдельно и в остаток не попадают. Перевод бренда в валовый объём и обратно двигает
+        и сам объём контракта на величину плана и прогноза бренда, поэтому обязательство
+        по контракту и остаток к распределению от переклассификации не меняются.
+        Инвестиции по плану и по прогнозу считаются одним
         процентом, факт инвестиций приходит суммой и процентом не пересчитывается. Сумма
         с вычетом НДС по ставке квартала показывается в подсказке ячейки. Факт объёма
         и факт инвестиций загружаются из отгрузок и в форме не редактируются.

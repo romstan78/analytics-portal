@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   EMPTY_AMOUNTS,
+  EMPTY_CELL,
   amountsOfPlan,
   buildAmounts,
   deltaPct,
@@ -8,6 +9,7 @@ import {
   formatSignedPct,
   parseNumberInput,
   planKey,
+  shiftGrossPool,
 } from './networkPlan';
 import type { NetworkPlan } from '../types/network';
 
@@ -93,5 +95,49 @@ describe('amountsOfPlan', () => {
     ]);
     expect(amounts[planKey(2, 'Бета')].plan).toBe(500);
     expect(amounts[planKey(1, null)].plan).toBe(900);
+  });
+});
+
+describe('shiftGrossPool', () => {
+  const cell = (patch: Partial<typeof EMPTY_CELL>) => ({ ...EMPTY_CELL, ...patch });
+
+  it('вывод бренда уменьшает пул на его объём', () => {
+    const pool = shiftGrossPool(cell({ planRub: '10 000 000' }), cell({ planRub: '1 500 000' }), false);
+    expect(parseNumberInput(pool.planRub)).toBe(8_500_000);
+  });
+
+  it('перевод бренда в пул увеличивает пул на его объём', () => {
+    const pool = shiftGrossPool(cell({ planRub: '8 500 000' }), cell({ planRub: '1 500 000' }), true);
+    expect(parseNumberInput(pool.planRub)).toBe(10_000_000);
+  });
+
+  it('двигает и прогноз, и план', () => {
+    const pool = shiftGrossPool(
+      cell({ planRub: '1 000', forecastRub: '900' }),
+      cell({ planRub: '100', forecastRub: '90' }),
+      false,
+    );
+    expect(parseNumberInput(pool.planRub)).toBe(900);
+    expect(parseNumberInput(pool.forecastRub)).toBe(810);
+  });
+
+  it('пустой пул не заполняет: валовый объём в квартале не ведут', () => {
+    const pool = shiftGrossPool(undefined, cell({ planRub: '500' }), true);
+    expect(pool.planRub).toBe('');
+  });
+
+  it('пустой объём бренда пул не меняет', () => {
+    const pool = shiftGrossPool(cell({ planRub: '1 000' }), EMPTY_CELL, false);
+    expect(pool.planRub).toBe('1 000');
+  });
+
+  it('ниже нуля пул не опускается', () => {
+    const pool = shiftGrossPool(cell({ planRub: '1 000' }), cell({ planRub: '1 500' }), false);
+    expect(parseNumberInput(pool.planRub)).toBe(0);
+  });
+
+  it('признак валового объёма самой строки пула не трогает', () => {
+    const pool = shiftGrossPool(cell({ planRub: '1 000', inGross: false }), cell({ planRub: '100' }), true);
+    expect(pool.inGross).toBe(false);
   });
 });

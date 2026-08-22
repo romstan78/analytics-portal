@@ -259,8 +259,48 @@ type planChange struct {
 	New     interface{} `json:"new"`
 }
 
+// planRowsToWrite раскладывает пришедшую сетку на строки для записи и строки,
+// которые из плана года убраны.
+//
+// Запрос — это вся сетка года, поэтому бренда нет в запросе ровно тогда, когда
+// его убрали из плана. Строку с фактом при этом не удаляем: факт приходит
+// загрузкой отгрузок, а не из формы, — такую строку дописываем в запрос пустой,
+// чтобы значения снялись, а факт остался. Пустой запрос не убирает ничего:
+// год не переписывается вслепую.
+func planRowsToWrite(
+	incoming []NetworkPlanInput,
+	existing []models.NetworkPlan,
+) (write []NetworkPlanInput, remove []models.NetworkPlan) {
+	write = append(make([]NetworkPlanInput, 0, len(incoming)), incoming...)
+	if len(incoming) == 0 {
+		return write, nil
+	}
+
+	sent := make(map[string]bool, len(incoming))
+	for _, p := range incoming {
+		sent[planKey(p.Quarter, p.BrandAS)] = true
+	}
+	for _, old := range existing {
+		if old.BrandAS == nil || sent[planKey(old.Quarter, old.BrandAS)] {
+			continue
+		}
+		if old.FactRub != nil || old.FactInvestmentsRub != nil {
+			write = append(write, NetworkPlanInput{
+				Quarter: old.Quarter, BrandAS: old.BrandAS, UpdatedAt: old.UpdatedAt,
+			})
+			continue
+		}
+		remove = append(remove, old)
+	}
+	return write, remove
+}
+
 // SaveNetworkPlan сохраняет периоды и строки плана одной транзакцией
 // и возвращает JSON изменений для аудит-лога (пустая строка — изменений нет).
+//
+// Строка бренда есть в БД ровно тогда, когда бренд ведут в плане года: поэтому
+// пустая строка бренда заводится, а сохранённая строка, которой в запросе нет,
+// удаляется.
 func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 	existing, err := GetNetworkPlans(in.NetworkID, in.Year)
 	if err != nil {
@@ -279,6 +319,8 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 	for _, p := range oldPeriods {
 		oldPeriodByQuarter[p.Quarter] = p
 	}
+
+	writePlans, removePlans := planRowsToWrite(in.Plans, existing)
 
 	tx, err := config.DB.Begin()
 	if err != nil {
@@ -307,7 +349,7 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		}
 	}
 
-	for _, p := range in.Plans {
+	for _, p := range writePlans {
 		if p.Quarter < 1 || p.Quarter > 4 {
 			return "", fmt.Errorf("некорректный квартал: %d", p.Quarter)
 		}
@@ -361,13 +403,28 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			continue
 		}
 
-		// Пустую строку не заводим — так удаление значения не плодит мусор.
-		// Признак валового объёма сам по себе строку тоже создаёт: бренд отнесли
-		// к пулу до того, как появились суммы.
-		if p.PlanRub == nil && p.ForecastRub == nil && p.InvestmentsPct == nil && !p.InGross {
+		// Строка бренда заводится и пустой: её наличие и есть признак того, что
+		// бренд ведут в плане года. Иначе бренд, добавленный до того, как в нём
+		// появились суммы, пропадал бы из формы после сохранения.
+		// Пул без сумм не заводим: общий объём контракта — это и есть сумма.
+		if p.BrandAS == nil && p.PlanRub == nil && p.ForecastRub == nil && p.InvestmentsPct == nil {
 			continue
 		}
-		changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "plan_rub", Old: nil, New: floatPtrValue(p.PlanRub)})
+		if p.BrandAS != nil {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "brand", Old: nil, New: brandLabel})
+		}
+		if p.PlanRub != nil {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "plan_rub", Old: nil, New: floatPtrValue(p.PlanRub)})
+		}
+		if p.ForecastRub != nil {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "forecast_rub", Old: nil, New: floatPtrValue(p.ForecastRub)})
+		}
+		if p.InvestmentsPct != nil {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "investments_pct", Old: nil, New: floatPtrValue(p.InvestmentsPct)})
+		}
+		if p.InGross {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "in_gross", Old: false, New: true})
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO dbo.tbl_NetworkPlans (network_id, [year], [quarter], brand_as, in_gross,
 				plan_rub, forecast_rub, investments_pct, updated_by)
@@ -375,6 +432,17 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			in.NetworkID, in.Year, p.Quarter, p.BrandAS, p.InGross,
 			p.PlanRub, p.ForecastRub, p.InvestmentsPct, in.UserName,
 		); err != nil {
+			return "", err
+		}
+	}
+
+	// Бренд убрали из плана года — строка уходит целиком: пока она есть,
+	// форма показывает бренд снова.
+	for _, old := range removePlans {
+		changes = append(changes, planChange{
+			Quarter: old.Quarter, Brand: *old.BrandAS, Field: "brand", Old: *old.BrandAS, New: nil,
+		})
+		if _, err := tx.Exec(`DELETE FROM dbo.tbl_NetworkPlans WHERE id = ?`, old.ID); err != nil {
 			return "", err
 		}
 	}
