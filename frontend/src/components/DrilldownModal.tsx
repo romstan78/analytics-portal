@@ -11,7 +11,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { salesAPI } from '../api/promo';
-import type { DrilldownRow } from '../types/sales';
+import { drilldownSeriesLabel, prepareDrilldownChartData, type DrilldownChartPoint } from '../utils/drilldownChart';
 
 const COLORS = [
   '#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#a4de6c',
@@ -22,12 +22,18 @@ const COLORS = [
 interface DrilldownRowData {
   brandName?: string;
   networkName?: string;
+  productName?: string;
+  metricType?: string;
+  un_rub?: string;
 }
 
 interface AppliedFilters {
   yearFrom?: string;
   yearTo?: string;
   months?: number[];
+  quarters?: number[];
+  productName?: string[];
+  un_rub?: string[];
   segment?: string[];
   channel?: string[];
 }
@@ -55,6 +61,9 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
       yearFrom: appliedFilters.yearFrom,
       yearTo: appliedFilters.yearTo,
       months: appliedFilters.months,
+      quarters: appliedFilters.quarters,
+      productName: appliedFilters.productName,
+      un_rub: appliedFilters.un_rub,
       segment: appliedFilters.segment,
       channel: appliedFilters.channel,
     }),
@@ -63,15 +72,15 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
   const data = useMemo(() => response?.data ?? [], [response]);
   const error = queryError ? (queryError instanceof Error ? queryError.message : String(queryError)) : null;
 
-  const chartData = prepareChartData(data);
+  const chartData = prepareDrilldownChartData(data);
 
   const columns: GridColDef[] = [
     { field: 'year', headerName: 'Год', width: 80, type: 'number', valueFormatter: (value: number) => value },
-    { field: 'month', headerName: 'Месяц', width: 80, type: 'number' },
+    { field: 'month', headerName: 'Месяц', width: 110, type: 'number', valueFormatter: (value: number) => new Intl.DateTimeFormat('ru-RU', { month: 'short' }).format(new Date(2026, value - 1, 1)) },
     { field: 'metricType', headerName: 'Показатель', width: 130 },
     { field: 'totalValue', headerName: 'Значение', width: 140, type: 'number',
       valueFormatter: (value: number | null) => value != null ? Number(value).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
-    { field: 'un_rub', headerName: 'Уп/Руб', width: 90 },
+    { field: 'un_rub', headerName: 'Единица', width: 90, valueFormatter: (value: string | null) => value === 'уп' ? 'шт.' : value || '' },
     { field: 'segment', headerName: 'Сегмент', width: 140 },
     { field: 'channel', headerName: 'Канал', width: 140 },
   ];
@@ -86,6 +95,7 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
           <Typography variant="body2" color="text.secondary">
             Сеть: {rowData.networkName}
             {appliedFilters.yearFrom && ` • Годы: ${appliedFilters.yearFrom}${appliedFilters.yearTo ? `–${appliedFilters.yearTo}` : '+'}`}
+            {appliedFilters.quarters?.length ? ` • ${appliedFilters.quarters.map(value => `Q${value}`).join(', ')}` : ''}
           </Typography>
         </Box>
         <IconButton onClick={onClose} size="small"><CloseIcon /></IconButton>
@@ -133,7 +143,7 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
                         <Tooltip formatter={(v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 })} />
                         <Legend />
                         {getUniqueKeys(chartData, 'segments').map((segKey, idx) => {
-                          const originalName = segKey.replace(/_/g, '.');
+                          const originalName = drilldownSeriesLabel(segKey);
                           return <Bar key={segKey} dataKey={`segments.${segKey}`} name={originalName} fill={COLORS[idx % COLORS.length]} radius={[4, 4, 0, 0]} />;
                         })}
                       </BarChart>
@@ -145,7 +155,7 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
                         <Tooltip formatter={(v) => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2 })} />
                         <Legend />
                         {getUniqueKeys(chartData, 'channels').map((chKey, idx) => {
-                          const originalName = chKey.replace(/_/g, '.');
+                          const originalName = drilldownSeriesLabel(chKey);
                           return <Bar key={chKey} dataKey={`channels.${chKey}`} name={originalName} fill={COLORS[idx % COLORS.length]} radius={[4, 4, 0, 0]} />;
                         })}
                       </BarChart>
@@ -174,32 +184,7 @@ export default function DrilldownModal({ open, onClose, rowData, appliedFilters 
   );
 }
 
-interface ChartPoint {
-  period: string;
-  упаковки: number;
-  рубли: number;
-  segments: Record<string, number>;
-  channels: Record<string, number>;
-}
-
-function prepareChartData(data: DrilldownRow[]): ChartPoint[] {
-  const grouped: Record<string, ChartPoint> = {};
-  data.forEach((row) => {
-    const key = `${row.year}-${String(row.month).padStart(2, '0')}`;
-    if (!grouped[key]) grouped[key] = { period: key, упаковки: 0, рубли: 0, segments: {}, channels: {} };
-    if (row.un_rub === 'уп') grouped[key].упаковки += row.totalValue;
-    else if (row.un_rub === 'руб') grouped[key].рубли += row.totalValue;
-    const segmentKey = (row.segment || 'Без сегмента').replace(/\./g, '_');
-    if (!grouped[key].segments[segmentKey]) grouped[key].segments[segmentKey] = 0;
-    grouped[key].segments[segmentKey] += row.totalValue;
-    const channelKey = (row.channel || 'Без канала').replace(/\./g, '_');
-    if (!grouped[key].channels[channelKey]) grouped[key].channels[channelKey] = 0;
-    grouped[key].channels[channelKey] += row.totalValue;
-  });
-  return Object.values(grouped).sort((a, b) => a.period.localeCompare(b.period));
-}
-
-function getUniqueKeys(data: ChartPoint[], type: 'segments' | 'channels'): string[] {
+function getUniqueKeys(data: DrilldownChartPoint[], type: 'segments' | 'channels'): string[] {
   const keys = new Set<string>();
   data.forEach(item => { Object.keys(item[type] || {}).forEach(key => keys.add(key)); });
   return Array.from(keys).sort();

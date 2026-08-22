@@ -182,6 +182,7 @@ func (r *SalesDashboardRequest) DBUnit() string {
 // SalesNetworkOptionsRequest — параметры списка доступных сетей.
 type SalesNetworkOptionsRequest struct {
 	Unit         string
+	Channel      string
 	Segments     []string
 	YearFromRaw  string
 	YearToRaw    string
@@ -220,6 +221,7 @@ func SalesNetworkOptions(req SalesNetworkOptionsRequest) ([]string, error) {
 		ProductNames: req.ProductNames,
 		UnRubs:       []string{dbUnit},
 		Segments:     segments,
+		Channels:     UniqueNonEmptyStrings([]string{req.Channel}, 0),
 	})
 	if err != nil {
 		return nil, salesError(http.StatusInternalServerError, "Network options query failed")
@@ -356,6 +358,7 @@ func BuildSalesDashboard(req SalesDashboardRequest) (*models.SalesDashboardRespo
 			NetworkNames: req.NetworkNames,
 			UnRubs:       []string{req.DBUnit()},
 			Segments:     req.Segments,
+			Channels:     UniqueNonEmptyStrings([]string{req.Channel}, 0),
 		},
 	}
 
@@ -551,6 +554,7 @@ func (b *dashboardBuilder) fillEcomShare(response *models.SalesDashboardResponse
 
 	filter := b.yearRangeFilter()
 	filter.Segments = []string{family, withoutEcom}
+	filter.Channels = nil
 	rows, err := repository.SalesDimensionMonthly(filter, "segment")
 	if err != nil {
 		return salesError(http.StatusInternalServerError, "Dashboard Ecom share query failed")
@@ -781,6 +785,7 @@ func (b *dashboardBuilder) fillSeriesComparisons(response *models.SalesDashboard
 		// Канал определяется справочником, поэтому фильтр по сегментам снимается.
 		filter := b.baseFilter
 		filter.Segments = nil
+		filter.Channels = nil
 		rows, err := repository.SalesChannelMonthly(filter, b.req.CompareChannels)
 		if err != nil {
 			return salesError(http.StatusInternalServerError, "Dashboard channel comparison query failed")
@@ -803,6 +808,7 @@ func (b *dashboardBuilder) fillNetworkBreakdown(response *models.SalesDashboardR
 
 	filter := b.baseFilter
 	filter.Segments = nil
+	filter.Channels = nil
 	rows, err := repository.SalesNetworkBreakdownMonthly(filter, b.req.FocusNetworks)
 	if err != nil {
 		return salesError(http.StatusInternalServerError, "Dashboard network breakdown query failed")

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -25,5 +26,16 @@ func TestSalesExportMaxRows(t *testing.T) {
 				t.Fatalf("salesExportMaxRows() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSelectedSalesExcelColumns(t *testing.T) {
+	columns := selectedSalesExcelColumns([]string{"networkName", "metricValue", "networkName", "unknown"})
+	fields := make([]string, 0, len(columns))
+	for _, column := range columns {
+		fields = append(fields, column.Field)
+	}
+	if want := []string{"networkName", "metricValue"}; !reflect.DeepEqual(fields, want) {
+		t.Fatalf("fields = %v, want %v", fields, want)
 	}
 }

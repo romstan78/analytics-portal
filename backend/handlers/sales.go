@@ -26,17 +26,19 @@ import (
 // salesFilterFromQuery собирает фильтр выборки из query-параметров.
 func salesFilterFromQuery(c *gin.Context) repository.SalesFilter {
 	return repository.SalesFilter{
-		YearFromStr:  c.Query("yearFrom"),
-		YearToStr:    c.Query("yearTo"),
-		Months:       c.QueryArray("months"),
-		Quarters:     c.QueryArray("quarters"),
-		BrandNames:   c.QueryArray("brandName"),
-		ProductNames: c.QueryArray("productName"),
-		NetworkNames: c.QueryArray("networkName"),
-		UnRubs:       c.QueryArray("un_rub"),
-		Segments:     c.QueryArray("segment"),
-		Channels:     c.QueryArray("channel"),
-		Search:       c.Query("search"),
+		YearFromStr:   c.Query("yearFrom"),
+		YearToStr:     c.Query("yearTo"),
+		Months:        c.QueryArray("months"),
+		Quarters:      c.QueryArray("quarters"),
+		BrandNames:    c.QueryArray("brandName"),
+		ProductNames:  c.QueryArray("productName"),
+		NetworkNames:  c.QueryArray("networkName"),
+		UnRubs:        c.QueryArray("un_rub"),
+		Segments:      c.QueryArray("segment"),
+		Channels:      c.QueryArray("channel"),
+		Search:        c.Query("search"),
+		SortField:     c.Query("sortField"),
+		SortDirection: c.Query("sortDirection"),
 	}
 }
 
@@ -64,6 +66,7 @@ func GetFilterOptions(c *gin.Context) {
 func GetSalesNetworkOptions(c *gin.Context) {
 	networks, err := services.SalesNetworkOptions(services.SalesNetworkOptionsRequest{
 		Unit:         c.DefaultQuery("unit", "руб"),
+		Channel:      c.Query("focusChannel"),
 		Segments:     append(c.QueryArray("focusSegments"), c.Query("focusSegment")),
 		YearFromRaw:  c.Query("yearFrom"),
 		YearToRaw:    c.Query("yearTo"),
@@ -173,10 +176,15 @@ func GetData(c *gin.Context) {
 
 	totalRows, err := repository.SalesRowsCount(filter)
 	if err != nil {
-		totalRows = 0
+		config.Logger.Error("sales_count_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
+	if page < 0 {
+		page = 0
+	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "100"))
 	if pageSize <= 0 {
 		pageSize = 100
@@ -235,6 +243,8 @@ func GetDrilldown(c *gin.Context) {
 		Quarters:     c.QueryArray("quarters"),
 		Segments:     c.QueryArray("segment"),
 		Channels:     c.QueryArray("channel"),
+		ProductNames: c.QueryArray("productName"),
+		UnRubs:       c.QueryArray("un_rub"),
 		BrandExact:   brandName,
 		NetworkExact: networkName,
 	})
@@ -251,6 +261,51 @@ func GetDrilldown(c *gin.Context) {
 
 // ─── Excel Export для интернет-продаж ──────────────────────────────────────
 
+type salesExcelColumn struct {
+	Field  string
+	Header string
+	Width  float64
+	Value  func(models.Row) interface{}
+}
+
+var salesExcelColumns = []salesExcelColumn{
+	{Field: "year", Header: "Год", Width: 10, Value: func(r models.Row) interface{} { return r.Year }},
+	{Field: "month", Header: "Месяц", Width: 12, Value: func(r models.Row) interface{} { return r.Month }},
+	{Field: "brandName", Header: "Бренд", Width: 20, Value: func(r models.Row) interface{} { return r.BrandName }},
+	{Field: "productName", Header: "SKU", Width: 32, Value: func(r models.Row) interface{} { return r.ProductName }},
+	{Field: "networkName", Header: "Сеть", Width: 28, Value: func(r models.Row) interface{} { return r.NetworkName }},
+	{Field: "metricType", Header: "Показатель", Width: 18, Value: func(r models.Row) interface{} { return r.MetricType }},
+	{Field: "metricValue", Header: "Значение", Width: 18, Value: func(r models.Row) interface{} { return r.MetricValue }},
+	{Field: "un_rub", Header: "Единица", Width: 12, Value: func(r models.Row) interface{} { return models.ValString(r.UnRub) }},
+	{Field: "segment", Header: "Сегмент", Width: 20, Value: func(r models.Row) interface{} { return models.ValString(r.Segment) }},
+	{Field: "channel", Header: "Канал", Width: 20, Value: func(r models.Row) interface{} { return models.ValString(r.Channel) }},
+	{Field: "updated_at", Header: "Обновлено", Width: 22, Value: func(r models.Row) interface{} { return models.ValString(r.UpdatedAt) }},
+	{Field: "id", Header: "ID", Width: 12, Value: func(r models.Row) interface{} { return r.ID }},
+}
+
+func selectedSalesExcelColumns(requested []string) []salesExcelColumn {
+	if len(requested) == 0 {
+		return salesExcelColumns
+	}
+	byField := make(map[string]salesExcelColumn, len(salesExcelColumns))
+	for _, column := range salesExcelColumns {
+		byField[column.Field] = column
+	}
+	selected := make([]salesExcelColumn, 0, len(requested))
+	seen := make(map[string]bool, len(requested))
+	for _, field := range requested {
+		column, ok := byField[field]
+		if ok && !seen[field] {
+			selected = append(selected, column)
+			seen[field] = true
+		}
+	}
+	if len(selected) == 0 {
+		return salesExcelColumns
+	}
+	return selected
+}
+
 func ExportSalesExcel(c *gin.Context) {
 	rows, err := repository.SalesRowsCursor(salesFilterFromQuery(c))
 	if err != nil {
@@ -264,6 +319,7 @@ func ExportSalesExcel(c *gin.Context) {
 
 	sheet := "Интернет-продажи"
 	f.SetSheetName("Sheet1", sheet)
+	columns := selectedSalesExcelColumns(c.QueryArray("columns"))
 
 	sw, err := f.NewStreamWriter(sheet)
 	if err != nil {
@@ -272,9 +328,9 @@ func ExportSalesExcel(c *gin.Context) {
 	}
 
 	// Заголовки через StreamWriter
-	headers := []interface{}{
-		"Год", "Месяц", "Бренд", "Продукт", "Сеть",
-		"Показатель", "Значение", "Уп/Руб", "Сегмент", "Канал", "Обновлено", "ID",
+	headers := make([]interface{}, 0, len(columns))
+	for _, column := range columns {
+		headers = append(headers, column.Header)
 	}
 	if err := sw.SetRow("A1", headers); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Header write failed"})
@@ -288,12 +344,9 @@ func ExportSalesExcel(c *gin.Context) {
 		if scanErr != nil {
 			continue
 		}
-		vals := []interface{}{
-			r.Year, r.Month,
-			r.BrandName, r.ProductName, r.NetworkName,
-			r.MetricType, r.MetricValue,
-			models.ValString(r.UnRub), models.ValString(r.Segment), models.ValString(r.Channel), models.ValString(r.UpdatedAt),
-			r.ID,
+		vals := make([]interface{}, 0, len(columns))
+		for _, column := range columns {
+			vals = append(vals, column.Value(r))
 		}
 		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
 		if err := sw.SetRow(cell, vals); err != nil {
@@ -315,9 +368,9 @@ func ExportSalesExcel(c *gin.Context) {
 	f.SetRowStyle(sheet, 1, 1, headerStyle)
 
 	// Ширина колонок
-	for i := 1; i <= len(headers); i++ {
-		col, _ := excelize.ColumnNumberToName(i)
-		f.SetColWidth(sheet, col, col, 18)
+	for i, column := range columns {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetColWidth(sheet, col, col, column.Width)
 	}
 
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

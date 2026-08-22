@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Autocomplete, Box, Button, Chip, CircularProgress, Collapse, FormControlLabel,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Collapse, FormControlLabel,
   Paper, Stack, Switch, Tab, Tabs, TextField, ToggleButton, ToggleButtonGroup,
   Tooltip, Typography,
 } from '@mui/material';
@@ -15,6 +15,7 @@ import {
 import type { GridColDef } from '@mui/x-data-grid';
 import DataTable from '../components/DataTable';
 import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
+import InternetSalesSummaryTable from '../components/InternetSalesSummaryTable';
 import { salesAPI } from '../api/promo';
 
 const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
@@ -22,20 +23,28 @@ const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const FILTERS_STORAGE_KEY = 'internet_sales_filters_v9';
 const PERSIST_FLAG_KEY = 'internet_sales_persist_v9';
+const TABLE_PREFERENCES_KEY = 'internet_sales_table_columns_v1';
+const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+const formatUpdatedAt = (value: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+};
 
 const COLUMNS: GridColDef[] = [
   { field: 'year', headerName: 'Год', width: 90, type: 'number', valueFormatter: (v: number) => v },
-  { field: 'month', headerName: 'Месяц', width: 80, type: 'number' },
+  { field: 'month', headerName: 'Месяц', width: 120, type: 'number', valueFormatter: (v: number) => MONTH_NAMES[v - 1] || v },
   { field: 'brandName', headerName: 'Бренд', width: 150 },
   { field: 'productName', headerName: 'SKU', width: 250 },
   { field: 'networkName', headerName: 'Сеть', width: 200 },
   { field: 'metricType', headerName: 'Показатель', width: 140 },
   { field: 'metricValue', headerName: 'Значение', width: 130, type: 'number',
     valueFormatter: (v: number | null) => v != null ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '' },
-  { field: 'un_rub', headerName: 'Уп/Руб', width: 100 },
+  { field: 'un_rub', headerName: 'Единица', width: 100, valueFormatter: (v: string | null) => v === 'уп' ? 'шт.' : v || '' },
   { field: 'segment', headerName: 'Сегмент', width: 170 },
   { field: 'channel', headerName: 'Канал', width: 160 },
-  { field: 'updated_at', headerName: 'Обновлено', width: 160 },
+  { field: 'updated_at', headerName: 'Обновлено', width: 170, valueFormatter: formatUpdatedAt },
   { field: 'id', headerName: 'ID', width: 70, type: 'number' },
 ];
 
@@ -69,7 +78,7 @@ const normalizeStringList = (value: unknown) => Array.isArray(value) ? value.fil
 
 export default function InternetSales() {
   const navigate = useNavigate();
-  const [view, setView] = useState<'dashboard' | 'details'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'summary' | 'details'>('dashboard');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [meta, setMeta] = useState<SalesMeta>({
     year: [], brandName: [], productName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
@@ -88,7 +97,7 @@ export default function InternetSales() {
   const [filters, setFilters] = useState<SalesFilters>(() => {
     try {
       if (localStorage.getItem(PERSIST_FLAG_KEY) === 'true') {
-        const saved = sessionStorage.getItem(FILTERS_STORAGE_KEY);
+        const saved = localStorage.getItem(FILTERS_STORAGE_KEY);
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed && Array.isArray(parsed.months)) return { ...EMPTY_FILTERS, ...parsed };
@@ -131,7 +140,7 @@ export default function InternetSales() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setAppliedFilters(filters);
-      if (persistFilters) sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+      if (persistFilters) localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
     }, 300);
     return () => window.clearTimeout(timer);
   }, [filters, persistFilters]);
@@ -143,7 +152,7 @@ export default function InternetSales() {
       setNetworkOptionsLoading(true);
       const filtersWithoutNetworks = { ...filters } as Partial<SalesFilters>;
       delete filtersWithoutNetworks.networkName;
-      salesAPI.getNetworkOptions({ ...filtersWithoutNetworks, focusSegments, unit })
+      salesAPI.getNetworkOptions({ ...filtersWithoutNetworks, focusChannel, focusSegments, unit })
         .then(raw => {
           if (!active) return;
           const options = normalizeStringList(raw.networkName);
@@ -162,7 +171,7 @@ export default function InternetSales() {
     // Зависимости перечислены по полям намеренно: эффект сам правит
     // filters.networkName, и полный объект filters зациклил бы его.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusSegments, unit]);
+  }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusChannel, focusSegments, unit]);
 
   const dashboardEnabled = Boolean(analysisYear) && focusSegments.length > 0;
   const { data: dashboardData, isFetching: dashboardFetching, error: dashboardQueryError } = useQuery({
@@ -195,8 +204,9 @@ export default function InternetSales() {
   const detailFilters = useMemo(() => ({
     ...appliedFilters,
     segment: focusSegments,
-    un_rub: [unit === 'евро' ? 'руб' : unit],
-  }), [appliedFilters, focusSegments, unit]);
+    channel: focusChannel ? [focusChannel] : [],
+    un_rub: unit === 'евро' ? [] : [unit],
+  }), [appliedFilters, focusChannel, focusSegments, unit]);
 
   const updateYear = useCallback((year: string) => {
     setAnalysisYear(year);
@@ -217,7 +227,7 @@ export default function InternetSales() {
     setDashboardFocus([]);
     setRowCount(0);
     setDrilldownRow(null);
-    sessionStorage.removeItem(FILTERS_STORAGE_KEY);
+    localStorage.removeItem(FILTERS_STORAGE_KEY);
   }, [analysisYear, meta.channel, meta.channelSegmentMap, meta.segment, meta.year]);
 
   const handleChannelChange = useCallback((value: string) => {
@@ -241,8 +251,8 @@ export default function InternetSales() {
   const handlePersistChange = useCallback((checked: boolean) => {
     setPersistFilters(checked);
     localStorage.setItem(PERSIST_FLAG_KEY, String(checked));
-    if (checked) sessionStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
-    else sessionStorage.removeItem(FILTERS_STORAGE_KEY);
+    if (checked) localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+    else localStorage.removeItem(FILTERS_STORAGE_KEY);
   }, [filters]);
 
   const activeFilterCount = filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
@@ -260,7 +270,8 @@ export default function InternetSales() {
         {view === 'details' && rowCount > 0 && <Typography variant="body2" color="text.secondary">{rowCount.toLocaleString('ru-RU')} строк</Typography>}
         <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}>
           <Tab value="dashboard" label="Аналитика" />
-          <Tab value="details" label="Таблица" />
+          <Tab value="summary" label="Сводная таблица" />
+          <Tab value="details" label="Исходные данные" />
         </Tabs>
       </Stack>
 
@@ -290,7 +301,14 @@ export default function InternetSales() {
             onChange={(_, values) => setFilters(current => ({ ...current, networkName: values }))}
             renderInput={(params) => <TextField {...params} label="Сеть" helperText="Только сети с данными" />}
             limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
-          <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => value && setUnit(value)}>
+          <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => {
+            if (!value) return;
+            setUnit(value);
+            if (value === 'евро') {
+              setRowCount(0);
+              setDrilldownRow(null);
+            }
+          }}>
             <ToggleButton value="руб">₽</ToggleButton>
             <ToggleButton value="уп">Шт.</ToggleButton>
             <Tooltip title="Расчёт по среднему официальному курсу ЦБ РФ за месяц">
@@ -348,11 +366,18 @@ export default function InternetSales() {
           onRemoveFocus={(focus) => setDashboardFocus(current => current.filter(item => item.type !== focus.type || item.name !== focus.name))}
           onClearFocus={() => setDashboardFocus([])}
         />
+      ) : view === 'summary' ? (
+        <InternetSalesSummaryTable data={dashboard} loading={dashboardLoading} error={dashboardError} />
+      ) : unit === 'евро' ? (
+        <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUnit('руб')}>Показать в ₽</Button>}>
+          Исходные строки хранятся в рублях и упаковках. Пересчёт в евро доступен в аналитике и сводной таблице.
+        </Alert>
       ) : (
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <DataTable columns={COLUMNS} apiUrl={`${API_BASE}/api/data`} filters={detailFilters}
             exportFileName="internet-sales" exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
-            onDataLoaded={(data) => setRowCount(data.length)}
+            defaultHiddenColumns={['updated_at', 'id']} preferencesKey={TABLE_PREFERENCES_KEY}
+            onDataLoaded={(_, totalRows) => setRowCount(totalRows)}
             onRowClick={(params) => { if (params.row.networkName && params.row.brandName) setDrilldownRow(params.row); }} />
         </Box>
       )}

@@ -29,6 +29,23 @@ const salesRowColumns = `n.id, n.[year], n.[month], n.brandName, n.productName,
 // одна строка может попасть на две страницы, а другая — ни на одну.
 const salesRowOrder = " ORDER BY n.[year] DESC, n.[month] ASC, n.metric_type, n.id"
 
+// Разрешённые поля пользовательской сортировки. Имена колонок нельзя брать
+// напрямую из query-параметров: в отличие от значений они не параметризуются.
+var salesSortColumns = map[string]string{
+	"id":          "n.id",
+	"year":        "n.[year]",
+	"month":       "n.[month]",
+	"brandName":   "n.brandName",
+	"productName": "n.productName",
+	"networkName": "n.networkName",
+	"metricType":  "n.metric_type",
+	"metricValue": "n.metric_value",
+	"un_rub":      "n.un_rub",
+	"segment":     "n.segment",
+	"channel":     "n.channel",
+	"updated_at":  "n.updated_at",
+}
+
 // salesDrilldownGroupBy — группировка агрегатов drilldown.
 const salesDrilldownGroupBy = " GROUP BY n.[year], n.[month], n.metric_type, n.un_rub, n.segment, n.channel"
 
@@ -58,17 +75,19 @@ func checkDimension(column string) error {
 
 // SalesFilter — параметры фильтрации интернет-продаж.
 type SalesFilter struct {
-	YearFromStr  string
-	YearToStr    string
-	Months       []string
-	Quarters     []string
-	BrandNames   []string // LIKE-фильтр (список строк, GetData/экспорт)
-	ProductNames []string
-	NetworkNames []string // LIKE-фильтр
-	UnRubs       []string
-	Segments     []string
-	Channels     []string
-	Search       string
+	YearFromStr   string
+	YearToStr     string
+	Months        []string
+	Quarters      []string
+	BrandNames    []string // точные значения из справочника (GetData/экспорт)
+	ProductNames  []string
+	NetworkNames  []string
+	UnRubs        []string
+	Segments      []string
+	Channels      []string
+	Search        string
+	SortField     string
+	SortDirection string
 	// Точное совпадение (Drilldown)
 	BrandExact   string
 	ProductExact string
@@ -143,25 +162,6 @@ func BuildSalesWhere(f SalesFilter) (string, []interface{}) {
 		}
 	}
 
-	// LIKE-фильтры (OR между значениями внутри одного поля)
-	likeAny := func(column string, values []string) {
-		if len(values) == 0 {
-			return
-		}
-		orConds := sq.Or{}
-		for _, v := range values {
-			if v != "" {
-				orConds = append(orConds, sq.Like{column: "%" + v + "%"})
-			}
-		}
-		if len(orConds) > 0 {
-			q = q.Where(orConds)
-		}
-	}
-	likeAny("n.brandName", f.BrandNames)
-	likeAny("n.productName", f.ProductNames)
-	likeAny("n.networkName", f.NetworkNames)
-
 	// Точное совпадение (приоритетнее LIKE, используется в Drilldown)
 	if f.BrandExact != "" {
 		q = q.Where("n.brandName = ?", f.BrandExact)
@@ -185,6 +185,11 @@ func BuildSalesWhere(f SalesFilter) (string, []interface{}) {
 	inAny("n.un_rub", f.UnRubs)
 	inAny("n.segment", f.Segments)
 	inAny("n.channel", f.Channels)
+	// Значения основных фильтров выбираются из справочников, поэтому должны
+	// совпадать точно. Частичный поиск остаётся отдельным параметром Search.
+	inAny("n.brandName", f.BrandNames)
+	inAny("n.productName", f.ProductNames)
+	inAny("n.networkName", f.NetworkNames)
 
 	if f.Search != "" {
 		likeArg := "%" + f.Search + "%"
@@ -193,6 +198,8 @@ func BuildSalesWhere(f SalesFilter) (string, []interface{}) {
 			sq.Like{"n.productName": likeArg},
 			sq.Like{"n.networkName": likeArg},
 			sq.Like{"n.metric_type": likeArg},
+			sq.Like{"n.segment": likeArg},
+			sq.Like{"n.channel": likeArg},
 		})
 	}
 
@@ -207,6 +214,24 @@ func BuildSalesWhere(f SalesFilter) (string, []interface{}) {
 		return " " + sqlText[whereIdx:], args
 	}
 	return "", args
+}
+
+// SalesRowOrder возвращает безопасный ORDER BY для таблицы и выгрузок.
+// Первичный ключ добавляется как тай-брейк, чтобы пагинация не теряла строки.
+func SalesRowOrder(f SalesFilter) string {
+	column, ok := salesSortColumns[f.SortField]
+	if !ok {
+		return salesRowOrder
+	}
+	direction := "ASC"
+	if strings.EqualFold(f.SortDirection, "desc") {
+		direction = "DESC"
+	}
+	order := " ORDER BY " + column + " " + direction
+	if column != "n.id" {
+		order += ", n.id ASC"
+	}
+	return order
 }
 
 // filterNonEmpty возвращает слайс []interface{} без пустых строк.
@@ -354,7 +379,7 @@ func SalesRowsCount(f SalesFilter) (int, error) {
 func SalesRowsPage(f SalesFilter, offset, limit int) ([]models.Row, error) {
 	where, args := BuildSalesWhere(f)
 	query := "SELECT " + salesRowColumns + " FROM " + salesTable + " n" + where +
-		salesRowOrder + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+		SalesRowOrder(f) + " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
 	args = append(args, offset, limit)
 
 	rows, err := config.DB.Query(query, args...)
@@ -378,7 +403,7 @@ func SalesRowsPage(f SalesFilter, offset, limit int) ([]models.Row, error) {
 // результат и читать его через ScanSalesRow: выгрузки не помещаются в память.
 func SalesRowsCursor(f SalesFilter) (*sql.Rows, error) {
 	where, args := BuildSalesWhere(f)
-	return config.DB.Query("SELECT "+salesRowColumns+" FROM "+salesTable+" n"+where+salesRowOrder, args...)
+	return config.DB.Query("SELECT "+salesRowColumns+" FROM "+salesTable+" n"+where+SalesRowOrder(f), args...)
 }
 
 // ScanSalesRow — публичная обёртка над scanSalesRow для потоковой выдачи.

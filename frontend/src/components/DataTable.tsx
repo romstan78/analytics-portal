@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { DataGrid, type GridColDef, type GridPaginationModel, type GridRowParams } from '@mui/x-data-grid';
+import { DataGrid, type GridColDef, type GridPaginationModel, type GridRowParams, type GridSortModel } from '@mui/x-data-grid';
 import {
   Box, Alert, TextField, Button, Menu, MenuItem,
-  Checkbox, ListItemText, Typography, Divider, ButtonGroup,
+  Checkbox, ListItemText, Typography, Divider, ButtonGroup, CircularProgress,
 } from '@mui/material';
 import {
   ViewColumn as ColumnsIcon,
@@ -21,15 +21,17 @@ interface DataTableProps {
   defaultPageSize?: number;
   exportFileName?: string;
   exportXlsxUrl?: string;
-  onDataLoaded?: (data: unknown[]) => void;
+  onDataLoaded?: (data: unknown[], totalRows: number) => void;
   onRowClick?: (params: GridRowParams) => void;
   refreshKey?: number;
+  defaultHiddenColumns?: string[];
+  preferencesKey?: string;
 }
 
 export default function DataTable({
   columns, apiUrl, filters = {}, defaultPageSize = 100,
   exportFileName = 'export', exportXlsxUrl, onDataLoaded,
-  onRowClick, refreshKey,
+  onRowClick, refreshKey, defaultHiddenColumns = [], preferencesKey,
 }: DataTableProps) {
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
 
@@ -38,6 +40,8 @@ export default function DataTable({
     page: 0,
     pageSize: defaultPageSize,
   });
+  const [sortModel, setSortModel] = useState<GridSortModel>([]);
+  const sortKey = useMemo(() => JSON.stringify(sortModel), [sortModel]);
 
   // Тулбар
   const [searchText, setSearchText] = useState('');
@@ -45,7 +49,13 @@ export default function DataTable({
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {};
-    columns.forEach(c => { map[c.field] = true; });
+    columns.forEach(c => { map[c.field] = !defaultHiddenColumns.includes(c.field); });
+    if (preferencesKey) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(preferencesKey) || '{}') as Record<string, unknown>;
+        columns.forEach(c => { if (typeof saved[c.field] === 'boolean') map[c.field] = saved[c.field] as boolean; });
+      } catch { /* используем настройки по умолчанию */ }
+    }
     return map;
   });
   const apiRef = useRef(null);
@@ -54,7 +64,7 @@ export default function DataTable({
 
   // Сброс страницы при смене фильтров или поискового запроса. Правка состояния
   // во время рендера — рекомендованная React альтернатива эффекту-синхронизатору.
-  const resetKey = `${filtersKey}|${debouncedSearch}`;
+  const resetKey = `${filtersKey}|${debouncedSearch}|${sortKey}`;
   const [prevResetKey, setPrevResetKey] = useState(resetKey);
   if (prevResetKey !== resetKey) {
     setPrevResetKey(resetKey);
@@ -74,8 +84,17 @@ export default function DataTable({
     [columns, visibleColumns]
   );
 
+  useEffect(() => {
+    if (!preferencesKey) return;
+    try { localStorage.setItem(preferencesKey, JSON.stringify(visibleColumns)); } catch { /* storage недоступен */ }
+  }, [preferencesKey, visibleColumns]);
+
   const toggleColumn = (field: string) => {
-    setVisibleColumns(prev => ({ ...prev, [field]: !prev[field] }));
+    setVisibleColumns(prev => {
+      const visibleCount = columns.filter(column => prev[column.field] !== false).length;
+      if (prev[field] !== false && visibleCount <= 1) return prev;
+      return { ...prev, [field]: !prev[field] };
+    });
   };
 
   const showAllColumns = () => {
@@ -84,10 +103,18 @@ export default function DataTable({
     setVisibleColumns(map);
   };
 
-  const hideAllColumns = () => {
+  const resetColumns = () => {
     const map: Record<string, boolean> = {};
-    columns.forEach(c => { map[c.field] = false; });
+    columns.forEach(c => { map[c.field] = !defaultHiddenColumns.includes(c.field); });
     setVisibleColumns(map);
+  };
+
+  const appendSortParams = (params: URLSearchParams) => {
+    const sort = sortModel[0];
+    if (sort?.field && sort.sort) {
+      params.set('sortField', sort.field);
+      params.set('sortDirection', sort.sort);
+    }
   };
 
   const fetchExportData = async (): Promise<unknown[]> => {
@@ -96,6 +123,7 @@ export default function DataTable({
     if (debouncedSearch) {
       params.set('search', debouncedSearch);
     }
+    appendSortParams(params);
     Object.entries(filters).forEach(([key, value]) => {
       if (Array.isArray(value)) {
         value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
@@ -122,16 +150,20 @@ export default function DataTable({
   const handleExportCSV = async () => {
     setExporting(true);
     try {
+      if (!totalRows) {
+        window.alert('Нет данных для выгрузки.');
+        return;
+      }
+      if (totalRows > EXPORT_WARNING_THRESHOLD) {
+        const ok = window.confirm(
+          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${totalRows.toLocaleString('ru-RU')}). Продолжить?`
+        );
+        if (!ok) return;
+      }
       const data = await fetchExportData();
       if (!data.length) {
         window.alert('Нет данных для выгрузки.');
         return;
-      }
-      if (data.length > EXPORT_WARNING_THRESHOLD) {
-        const ok = window.confirm(
-          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
-        );
-        if (!ok) return;
       }
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
@@ -185,6 +217,8 @@ export default function DataTable({
       const params = new URLSearchParams();
       params.set('all', 'true');
       if (debouncedSearch) params.set('search', debouncedSearch);
+      appendSortParams(params);
+      visibleCols.forEach(column => params.append('columns', column.field));
       Object.entries(filters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
           value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
@@ -212,7 +246,7 @@ export default function DataTable({
   // Загрузка данных с пагинацией через React Query: запрос перезапускается
   // при изменении любой части ключа.
   const pageQuery = useQuery({
-    queryKey: ['dataTable', apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch, refreshKey] as const,
+    queryKey: ['dataTable', apiUrl, filtersKey, paginationModel.page, paginationModel.pageSize, debouncedSearch, sortKey, refreshKey] as const,
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams();
       params.set('page', String(paginationModel.page));
@@ -220,6 +254,7 @@ export default function DataTable({
       if (debouncedSearch) {
         params.set('search', debouncedSearch);
       }
+      appendSortParams(params);
 
       Object.entries(filters).forEach(([key, value]) => {
         if (Array.isArray(value)) {
@@ -239,14 +274,14 @@ export default function DataTable({
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const json = await response.json() as { data?: unknown[]; totalRows?: number };
       const rows = json.data || [];
-      return { rows, totalRows: json.totalRows || rows.length };
+      return { rows, totalRows: json.totalRows ?? rows.length };
     },
   });
 
   const { data: pageData, isFetching, error: queryError } = pageQuery;
 
   const totalRows = pageData?.totalRows ?? 0;
-  const loading = isFetching || exporting;
+  const loading = isFetching;
 
   // Уникальные ключи строк
   const rows = useMemo(() => {
@@ -258,7 +293,7 @@ export default function DataTable({
 
   // onDataLoaded — побочный эффект для родителя, вызываем после успешной загрузки.
   useEffect(() => {
-    if (pageData && onDataLoaded) onDataLoaded(pageData.rows);
+    if (pageData && onDataLoaded) onDataLoaded(pageData.rows, pageData.totalRows);
   }, [pageData, onDataLoaded]);
 
   // Сетевой сбой переводит запрос в paused без ошибки — показываем отдельно.
@@ -273,7 +308,7 @@ export default function DataTable({
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Тулбар */}
       <Box sx={{
-        display: 'flex', alignItems: 'center', gap: 1,
+        display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap',
         px: 2, py: 1, bgcolor: '#f1f5f9',
         borderRadius: '12px 12px 0 0',
         border: '1px solid #e2e8f0', borderBottom: 'none',
@@ -286,8 +321,8 @@ export default function DataTable({
           slotProps={{ paper: { sx: { maxHeight: 400, minWidth: 220 } } }}>
           <MenuItem dense onClick={showAllColumns}>
             <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>Показать все</Typography></MenuItem>
-          <MenuItem dense onClick={hideAllColumns}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Скрыть все</Typography></MenuItem>
+          <MenuItem dense onClick={resetColumns}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>По умолчанию</Typography></MenuItem>
           <Divider />
           {columns.map(col => (
             <MenuItem key={col.field} dense onClick={() => toggleColumn(col.field)}>
@@ -311,10 +346,10 @@ export default function DataTable({
         )}
 
         <ButtonGroup size="small" variant="text">
-          <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+          <Button startIcon={exporting ? <CircularProgress size={15} /> : <ExportIcon />} onClick={handleExportCSV} disabled={exporting || isFetching}
             sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
           {exportXlsxUrl && (
-            <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+            <Button startIcon={exporting ? <CircularProgress size={15} /> : <ExportIcon />} onClick={handleExportXLSX} disabled={exporting || isFetching}
               sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
           )}
         </ButtonGroup>
@@ -328,6 +363,8 @@ export default function DataTable({
         getRowId={(row) => row._rowId as string}
         loading={loading}
         sortingMode="server"
+        sortModel={sortModel}
+        onSortModelChange={setSortModel}
         paginationMode="server"
         rowCount={totalRows}
         paginationModel={paginationModel}

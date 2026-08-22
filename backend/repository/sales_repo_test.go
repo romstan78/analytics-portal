@@ -36,22 +36,34 @@ func TestBuildSalesWhereExactFocus(t *testing.T) {
 	}
 }
 
-func TestBuildSalesWhereLikeAndIn(t *testing.T) {
+func TestBuildSalesWhereExactListsAndIn(t *testing.T) {
 	where, args := BuildSalesWhere(SalesFilter{
 		BrandNames: []string{"Альфа", ""},
 		UnRubs:     []string{"руб", ""},
 		Segments:   []string{"OLAP SS"},
 	})
 
-	if !strings.Contains(where, "n.brandName LIKE ?") {
-		t.Fatalf("brand LIKE condition is missing from %q", where)
+	if !strings.Contains(where, "n.brandName IN (?)") {
+		t.Fatalf("brand IN condition is missing from %q", where)
 	}
 	if !strings.Contains(where, "n.un_rub IN (?)") || !strings.Contains(where, "n.segment IN (?)") {
 		t.Fatalf("IN conditions are missing from %q", where)
 	}
-	wantArgs := []interface{}{"%Альфа%", "руб", "OLAP SS"}
+	wantArgs := []interface{}{"руб", "OLAP SS", "Альфа"}
 	if !reflect.DeepEqual(args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", args, wantArgs)
+	}
+}
+
+func TestBuildSalesWhereSearchRemainsPartial(t *testing.T) {
+	where, args := BuildSalesWhere(SalesFilter{Search: "OLAP"})
+	if !strings.Contains(where, "n.brandName LIKE ?") || !strings.Contains(where, "n.channel LIKE ?") {
+		t.Fatalf("search conditions are missing from %q", where)
+	}
+	for _, arg := range args {
+		if arg != "%OLAP%" {
+			t.Fatalf("search arg = %#v, want %%OLAP%%", arg)
+		}
 	}
 }
 
@@ -102,6 +114,18 @@ func TestSalesRowOrderHasPrimaryKeyTiebreak(t *testing.T) {
 	}
 	if !strings.Contains(salesRowOrder, "n.[year] DESC") || !strings.Contains(salesRowOrder, "n.[month] ASC") {
 		t.Fatalf("направление сортировки по году/месяцу изменилось: %q", salesRowOrder)
+	}
+}
+
+func TestSalesRowOrderUsesWhitelistedSort(t *testing.T) {
+	got := SalesRowOrder(SalesFilter{SortField: "metricValue", SortDirection: "desc"})
+	if got != " ORDER BY n.metric_value DESC, n.id ASC" {
+		t.Fatalf("SalesRowOrder() = %q", got)
+	}
+
+	got = SalesRowOrder(SalesFilter{SortField: "metric_value); DROP TABLE", SortDirection: "desc"})
+	if got != salesRowOrder {
+		t.Fatalf("unknown sort field did not fall back to default: %q", got)
 	}
 }
 
