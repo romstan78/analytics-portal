@@ -31,8 +31,9 @@ import {
   planKey,
   pluralRu,
 } from '../utils/networkPlan';
-import type { DraftCell, QuarterSettings, QuarterTotals } from '../utils/networkPlan';
-import { calcCell, EMPTY_CELL } from '../utils/networkPlan';
+import type { CellAmounts, DraftCell } from '../utils/networkPlan';
+import { EMPTY_AMOUNTS, EMPTY_CELL } from '../utils/networkPlan';
+import type { NetworkPlanTotals } from '../types/network';
 import { PlanNumberField, ValueCell } from './networkPlanCells';
 import { TONE_COLOR, completionTone, deviationTone } from '../utils/networkPlanView';
 
@@ -42,8 +43,8 @@ interface NetworkQuarterTableProps {
   quarter: number;
   brands: string[];
   draft: Record<string, DraftCell>;
-  setting: QuarterSettings;
-  totals: QuarterTotals;
+  amounts: Record<string, CellAmounts>;
+  totals: NetworkPlanTotals;
   canEdit: boolean;
   commentedCells: Set<string>;
   onCellChange: (brand: string | null, patch: Partial<DraftCell>) => void;
@@ -57,7 +58,7 @@ export default function NetworkQuarterTable({
   quarter,
   brands,
   draft,
-  setting,
+  amounts,
   totals,
   canEdit,
   commentedCells,
@@ -70,9 +71,10 @@ export default function NetworkQuarterTable({
   const [menu, setMenu] = useState<{ anchor: HTMLElement; brand: string } | null>(null);
 
   const cellOf = (brand: string | null): DraftCell => draft[planKey(quarter, brand)] ?? EMPTY_CELL;
+  const amountsOf = (brand: string | null): CellAmounts => amounts[planKey(quarter, brand)] ?? EMPTY_AMOUNTS;
   const grossBrands = brands.filter((b) => cellOf(b).inGross);
   const separateBrands = brands.filter((b) => !cellOf(b).inGross);
-  const pool = calcCell(draft[planKey(quarter, null)], setting);
+  const pool = amountsOf(null);
   const hasPool = grossBrands.length > 0 || pool.plan != null || pool.forecast != null;
 
   const sectionRow = (title: string, note?: string) => (
@@ -89,9 +91,9 @@ export default function NetworkQuarterTable({
   // Строка бренда: два поля ввода объёма, процент инвестиций и расчётные суммы.
   const brandRow = (brand: string) => {
     const cell = cellOf(brand);
-    const amounts = calcCell(cell, setting);
-    const factPct = amounts.plan ? deltaPct(amounts.fact, amounts.plan) : null;
-    const forecastPct = deltaPct(amounts.forecast, amounts.plan);
+    const row = amountsOf(brand);
+    const factPct = row.plan ? deltaPct(row.fact, row.plan) : null;
+    const forecastPct = deltaPct(row.forecast, row.plan);
     const hasComment = commentedCells.has(planKey(quarter, brand));
 
     return (
@@ -115,7 +117,7 @@ export default function NetworkQuarterTable({
         </TableCell>
         <TableCell align="right">
           <ValueCell
-            value={amounts.fact}
+            value={row.fact}
             hint={factPct == null ? null : `${(100 + factPct).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
             tone={completionTone(factPct == null ? null : 100 + factPct)}
           />
@@ -143,13 +145,13 @@ export default function NetworkQuarterTable({
           />
         </TableCell>
         <TableCell align="right">
-          <ValueCell value={amounts.investPlan} netValue={amounts.investPlanNet} />
+          <ValueCell value={row.investPlan} netValue={row.investPlanNet} />
         </TableCell>
         <TableCell align="right">
-          <ValueCell value={amounts.investForecast} netValue={amounts.investForecastNet} />
+          <ValueCell value={row.investForecast} netValue={row.investForecastNet} />
         </TableCell>
         <TableCell align="right">
-          <ValueCell value={amounts.investFact} netValue={amounts.investFactNet} />
+          <ValueCell value={row.investFact} netValue={row.investFactNet} />
         </TableCell>
         <TableCell padding="none">
           {canEdit && (
@@ -212,7 +214,7 @@ export default function NetworkQuarterTable({
   const groupSums = (list: string[]) =>
     list.reduce(
       (acc, brand) => {
-        const a = calcCell(cellOf(brand), setting);
+        const a = amountsOf(brand);
         acc.plan += a.plan ?? 0;
         acc.fact += a.fact ?? 0;
         acc.forecast += a.forecast ?? 0;
@@ -286,7 +288,7 @@ export default function NetworkQuarterTable({
                   />
                 </TableCell>
                 <TableCell align="right">
-                  <ValueCell value={totals.grossPoolFactRub || null} muted={!totals.grossPoolFactRub} />
+                  <ValueCell value={totals.gross_pool_fact_rub || null} muted={!totals.gross_pool_fact_rub} />
                 </TableCell>
                 <TableCell>
                   <PlanNumberField
@@ -355,50 +357,50 @@ export default function NetworkQuarterTable({
             <TableCell sx={{ fontWeight: 600 }}>Итого Q{quarter}</TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.contractPlanRub}
-                hint={totals.grossPoolRub != null ? 'пул + отдельные' : null}
+                value={totals.contract_plan_rub}
+                hint={totals.gross_pool_rub != null ? 'пул + отдельные' : null}
                 bold
               />
             </TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.factRub || null}
-                hint={deltaPct(totals.factRub, totals.contractPlanRub) == null
+                value={totals.fact_rub || null}
+                hint={deltaPct(totals.fact_rub, totals.contract_plan_rub) == null
                   ? null
-                  : `${(100 + (deltaPct(totals.factRub, totals.contractPlanRub) ?? 0)).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
+                  : `${(100 + (deltaPct(totals.fact_rub, totals.contract_plan_rub) ?? 0)).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
                 tone={completionTone(
-                  deltaPct(totals.factRub, totals.contractPlanRub) == null
+                  deltaPct(totals.fact_rub, totals.contract_plan_rub) == null
                     ? null
-                    : 100 + (deltaPct(totals.factRub, totals.contractPlanRub) ?? 0),
+                    : 100 + (deltaPct(totals.fact_rub, totals.contract_plan_rub) ?? 0),
                 )}
                 bold
               />
             </TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.forecastRub || null}
-                hint={deltaPct(totals.forecastRub, totals.contractPlanRub)
-                  ? `${formatSignedPct(deltaPct(totals.forecastRub, totals.contractPlanRub))} к плану`
+                value={totals.forecast_rub || null}
+                hint={deltaPct(totals.forecast_rub, totals.contract_plan_rub)
+                  ? `${formatSignedPct(deltaPct(totals.forecast_rub, totals.contract_plan_rub))} к плану`
                   : null}
-                tone={deviationTone(deltaPct(totals.forecastRub, totals.contractPlanRub))}
+                tone={deviationTone(deltaPct(totals.forecast_rub, totals.contract_plan_rub))}
                 bold
               />
             </TableCell>
             <TableCell />
             <TableCell align="right">
-              <ValueCell value={totals.investmentsRub || null} netValue={totals.investmentsRubNet || null} bold />
+              <ValueCell value={totals.investments_rub || null} netValue={totals.investments_rub_net || null} bold />
             </TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.forecastInvestmentsRub || null}
-                netValue={totals.forecastInvestmentsRubNet || null}
+                value={totals.forecast_investments_rub || null}
+                netValue={totals.forecast_investments_rub_net || null}
                 bold
               />
             </TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.factInvestmentsRub || null}
-                netValue={totals.factInvestmentsRubNet || null}
+                value={totals.fact_investments_rub || null}
+                netValue={totals.fact_investments_rub_net || null}
                 bold
               />
             </TableCell>

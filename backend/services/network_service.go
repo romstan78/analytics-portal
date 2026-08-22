@@ -2,45 +2,13 @@ package services
 
 import (
 	"math"
+	"strconv"
 
 	"backend/models"
 )
 
-// NetworkPlanTotals — итоги квартала для шапки сетки планов.
-// НДС применяется только к инвестициям: план, факт и прогноз остаются теми,
-// что ввёл КАМ или принесла загрузка.
-//
-// Валовый объём — свойство бренда: в одном квартале часть брендов входит в общий
-// объём контракта (пул), часть планируется отдельно. Поэтому план по кварталу
-// разложен на две части, а остаток к распределению считается только от брендов пула.
-type NetworkPlanTotals struct {
-	Quarter int `json:"quarter"`
-
-	// Планы
-	PlanRub          float64  `json:"plan_rub"`           // сумма планов всех брендов
-	GrossBrandsPlan  float64  `json:"gross_brands_plan"`  // из них — бренды в валовом объёме
-	SeparatePlanRub  float64  `json:"separate_plan_rub"`  // из них — бренды вне валового объёма
-	GrossPoolRub     *float64 `json:"gross_pool_rub"`     // объём валового пула, строка без бренда
-	Undistributed    *float64 `json:"undistributed"`      // пул − планы брендов пула
-	ContractPlanRub  float64  `json:"contract_plan_rub"`  // обязательство: пул (или бренды пула) + отдельные
-	GrossBrandsCount int      `json:"gross_brands_count"` // сколько брендов в пуле
-
-	// Факт и прогноз
-	FactRub          float64  `json:"fact_rub"`
-	ForecastRub      float64  `json:"forecast_rub"`
-	GrossPoolFactRub float64  `json:"gross_pool_fact_rub"`     // факт брендов пула
-	GrossPoolFcstRub *float64 `json:"gross_pool_forecast_rub"` // прогноз объёма пула, строка без бренда
-
-	// Инвестиции: от плана и от прогноза, до вычета НДС и с вычетом.
-	// Факт инвестиций приходит загрузкой и процентом не пересчитывается,
-	// поэтому база «без НДС» считается по ставке того же квартала.
-	InvestmentsRub            float64 `json:"investments_rub"`
-	InvestmentsRubNet         float64 `json:"investments_rub_net"`
-	ForecastInvestmentsRub    float64 `json:"forecast_investments_rub"`
-	ForecastInvestmentsRubNet float64 `json:"forecast_investments_rub_net"`
-	FactInvestmentsRub        float64 `json:"fact_investments_rub"`
-	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
-}
+// NetworkPlanTotals определён в models: из него генерируется тип фронтенда.
+type NetworkPlanTotals = models.NetworkPlanTotals
 
 // round2 округляет до копеек, чтобы расчётные суммы не тянули хвост float.
 func round2(v float64) float64 {
@@ -79,15 +47,22 @@ func EnrichNetworkPlans(plans []models.NetworkPlan, periods []models.NetworkPeri
 
 	for i := range plans {
 		p := &plans[i]
-		if p.InvestmentsPct == nil {
-			continue
-		}
 		period, ok := byQuarter[p.Quarter]
 		vatIncluded, vatRate := false, 0.0
 		if ok {
 			vatIncluded, vatRate = period.VATIncluded, period.VATRate
 		}
 
+		// Факт инвестиций пришёл суммой: процентом не пересчитывается, но базу
+		// «без НДС» показываем по ставке того же квартала.
+		if p.FactInvestmentsRub != nil {
+			net := NetRub(*p.FactInvestmentsRub, vatIncluded, vatRate)
+			p.FactInvestmentsNet = &net
+		}
+
+		if p.InvestmentsPct == nil {
+			continue
+		}
 		if p.PlanRub != nil {
 			gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, vatIncluded, vatRate)
 			p.InvestmentsRub = &gross
@@ -191,4 +166,115 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.Network
 		t.ContractPlanRub = round2(pool + t.SeparatePlanRub)
 	}
 	return totals
+}
+
+// SumYearTotals складывает итоги кварталов в итог года.
+// Поля пула суммируются только по тем кварталам, где пул заведён: год без
+// единого пула остаётся без остатка к распределению, а не с нулём.
+// Брендов в пуле за год — не сумма, а максимум по кварталу: это состав, а не объём.
+func SumYearTotals(totals []NetworkPlanTotals) NetworkPlanTotals {
+	year := NetworkPlanTotals{}
+
+	addOptional := func(target **float64, value float64) {
+		current := 0.0
+		if *target != nil {
+			current = **target
+		}
+		sum := round2(current + value)
+		*target = &sum
+	}
+
+	for _, t := range totals {
+		year.PlanRub = round2(year.PlanRub + t.PlanRub)
+		year.GrossBrandsPlan = round2(year.GrossBrandsPlan + t.GrossBrandsPlan)
+		year.SeparatePlanRub = round2(year.SeparatePlanRub + t.SeparatePlanRub)
+		year.ContractPlanRub = round2(year.ContractPlanRub + t.ContractPlanRub)
+		if t.GrossBrandsCount > year.GrossBrandsCount {
+			year.GrossBrandsCount = t.GrossBrandsCount
+		}
+		year.FactRub = round2(year.FactRub + t.FactRub)
+		year.GrossPoolFactRub = round2(year.GrossPoolFactRub + t.GrossPoolFactRub)
+		year.ForecastRub = round2(year.ForecastRub + t.ForecastRub)
+		year.InvestmentsRub = round2(year.InvestmentsRub + t.InvestmentsRub)
+		year.InvestmentsRubNet = round2(year.InvestmentsRubNet + t.InvestmentsRubNet)
+		year.ForecastInvestmentsRub = round2(year.ForecastInvestmentsRub + t.ForecastInvestmentsRub)
+		year.ForecastInvestmentsRubNet = round2(year.ForecastInvestmentsRubNet + t.ForecastInvestmentsRubNet)
+		year.FactInvestmentsRub = round2(year.FactInvestmentsRub + t.FactInvestmentsRub)
+		year.FactInvestmentsRubNet = round2(year.FactInvestmentsRubNet + t.FactInvestmentsRubNet)
+
+		if t.GrossPoolRub != nil {
+			addOptional(&year.GrossPoolRub, *t.GrossPoolRub)
+		}
+		if t.GrossPoolFcstRub != nil {
+			addOptional(&year.GrossPoolFcstRub, *t.GrossPoolFcstRub)
+		}
+		if t.Undistributed != nil {
+			addOptional(&year.Undistributed, *t.Undistributed)
+		}
+	}
+	return year
+}
+
+// NetworkPlanDraft — строка сетки, как её ввёл пользователь.
+// Факта здесь нет: он приходит загрузкой отгрузок и берётся из сохранённых строк.
+type NetworkPlanDraft struct {
+	Quarter        int
+	BrandAS        *string
+	InGross        bool
+	PlanRub        *float64
+	ForecastRub    *float64
+	InvestmentsPct *float64
+}
+
+// draftKey — ключ строки внутри года: квартал + бренд (пусто = валовый пул).
+func draftKey(quarter int, brand *string) string {
+	name := ""
+	if brand != nil {
+		name = *brand
+	}
+	return strconv.Itoa(quarter) + "|" + name
+}
+
+// PreviewNetworkPlans пересчитывает несохранённый черновик: накладывает
+// введённые значения на факт из сохранённых строк и считает то же самое,
+// что вернётся после сохранения. В БД ничего не пишется.
+//
+// Набор строк задаёт черновик: сохранённая строка, которой в нём нет, в итоги
+// не попадает — иначе таблица показывала бы суммы по скрытым брендам.
+func PreviewNetworkPlans(
+	draft []NetworkPlanDraft,
+	stored []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+) ([]models.NetworkPlan, []NetworkPlanTotals, NetworkPlanTotals) {
+	factByKey := make(map[string]models.NetworkPlan, len(stored))
+	for _, plan := range stored {
+		factByKey[draftKey(plan.Quarter, plan.BrandAS)] = plan
+	}
+
+	plans := make([]models.NetworkPlan, 0, len(draft))
+	for _, row := range draft {
+		plan := models.NetworkPlan{
+			Quarter:        row.Quarter,
+			BrandAS:        row.BrandAS,
+			InGross:        row.InGross,
+			PlanRub:        row.PlanRub,
+			ForecastRub:    row.ForecastRub,
+			InvestmentsPct: row.InvestmentsPct,
+		}
+		if saved, ok := factByKey[draftKey(row.Quarter, row.BrandAS)]; ok {
+			plan.ID = saved.ID
+			plan.NetworkID = saved.NetworkID
+			plan.Year = saved.Year
+			plan.PlanUnits = saved.PlanUnits
+			plan.FactRub = saved.FactRub
+			plan.FactInvestmentsRub = saved.FactInvestmentsRub
+			plan.UpdatedBy = saved.UpdatedBy
+			plan.UpdatedAt = saved.UpdatedAt
+		}
+		plans = append(plans, plan)
+	}
+
+	plans = EnrichNetworkPlans(plans, periods)
+	totals := CalculateNetworkTotals(plans, periods)
+	return plans, totals, SumYearTotals(totals)
 }

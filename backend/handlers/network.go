@@ -95,7 +95,7 @@ func GetNetworks(c *gin.Context) {
 		respondNetworkError(c, err, "networks_list_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": networks})
+	c.JSON(http.StatusOK, models.NetworkListResponse{Data: networks})
 }
 
 type networkInput struct {
@@ -170,7 +170,7 @@ func CreateNetwork(c *gin.Context) {
 		return
 	}
 	config.Logger.Info("network_created", "id", id, "name", input.Name, "user", username)
-	c.JSON(http.StatusOK, gin.H{"message": "Created", "data": network})
+	c.JSON(http.StatusOK, models.NetworkSaveResponse{Message: "Created", Data: network})
 }
 
 // UpdateNetwork правит карточку сети.
@@ -237,7 +237,7 @@ func UpdateNetwork(c *gin.Context) {
 		respondNetworkError(c, err, "network_update_refetch_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Updated", "data": network})
+	c.JSON(http.StatusOK, models.NetworkSaveResponse{Message: "Updated", Data: network})
 }
 
 // ─── Планы ──────────────────────────────────────────────────────────────────
@@ -271,12 +271,14 @@ func GetNetworkPlan(c *gin.Context) {
 	}
 
 	plans = services.EnrichNetworkPlans(plans, periods)
-	c.JSON(http.StatusOK, gin.H{
-		"network": network,
-		"year":    year,
-		"periods": periods,
-		"plans":   plans,
-		"totals":  services.CalculateNetworkTotals(plans, periods),
+	totals := services.CalculateNetworkTotals(plans, periods)
+	c.JSON(http.StatusOK, models.NetworkPlanResponse{
+		Network:    network,
+		Year:       year,
+		Periods:    periods,
+		Plans:      plans,
+		Totals:     totals,
+		YearTotals: services.SumYearTotals(totals),
 	})
 }
 
@@ -345,14 +347,81 @@ func SaveNetworkPlan(c *gin.Context) {
 		return
 	}
 	updatedPlans = services.EnrichNetworkPlans(updatedPlans, updatedPeriods)
+	totals := services.CalculateNetworkTotals(updatedPlans, updatedPeriods)
 
 	config.Logger.Info("network_plan_saved", "network_id", id, "year", input.Year, "user", username)
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Saved",
-		"year":    input.Year,
-		"periods": updatedPeriods,
-		"plans":   updatedPlans,
-		"totals":  services.CalculateNetworkTotals(updatedPlans, updatedPeriods),
+	c.JSON(http.StatusOK, models.NetworkPlanSaveResponse{
+		Message:    "Saved",
+		Year:       input.Year,
+		Periods:    updatedPeriods,
+		Plans:      updatedPlans,
+		Totals:     totals,
+		YearTotals: services.SumYearTotals(totals),
+	})
+}
+
+// PreviewNetworkPlan пересчитывает несохранённый черновик сетки.
+// Единственный источник расчёта НДС и итогов — backend: интерфейс только
+// показывает то, что вернул этот эндпоинт. В БД ничего не пишется.
+func PreviewNetworkPlan(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+
+	var input savePlanInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Year < 2000 || input.Year > 2100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
+		return
+	}
+
+	periods := make([]models.NetworkPeriod, 0, len(input.Periods))
+	for _, p := range input.Periods {
+		if p.VATRate < 0 || p.VATRate >= 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Ставка НДС вне диапазона"})
+			return
+		}
+		periods = append(periods, models.NetworkPeriod{
+			NetworkID: id, Year: input.Year,
+			Quarter: p.Quarter, VATIncluded: p.VATIncluded, VATRate: p.VATRate,
+		})
+	}
+
+	draft := make([]services.NetworkPlanDraft, 0, len(input.Plans))
+	for _, p := range input.Plans {
+		if p.Quarter < 1 || p.Quarter > 4 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный квартал"})
+			return
+		}
+		draft = append(draft, services.NetworkPlanDraft{
+			Quarter:        p.Quarter,
+			BrandAS:        p.BrandAS,
+			InGross:        p.InGross,
+			PlanRub:        p.PlanRub,
+			ForecastRub:    p.ForecastRub,
+			InvestmentsPct: p.InvestmentsPct,
+		})
+	}
+
+	// Факт в черновик не входит: он приходит загрузкой, поэтому берётся
+	// из сохранённых строк, а не из тела запроса.
+	stored, err := repository.GetNetworkPlans(id, input.Year)
+	if err != nil {
+		respondNetworkError(c, err, "network_plan_preview_failed")
+		return
+	}
+
+	plans, totals, yearTotals := services.PreviewNetworkPlans(draft, stored, periods)
+	c.JSON(http.StatusOK, models.NetworkPlanPreviewResponse{
+		Year:       input.Year,
+		Periods:    periods,
+		Plans:      plans,
+		Totals:     totals,
+		YearTotals: yearTotals,
 	})
 }
 
@@ -369,7 +438,7 @@ func GetNetworkComments(c *gin.Context) {
 		respondNetworkError(c, err, "network_comments_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": comments})
+	c.JSON(http.StatusOK, models.NetworkCommentsResponse{Data: comments})
 }
 
 type commentInput struct {
@@ -419,7 +488,7 @@ func AddNetworkComment(c *gin.Context) {
 		respondNetworkError(c, err, "network_comments_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Created", "data": comments})
+	c.JSON(http.StatusOK, models.NetworkCommentsResponse{Message: "Created", Data: comments})
 }
 
 // GetNetworkAudit — история изменений карточки и планов сети.
@@ -433,7 +502,7 @@ func GetNetworkAudit(c *gin.Context) {
 		respondNetworkError(c, err, "network_audit_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": log})
+	c.JSON(http.StatusOK, models.NetworkAuditResponse{Data: log})
 }
 
 // GetNetworkBrands — бренды для строк плана.
@@ -443,5 +512,5 @@ func GetNetworkBrands(c *gin.Context) {
 		respondNetworkError(c, err, "network_brands_failed")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": brands})
+	c.JSON(http.StatusOK, models.NetworkBrandsResponse{Data: brands})
 }

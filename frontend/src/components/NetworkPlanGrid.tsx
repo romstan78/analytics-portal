@@ -6,7 +6,8 @@
 // рядом (так сверяют выполнение). Это же держит таблицу в одной ширине листа:
 // раньше все четыре квартала стояли в одной строке и уезжали за экран.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Autocomplete,
   Box,
@@ -21,17 +22,17 @@ import {
 } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
 import type { NetworkPlanResponse, NetworkPlanSaveRequest, NetworkPlanInput } from '../types/network';
+import { networkAPI } from '../api/networks';
 import {
   EMPTY_CELL,
   QUARTERS,
   brandsFromPlans,
+  buildAmounts,
   buildDraft,
   buildSettings,
-  calcQuarterTotals,
   parseNumberInput,
   planKey,
   round2,
-  sumYearTotals,
 } from '../utils/networkPlan';
 import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
@@ -42,7 +43,21 @@ import type { YearMetric } from '../utils/networkPlanView';
 
 const DEFAULT_SETTINGS: QuarterSettings = { vat_included: true, vat_rate: 20 };
 
+// Пауза перед пересчётом на бэкенде: набранное число успевает дописаться,
+// а таблица не дёргает сервер на каждое нажатие.
+const PREVIEW_DEBOUNCE_MS = 250;
+
 type Period = 'year' | 1 | 2 | 3 | 4;
+
+// Значение, отстающее от источника на паузу бездействия.
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
 
 interface NetworkPlanGridProps {
   data: NetworkPlanResponse;
@@ -81,8 +96,62 @@ export default function NetworkPlanGrid({
     setDirty(false);
   }
 
-  const totals = useMemo(() => calcQuarterTotals(draft, brands, settings), [draft, brands, settings]);
-  const periodTotals = period === 'year' ? sumYearTotals(totals) : totals[period - 1];
+  // Тело запроса собирается один раз: пересчёт и сохранение отправляют
+  // одинаковую сетку, поэтому показанное всегда совпадает с сохраняемым.
+  const planRequest = useMemo<NetworkPlanSaveRequest>(() => {
+    const versions = new Map(data.plans.map((p) => [planKey(p.quarter, p.brand_as), p.updated_at]));
+    const rows: NetworkPlanInput[] = [];
+
+    QUARTERS.forEach((quarter) => {
+      // Строку пула отправляем всегда: пустая новая не создастся, а существующая
+      // очистится, если валовый объём в квартале отменили.
+      const rowBrands: Array<string | null> = [null, ...brands];
+      // Бренд убрали из таблицы, но строка есть в БД — отправляем пустые значения.
+      data.plans.forEach((plan) => {
+        if (plan.quarter === quarter && plan.brand_as && !brands.includes(plan.brand_as)) {
+          rowBrands.push(plan.brand_as);
+        }
+      });
+
+      rowBrands.forEach((brand) => {
+        const cell = draft[planKey(quarter, brand)] ?? EMPTY_CELL;
+        rows.push({
+          quarter,
+          brand_as: brand,
+          in_gross: brand !== null && cell.inGross,
+          plan_rub: parseNumberInput(cell.planRub),
+          forecast_rub: parseNumberInput(cell.forecastRub),
+          investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
+          updated_at: versions.get(planKey(quarter, brand)) ?? '',
+        });
+      });
+    });
+
+    return {
+      year: data.year,
+      periods: QUARTERS.map((quarter) => {
+        const setting = settings[quarter] ?? DEFAULT_SETTINGS;
+        return { quarter, vat_included: setting.vat_included, vat_rate: setting.vat_rate };
+      }),
+      plans: rows,
+    };
+  }, [data.plans, data.year, brands, draft, settings]);
+
+  // НДС, инвестиции и итоги считает бэкенд — здесь их не воспроизводим.
+  // До первого ответа показываем то, что пришло с загрузкой года.
+  const debouncedRequest = useDebounced(planRequest, PREVIEW_DEBOUNCE_MS);
+  const previewQuery = useQuery({
+    queryKey: ['network-plan-preview', data.network.id, debouncedRequest],
+    queryFn: () => networkAPI.previewPlan(data.network.id, debouncedRequest),
+    enabled: dirty,
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+  });
+
+  const view = dirty && previewQuery.data ? previewQuery.data : data;
+  const totals = view.totals;
+  const amounts = useMemo(() => buildAmounts(view.plans), [view.plans]);
+  const periodTotals = period === 'year' ? view.year_totals : totals[period - 1];
   const periodLabel = period === 'year' ? `${data.year}` : `Q${period} ${data.year}`;
 
   const setCell = (quarter: number, brand: string | null, patch: Partial<DraftCell>) => {
@@ -158,44 +227,7 @@ export default function NetworkPlanGrid({
     setDirty(true);
   };
 
-  const handleSave = () => {
-    const versions = new Map(data.plans.map((p) => [planKey(p.quarter, p.brand_as), p.updated_at]));
-    const rows: NetworkPlanInput[] = [];
-
-    QUARTERS.forEach((quarter) => {
-      // Строку пула отправляем всегда: пустая новая не создастся, а существующая
-      // очистится, если валовый объём в квартале отменили.
-      const rowBrands: Array<string | null> = [null, ...brands];
-      // Бренд убрали из таблицы, но строка есть в БД — отправляем пустые значения.
-      data.plans.forEach((plan) => {
-        if (plan.quarter === quarter && plan.brand_as && !brands.includes(plan.brand_as)) {
-          rowBrands.push(plan.brand_as);
-        }
-      });
-
-      rowBrands.forEach((brand) => {
-        const cell = draft[planKey(quarter, brand)] ?? EMPTY_CELL;
-        rows.push({
-          quarter,
-          brand_as: brand,
-          in_gross: brand !== null && cell.inGross,
-          plan_rub: parseNumberInput(cell.planRub),
-          forecast_rub: parseNumberInput(cell.forecastRub),
-          investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
-          updated_at: versions.get(planKey(quarter, brand)) ?? '',
-        });
-      });
-    });
-
-    onSave({
-      year: data.year,
-      periods: QUARTERS.map((quarter) => {
-        const setting = settings[quarter] ?? DEFAULT_SETTINGS;
-        return { quarter, vat_included: setting.vat_included, vat_rate: setting.vat_rate };
-      }),
-      plans: rows,
-    });
-  };
+  const handleSave = () => onSave(planRequest);
 
   const availableBrands = brandOptions.filter((b) => !brands.includes(b));
   const vatQuarters: number[] = period === 'year' ? [...QUARTERS] : [period];
@@ -295,8 +327,9 @@ export default function NetworkPlanGrid({
           metric={yearMetric}
           brands={brands}
           draft={draft}
-          settings={settings}
+          amounts={amounts}
           totals={totals}
+          yearTotals={view.year_totals}
           canEdit={canEdit}
           onCellChange={setCell}
           onToggleGross={toggleGross}
@@ -307,7 +340,7 @@ export default function NetworkPlanGrid({
           quarter={period}
           brands={brands}
           draft={draft}
-          setting={settings[period] ?? DEFAULT_SETTINGS}
+          amounts={amounts}
           totals={totals[period - 1]}
           canEdit={canEdit}
           commentedCells={commentedCells}

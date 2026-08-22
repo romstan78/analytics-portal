@@ -8,6 +8,7 @@ import type {
   NetworkBrandsResponse,
   NetworkCommentsResponse,
   NetworkListResponse,
+  NetworkPlanPreviewResponse,
   NetworkPlanResponse,
   NetworkPlanSaveRequest,
   NetworkPlanSaveResponse,
@@ -59,6 +60,12 @@ export const networkAPI = {
   savePlan: (id: number, data: NetworkPlanSaveRequest): Promise<NetworkPlanSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/plan`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkPlanSaveResponse>(r, 'Ошибка сохранения планов')),
+
+  // Пересчёт черновика до сохранения. НДС, инвестиции и итоги считает только
+  // бэкенд — интерфейс показывает то, что вернул этот запрос.
+  previewPlan: (id: number, data: NetworkPlanSaveRequest): Promise<NetworkPlanPreviewResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/plan/preview`, { method: 'POST', body: JSON.stringify(data) })
+      .then(r => parseJSONResponse<NetworkPlanPreviewResponse>(r, 'Ошибка пересчёта планов')),
 
   // Комментарии: без года/квартала/бренда — ко всей сети
   getComments: (id: number): Promise<NetworkCommentsResponse> =>

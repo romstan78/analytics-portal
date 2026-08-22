@@ -3,7 +3,7 @@
 
 import { Box, Paper, Tooltip, Typography } from '@mui/material';
 import { deltaPct, formatRub, formatRubShort, formatSignedPct } from '../utils/networkPlan';
-import type { QuarterTotals } from '../utils/networkPlan';
+import type { NetworkPlanTotals } from '../types/network';
 import { TONE_COLOR, completionTone, deviationTone } from '../utils/networkPlanView';
 
 interface CardProps {
@@ -40,19 +40,19 @@ function SummaryCard({ label, value, hint, tone = 'neutral', accent }: CardProps
 }
 
 interface NetworkPlanSummaryProps {
-  totals: QuarterTotals;
+  totals: NetworkPlanTotals;
   periodLabel: string;
 }
 
 export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanSummaryProps) {
-  const factPct = deltaPct(totals.factRub, totals.contractPlanRub);
-  const forecastPct = deltaPct(totals.forecastRub, totals.contractPlanRub);
+  const factPct = deltaPct(totals.fact_rub, totals.contract_plan_rub);
+  const forecastPct = deltaPct(totals.forecast_rub, totals.contract_plan_rub);
   // Инвестиции сравниваем между собой по одной базе — до вычета НДС.
-  const forecastInvestPct = deltaPct(totals.forecastInvestmentsRub, totals.investmentsRub);
-  const factInvestPct = deltaPct(totals.factInvestmentsRub, totals.investmentsRub);
+  const forecastInvestPct = deltaPct(totals.forecast_investments_rub, totals.investments_rub);
+  const factInvestPct = deltaPct(totals.fact_investments_rub, totals.investments_rub);
 
   // Доля инвестиций в фактическом объёме — то, на что смотрят при разборе квартала.
-  const factShare = totals.factRub > 0 ? (totals.factInvestmentsRub / totals.factRub) * 100 : null;
+  const factShare = totals.fact_rub > 0 ? (totals.fact_investments_rub / totals.fact_rub) * 100 : null;
 
   const pctHint = (value: number | null, suffix: string, empty: string) => {
     if (value == null) return empty;
@@ -72,7 +72,7 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
     >
       <SummaryCard
         label={`План · ${periodLabel}`}
-        value={totals.contractPlanRub}
+        value={totals.contract_plan_rub}
         hint={totals.undistributed != null && totals.undistributed !== 0
           ? `валовый остаток ${formatRubShort(totals.undistributed)}`
           : 'обязательство по контракту'}
@@ -81,30 +81,30 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
       />
       <SummaryCard
         label="Факт"
-        value={totals.factRub > 0 ? totals.factRub : null}
+        value={totals.fact_rub > 0 ? totals.fact_rub : null}
         hint={factPct == null ? 'не загружен' : `${(100 + factPct).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} % плана`}
         tone={completionTone(factPct == null ? null : 100 + factPct)}
       />
       <SummaryCard
         label="Прогноз"
-        value={totals.forecastRub > 0 ? totals.forecastRub : null}
+        value={totals.forecast_rub > 0 ? totals.forecast_rub : null}
         hint={pctHint(forecastPct, 'к плану', 'не внесён')}
         tone={deviationTone(forecastPct)}
       />
       <SummaryCard
         label="Инв. план"
-        value={totals.investmentsRub > 0 ? totals.investmentsRub : null}
-        hint={totals.investmentsRub > 0 ? `без НДС ${formatRubShort(totals.investmentsRubNet)}` : 'нет процента'}
+        value={totals.investments_rub > 0 ? totals.investments_rub : null}
+        hint={totals.investments_rub > 0 ? `без НДС ${formatRubShort(totals.investments_rub_net)}` : 'нет процента'}
       />
       <SummaryCard
         label="Инв. прогноз"
-        value={totals.forecastInvestmentsRub > 0 ? totals.forecastInvestmentsRub : null}
+        value={totals.forecast_investments_rub > 0 ? totals.forecast_investments_rub : null}
         hint={pctHint(forecastInvestPct, 'к плану', 'не внесён')}
         tone={deviationTone(forecastInvestPct)}
       />
       <SummaryCard
         label="Инв. факт"
-        value={totals.factInvestmentsRub > 0 ? totals.factInvestmentsRub : null}
+        value={totals.fact_investments_rub > 0 ? totals.fact_investments_rub : null}
         hint={factShare != null
           ? `${factShare.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} % от факта`
           : pctHint(factInvestPct, 'к плану', 'не загружен')}

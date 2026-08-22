@@ -20,14 +20,15 @@ import {
 import { MoreVert as MoreIcon } from '@mui/icons-material';
 import {
   QUARTERS,
-  calcCell,
+  EMPTY_AMOUNTS,
   EMPTY_CELL,
   formatPct,
   formatRubShort,
   planKey,
   round2,
 } from '../utils/networkPlan';
-import type { DraftCell, QuarterSettings, QuarterTotals } from '../utils/networkPlan';
+import type { CellAmounts, DraftCell } from '../utils/networkPlan';
+import type { NetworkPlanTotals } from '../types/network';
 import { PlanNumberField, ValueCell } from './networkPlanCells';
 import type { YearMetric } from '../utils/networkPlanView';
 
@@ -50,8 +51,9 @@ interface NetworkYearTableProps {
   metric: YearMetric;
   brands: string[];
   draft: Record<string, DraftCell>;
-  settings: Record<number, QuarterSettings>;
-  totals: QuarterTotals[];
+  amounts: Record<string, CellAmounts>;
+  totals: NetworkPlanTotals[];
+  yearTotals: NetworkPlanTotals;
   canEdit: boolean;
   onCellChange: (quarter: number, brand: string | null, patch: Partial<DraftCell>) => void;
   onToggleGross: (brand: string, next: boolean, allQuarters: boolean, quarter?: number) => void;
@@ -62,8 +64,9 @@ export default function NetworkYearTable({
   metric,
   brands,
   draft,
-  settings,
+  amounts,
   totals,
+  yearTotals,
   canEdit,
   onCellChange,
   onToggleGross,
@@ -73,21 +76,23 @@ export default function NetworkYearTable({
 
   const cellOf = (quarter: number, brand: string | null): DraftCell =>
     draft[planKey(quarter, brand)] ?? EMPTY_CELL;
+  const amountsOf = (quarter: number, brand: string | null): CellAmounts =>
+    amounts[planKey(quarter, brand)] ?? EMPTY_AMOUNTS;
 
   const field = EDITABLE[metric];
   const isMoney = metric !== 'pct';
-  const hasAnyGross = QUARTERS.some((q) => totals[q - 1].grossBrandsCount > 0 || totals[q - 1].grossPoolRub != null);
+  const hasAnyGross = QUARTERS.some((q) => totals[q - 1].gross_brands_count > 0 || totals[q - 1].gross_pool_rub != null);
 
   // Рассчитанное значение метрики в ячейке бренда.
   const computed = (quarter: number, brand: string): number | null => {
-    const amounts = calcCell(cellOf(quarter, brand), settings[quarter]);
+    const row = amountsOf(quarter, brand);
     switch (metric) {
-      case 'fact': return amounts.fact;
-      case 'investPlan': return amounts.investPlan;
-      case 'investForecast': return amounts.investForecast;
-      case 'investFact': return amounts.investFact;
-      case 'plan': return amounts.plan;
-      case 'forecast': return amounts.forecast;
+      case 'fact': return row.fact;
+      case 'investPlan': return row.investPlan;
+      case 'investForecast': return row.investForecast;
+      case 'investFact': return row.investFact;
+      case 'plan': return row.plan;
+      case 'forecast': return row.forecast;
       case 'pct': return null;
       default: return null;
     }
@@ -99,7 +104,7 @@ export default function NetworkYearTable({
       let plan = 0;
       let investments = 0;
       QUARTERS.forEach((q) => {
-        const a = calcCell(cellOf(q, brand), settings[q]);
+        const a = amountsOf(q, brand);
         plan += a.plan ?? 0;
         investments += a.investPlan ?? 0;
       });
@@ -176,35 +181,24 @@ export default function NetworkYearTable({
 
   // Строка валового пула: у неё есть только объём — план и прогноз.
   const poolField = metric === 'plan' ? 'planRub' : metric === 'forecast' ? 'forecastRub' : null;
-  const poolValue = (quarter: number): number | null => {
-    if (metric === 'fact') return totals[quarter - 1].grossPoolFactRub || null;
-    if (metric === 'plan') return totals[quarter - 1].grossPoolRub;
-    if (metric === 'forecast') return totals[quarter - 1].grossPoolForecastRub;
+  const poolOf = (t: NetworkPlanTotals): number | null => {
+    if (metric === 'fact') return t.gross_pool_fact_rub || null;
+    if (metric === 'plan') return t.gross_pool_rub;
+    if (metric === 'forecast') return t.gross_pool_forecast_rub;
     return null;
   };
+  const poolValue = (quarter: number): number | null => poolOf(totals[quarter - 1]);
+  const poolYearValue = (): number | null => poolOf(yearTotals);
 
-  const yearSum = (pick: (t: QuarterTotals) => number | null): number | null => {
-    let sum = 0;
-    let seen = false;
-    totals.forEach((t) => {
-      const value = pick(t);
-      if (value != null) {
-        sum = round2(sum + value);
-        seen = true;
-      }
-    });
-    return seen ? sum : null;
-  };
-
-  const totalsRowValue = (t: QuarterTotals): number | null => {
+  const totalsRowValue = (t: NetworkPlanTotals): number | null => {
     switch (metric) {
-      case 'plan': return t.contractPlanRub || null;
-      case 'fact': return t.factRub || null;
-      case 'forecast': return t.forecastRub || null;
-      case 'investPlan': return t.investmentsRub || null;
-      case 'investForecast': return t.forecastInvestmentsRub || null;
-      case 'investFact': return t.factInvestmentsRub || null;
-      case 'pct': return t.planRub > 0 ? round2((t.investmentsRub / t.planRub) * 100) : null;
+      case 'plan': return t.contract_plan_rub || null;
+      case 'fact': return t.fact_rub || null;
+      case 'forecast': return t.forecast_rub || null;
+      case 'investPlan': return t.investments_rub || null;
+      case 'investForecast': return t.forecast_investments_rub || null;
+      case 'investFact': return t.fact_investments_rub || null;
+      case 'pct': return t.plan_rub > 0 ? round2((t.investments_rub / t.plan_rub) * 100) : null;
       default: return null;
     }
   };
@@ -257,7 +251,7 @@ export default function NetworkYearTable({
                 </TableCell>
               ))}
               <TableCell align="right">
-                <ValueCell value={yearSum((t) => poolValue(t.quarter))} bold />
+                <ValueCell value={poolYearValue()} bold />
               </TableCell>
               <TableCell />
             </TableRow>
@@ -286,7 +280,7 @@ export default function NetworkYearTable({
                 );
               })}
               <TableCell align="right">
-                <ValueCell value={yearSum((t) => t.undistributed)} />
+                <ValueCell value={yearTotals.undistributed} />
               </TableCell>
               <TableCell />
             </TableRow>
@@ -319,17 +313,10 @@ export default function NetworkYearTable({
             ))}
             <TableCell align="right">
               {isMoney ? (
-                <ValueCell value={yearSum(totalsRowValue)} bold />
+                <ValueCell value={totalsRowValue(yearTotals)} bold />
               ) : (
                 <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                  {formatPct(
-                    totals.reduce((sum, t) => sum + t.planRub, 0) > 0
-                      ? round2(
-                          (totals.reduce((sum, t) => sum + t.investmentsRub, 0) /
-                            totals.reduce((sum, t) => sum + t.planRub, 0)) * 100,
-                        )
-                      : null,
-                  )}
+                  {formatPct(totalsRowValue(yearTotals))}
                 </Typography>
               )}
             </TableCell>

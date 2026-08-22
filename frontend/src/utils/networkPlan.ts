@@ -1,8 +1,10 @@
-// Расчёты сетки планов реестра сетей.
-// Повторяют backend/services/network_service.go, чтобы итоги в таблице
-// пересчитывались во время ввода, до сохранения.
+// Показ сетки планов реестра сетей: черновик полей ввода и форматирование.
+//
+// Расчётов здесь нет. НДС, инвестиции и итоги считает backend
+// (backend/services/network_service.go): во время ввода их возвращает
+// POST /api/networks/:id/plan/preview, после сохранения — сам ответ на запись.
 
-import type { NetworkPeriod, NetworkPlan } from '../types/network';
+import type { NetworkPlan, NetworkPeriod } from '../types/network';
 
 export const QUARTERS = [1, 2, 3, 4] as const;
 
@@ -10,13 +12,6 @@ export const round2 = (v: number): number => Math.round(v * 100) / 100;
 
 // Ключ строки плана: квартал + бренд. Пустой бренд — общий объём валового контракта.
 export const planKey = (quarter: number, brand: string | null): string => `${quarter}|${brand ?? ''}`;
-
-// Сумма инвестиций с вычетом НДС. Сеть без НДС в этом квартале — сумма остаётся как есть.
-// К объёмам НДС не применяется: план, факт и прогноз показываются так, как их внесли.
-export function netRub(gross: number, vatIncluded: boolean, vatRate: number): number {
-  if (!vatIncluded || vatRate <= 0) return round2(gross);
-  return round2(gross / (1 + vatRate / 100));
-}
 
 // Разбор введённого числа: пробелы-разделители и запятая как в Excel.
 // Пустая строка — значение снято, а не ноль.
@@ -120,179 +115,41 @@ export interface CellAmounts {
   investFactNet: number | null;
 }
 
-export function calcCell(cell: DraftCell | undefined, setting: QuarterSettings | undefined): CellAmounts {
-  const vatIncluded = setting?.vat_included ?? false;
-  const vatRate = setting?.vat_rate ?? 0;
-  const plan = cell ? parseNumberInput(cell.planRub) : null;
-  const forecast = cell ? parseNumberInput(cell.forecastRub) : null;
-  const pct = cell ? parseNumberInput(cell.investmentsPct) : null;
+export const EMPTY_AMOUNTS: CellAmounts = {
+  plan: null,
+  fact: null,
+  forecast: null,
+  investPlan: null,
+  investPlanNet: null,
+  investForecast: null,
+  investForecastNet: null,
+  investFact: null,
+  investFactNet: null,
+};
 
-  const invest = (volume: number | null): [number | null, number | null] => {
-    if (volume == null || pct == null) return [null, null];
-    const gross = round2((volume * pct) / 100);
-    return [gross, netRub(gross, vatIncluded, vatRate)];
-  };
-  const [investPlan, investPlanNet] = invest(plan);
-  const [investForecast, investForecastNet] = invest(forecast);
-
-  // Факт инвестиций пришёл суммой — процентом его не пересчитываем,
-  // но базу «без НДС» считаем по ставке того же квартала.
-  const investFact = cell?.factInvestmentsRub ?? null;
-  const investFactNet = investFact == null ? null : netRub(investFact, vatIncluded, vatRate);
-
+// Расчётные суммы одной ячейки — так, как их вернул бэкенд.
+export function amountsOfPlan(plan: NetworkPlan | undefined): CellAmounts {
+  if (!plan) return EMPTY_AMOUNTS;
   return {
-    plan,
-    fact: cell?.factRub ?? null,
-    forecast,
-    investPlan,
-    investPlanNet,
-    investForecast,
-    investForecastNet,
-    investFact,
-    investFactNet,
+    plan: plan.plan_rub,
+    fact: plan.fact_rub,
+    forecast: plan.forecast_rub,
+    investPlan: plan.investments_rub,
+    investPlanNet: plan.investments_rub_net,
+    investForecast: plan.forecast_investments_rub,
+    investForecastNet: plan.forecast_investments_rub_net,
+    investFact: plan.fact_investments_rub,
+    investFactNet: plan.fact_investments_rub_net,
   };
 }
 
-export interface QuarterTotals {
-  quarter: number;
-  planRub: number;
-  grossBrandsPlan: number;
-  separatePlanRub: number;
-  grossPoolRub: number | null;
-  undistributed: number | null;
-  contractPlanRub: number;
-  grossBrandsCount: number;
-  factRub: number;
-  grossPoolFactRub: number;
-  forecastRub: number;
-  grossPoolForecastRub: number | null;
-  investmentsRub: number;
-  investmentsRubNet: number;
-  forecastInvestmentsRub: number;
-  forecastInvestmentsRubNet: number;
-  factInvestmentsRub: number;
-  factInvestmentsRubNet: number;
-}
-
-// Итоги квартала по черновику. Валовый объём — свойство бренда: остаток
-// к распределению считается только от брендов, отнесённых к пулу.
-export function calcQuarterTotals(
-  draft: Record<string, DraftCell>,
-  brands: string[],
-  settings: Record<number, QuarterSettings>,
-): QuarterTotals[] {
-  return QUARTERS.map((quarter) => {
-    const setting = settings[quarter];
-    const t: QuarterTotals = {
-      quarter,
-      planRub: 0,
-      grossBrandsPlan: 0,
-      separatePlanRub: 0,
-      grossPoolRub: null,
-      undistributed: null,
-      contractPlanRub: 0,
-      grossBrandsCount: 0,
-      factRub: 0,
-      grossPoolFactRub: 0,
-      forecastRub: 0,
-      grossPoolForecastRub: null,
-      investmentsRub: 0,
-      investmentsRubNet: 0,
-      forecastInvestmentsRub: 0,
-      forecastInvestmentsRubNet: 0,
-      factInvestmentsRub: 0,
-      factInvestmentsRubNet: 0,
-    };
-
-    const pool = calcCell(draft[planKey(quarter, null)], setting);
-    t.grossPoolRub = pool.plan;
-    t.grossPoolForecastRub = pool.forecast;
-
-    brands.forEach((brand) => {
-      const cell = draft[planKey(quarter, brand)];
-      if (!cell) return;
-      const amounts = calcCell(cell, setting);
-      if (cell.inGross) t.grossBrandsCount += 1;
-
-      if (amounts.plan != null) {
-        t.planRub = round2(t.planRub + amounts.plan);
-        if (cell.inGross) t.grossBrandsPlan = round2(t.grossBrandsPlan + amounts.plan);
-        else t.separatePlanRub = round2(t.separatePlanRub + amounts.plan);
-      }
-      if (amounts.fact != null) {
-        t.factRub = round2(t.factRub + amounts.fact);
-        if (cell.inGross) t.grossPoolFactRub = round2(t.grossPoolFactRub + amounts.fact);
-      }
-      if (amounts.forecast != null) t.forecastRub = round2(t.forecastRub + amounts.forecast);
-      if (amounts.investPlan != null) {
-        t.investmentsRub = round2(t.investmentsRub + amounts.investPlan);
-        t.investmentsRubNet = round2(t.investmentsRubNet + (amounts.investPlanNet ?? 0));
-      }
-      if (amounts.investForecast != null) {
-        t.forecastInvestmentsRub = round2(t.forecastInvestmentsRub + amounts.investForecast);
-        t.forecastInvestmentsRubNet = round2(t.forecastInvestmentsRubNet + (amounts.investForecastNet ?? 0));
-      }
-      if (amounts.investFact != null) {
-        t.factInvestmentsRub = round2(t.factInvestmentsRub + amounts.investFact);
-        t.factInvestmentsRubNet = round2(t.factInvestmentsRubNet + (amounts.investFactNet ?? 0));
-      }
-    });
-
-    // Остаток есть только там, где пул заведён: без него распределять нечего.
-    if (t.grossPoolRub != null) t.undistributed = round2(t.grossPoolRub - t.grossBrandsPlan);
-    // Обязательство по контракту: пул целиком, даже если бренды разобрали его
-    // не полностью, плюс бренды вне пула как есть.
-    t.contractPlanRub = round2((t.grossPoolRub ?? t.grossBrandsPlan) + t.separatePlanRub);
-    return t;
+// Расчётные суммы всех ячеек по ключу «квартал|бренд».
+export function buildAmounts(plans: NetworkPlan[]): Record<string, CellAmounts> {
+  const amounts: Record<string, CellAmounts> = {};
+  plans.forEach((plan) => {
+    amounts[planKey(plan.quarter, plan.brand_as)] = amountsOfPlan(plan);
   });
-}
-
-// Сумма итогов за год: складывает те же поля по всем кварталам.
-// Поля пула суммируются только там, где пул заведён.
-export function sumYearTotals(totals: QuarterTotals[]): QuarterTotals {
-  const year: QuarterTotals = {
-    quarter: 0,
-    planRub: 0,
-    grossBrandsPlan: 0,
-    separatePlanRub: 0,
-    grossPoolRub: null,
-    undistributed: null,
-    contractPlanRub: 0,
-    grossBrandsCount: 0,
-    factRub: 0,
-    grossPoolFactRub: 0,
-    forecastRub: 0,
-    grossPoolForecastRub: null,
-    investmentsRub: 0,
-    investmentsRubNet: 0,
-    forecastInvestmentsRub: 0,
-    forecastInvestmentsRubNet: 0,
-    factInvestmentsRub: 0,
-    factInvestmentsRubNet: 0,
-  };
-
-  totals.forEach((t) => {
-    year.planRub = round2(year.planRub + t.planRub);
-    year.grossBrandsPlan = round2(year.grossBrandsPlan + t.grossBrandsPlan);
-    year.separatePlanRub = round2(year.separatePlanRub + t.separatePlanRub);
-    year.contractPlanRub = round2(year.contractPlanRub + t.contractPlanRub);
-    year.grossBrandsCount = Math.max(year.grossBrandsCount, t.grossBrandsCount);
-    year.factRub = round2(year.factRub + t.factRub);
-    year.grossPoolFactRub = round2(year.grossPoolFactRub + t.grossPoolFactRub);
-    year.forecastRub = round2(year.forecastRub + t.forecastRub);
-    year.investmentsRub = round2(year.investmentsRub + t.investmentsRub);
-    year.investmentsRubNet = round2(year.investmentsRubNet + t.investmentsRubNet);
-    year.forecastInvestmentsRub = round2(year.forecastInvestmentsRub + t.forecastInvestmentsRub);
-    year.forecastInvestmentsRubNet = round2(year.forecastInvestmentsRubNet + t.forecastInvestmentsRubNet);
-    year.factInvestmentsRub = round2(year.factInvestmentsRub + t.factInvestmentsRub);
-    year.factInvestmentsRubNet = round2(year.factInvestmentsRubNet + t.factInvestmentsRubNet);
-    if (t.grossPoolRub != null) year.grossPoolRub = round2((year.grossPoolRub ?? 0) + t.grossPoolRub);
-    if (t.grossPoolForecastRub != null) {
-      year.grossPoolForecastRub = round2((year.grossPoolForecastRub ?? 0) + t.grossPoolForecastRub);
-    }
-    if (t.undistributed != null) year.undistributed = round2((year.undistributed ?? 0) + t.undistributed);
-  });
-  return year;
+  return amounts;
 }
 
 // Черновик из загруженных строк плана: то, что показывается в полях ввода.

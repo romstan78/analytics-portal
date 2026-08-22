@@ -176,6 +176,8 @@ func main() {
 		api.POST("/networks", middleware.RoleRequired("admin", "kam"), handlers.CreateNetwork)
 		api.PATCH("/networks/:id", middleware.RoleRequired("admin", "kam"), handlers.UpdateNetwork)
 		api.POST("/networks/:id/plan", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPlan)
+		// Пересчёт черновика: расчёт живёт только на бэкенде, в БД не пишет.
+		api.POST("/networks/:id/plan/preview", middleware.RoleRequired("admin", "kam"), handlers.PreviewNetworkPlan)
 		api.POST("/networks/:id/comments", middleware.RoleRequired("admin", "kam", "agreement1", "agreement2"), handlers.AddNetworkComment)
 
 		// Промо — удаление/восстановление (только admin)

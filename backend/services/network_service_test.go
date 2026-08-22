@@ -230,3 +230,124 @@ func TestCalculateNetworkTotalsFactInvestments(t *testing.T) {
 		t.Errorf("факт инвестиций без НДС = %v, ожидалось 22000", q1.FactInvestmentsRubNet)
 	}
 }
+
+func TestEnrichNetworkPlansComputesFactInvestmentsNet(t *testing.T) {
+	periods := []models.NetworkPeriod{
+		{Quarter: 1, VATIncluded: true, VATRate: 20},
+		{Quarter: 2, VATIncluded: false, VATRate: 20},
+	}
+	// Процента нет: факт инвестиций всё равно должен получить базу без НДС.
+	plans := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: brandPtr("Альфа"), FactInvestmentsRub: models.PtrFloat(120000)},
+		{Quarter: 2, BrandAS: brandPtr("Альфа"), FactInvestmentsRub: models.PtrFloat(120000)},
+	}
+
+	got := EnrichNetworkPlans(plans, periods)
+
+	if v := models.ValFloat(got[0].FactInvestmentsNet); v != 100000 {
+		t.Errorf("факт без НДС = %v, ожидалось 100000", v)
+	}
+	if v := models.ValFloat(got[1].FactInvestmentsNet); v != 120000 {
+		t.Errorf("сеть без НДС: факт = %v, ожидалось 120000", v)
+	}
+}
+
+func TestSumYearTotalsAddsQuarters(t *testing.T) {
+	totals := []NetworkPlanTotals{
+		{Quarter: 1, PlanRub: 100, GrossBrandsPlan: 60, SeparatePlanRub: 40, ContractPlanRub: 100,
+			GrossBrandsCount: 2, FactRub: 90, ForecastRub: 110, InvestmentsRub: 10, InvestmentsRubNet: 8.33},
+		{Quarter: 2, PlanRub: 200, GrossBrandsPlan: 120, SeparatePlanRub: 80, ContractPlanRub: 200,
+			GrossBrandsCount: 3, FactRub: 180, ForecastRub: 220, InvestmentsRub: 20, InvestmentsRubNet: 16.67},
+	}
+
+	year := SumYearTotals(totals)
+
+	if year.PlanRub != 300 || year.ContractPlanRub != 300 {
+		t.Errorf("план за год = %v, обязательство = %v, ожидалось 300 и 300", year.PlanRub, year.ContractPlanRub)
+	}
+	if year.FactRub != 270 || year.ForecastRub != 330 {
+		t.Errorf("факт = %v, прогноз = %v, ожидалось 270 и 330", year.FactRub, year.ForecastRub)
+	}
+	if year.InvestmentsRubNet != 25 {
+		t.Errorf("инвестиции без НДС = %v, ожидалось 25", year.InvestmentsRubNet)
+	}
+	// Состав пула — не сумма: бренд, стоящий в двух кварталах, один и тот же.
+	if year.GrossBrandsCount != 3 {
+		t.Errorf("брендов в пуле = %d, ожидалось 3 (максимум по кварталу)", year.GrossBrandsCount)
+	}
+}
+
+// Год без единого заведённого пула остаётся без остатка, а не с нулём:
+// ноль читался бы как «пул разобран полностью».
+func TestSumYearTotalsKeepsPoolAbsent(t *testing.T) {
+	year := SumYearTotals([]NetworkPlanTotals{{Quarter: 1}, {Quarter: 2}})
+	if year.GrossPoolRub != nil || year.Undistributed != nil || year.GrossPoolFcstRub != nil {
+		t.Errorf("пул не заводился, но поля заполнены: %#v", year)
+	}
+
+	pool := 500.0
+	withPool := SumYearTotals([]NetworkPlanTotals{
+		{Quarter: 1, GrossPoolRub: &pool, Undistributed: models.PtrFloat(200)},
+		{Quarter: 2},
+	})
+	if models.ValFloat(withPool.GrossPoolRub) != 500 || models.ValFloat(withPool.Undistributed) != 200 {
+		t.Errorf("пул за год = %#v, ожидалось 500 и остаток 200", withPool)
+	}
+}
+
+func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
+	stored := []models.NetworkPlan{{
+		ID: 7, NetworkID: 3, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+		FactRub: models.PtrFloat(900000), FactInvestmentsRub: models.PtrFloat(120000),
+	}}
+	// Черновик несёт только то, что вводит пользователь.
+	draft := []NetworkPlanDraft{{
+		Quarter: 1, BrandAS: brandPtr("Альфа"), InGross: true,
+		PlanRub: models.PtrFloat(1200000), InvestmentsPct: models.PtrFloat(10),
+	}}
+
+	plans, totals, year := PreviewNetworkPlans(draft, stored, periods)
+
+	if len(plans) != 1 {
+		t.Fatalf("строк плана = %d, ожидалась 1", len(plans))
+	}
+	if models.ValFloat(plans[0].FactRub) != 900000 {
+		t.Errorf("факт = %v, ожидалось 900000 из сохранённой строки", models.ValFloat(plans[0].FactRub))
+	}
+	if v := models.ValFloat(plans[0].InvestmentsRub); v != 120000 {
+		t.Errorf("инвестиции = %v, ожидалось 120000", v)
+	}
+	if v := models.ValFloat(plans[0].InvestmentsNet); v != 100000 {
+		t.Errorf("инвестиции без НДС = %v, ожидалось 100000", v)
+	}
+	if v := models.ValFloat(plans[0].FactInvestmentsNet); v != 100000 {
+		t.Errorf("факт инвестиций без НДС = %v, ожидалось 100000", v)
+	}
+	if totals[0].GrossBrandsPlan != 1200000 || totals[0].FactRub != 900000 {
+		t.Errorf("итоги квартала неверны: %#v", totals[0])
+	}
+	if year.PlanRub != 1200000 {
+		t.Errorf("итог года = %v, ожидалось 1200000", year.PlanRub)
+	}
+}
+
+// Строка, которой в черновике нет, в итоги не попадает: иначе таблица
+// показывала бы суммы по брендам, скрытым с экрана.
+func TestPreviewNetworkPlansIgnoresRowsOutsideDraft(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: false}}
+	stored := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: brandPtr("Альфа"), FactRub: models.PtrFloat(100)},
+		{Quarter: 1, BrandAS: brandPtr("Скрытый"), FactRub: models.PtrFloat(999)},
+	}
+	draft := []NetworkPlanDraft{{Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(50)}}
+
+	plans, totals, _ := PreviewNetworkPlans(draft, stored, periods)
+
+	if len(plans) != 1 {
+		t.Fatalf("строк = %d, ожидалась только строка черновика", len(plans))
+	}
+	if totals[0].FactRub != 100 {
+		t.Errorf("факт квартала = %v, ожидалось 100 без скрытого бренда", totals[0].FactRub)
+	}
+}

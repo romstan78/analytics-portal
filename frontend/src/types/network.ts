@@ -40,6 +40,7 @@ export interface NetworkPlan {
   fact_rub: number | null;
   forecast_rub: number | null;
   fact_investments_rub: number | null;
+  fact_investments_rub_net: number | null;
   investments_pct: number | null;
   investments_rub: number | null;
   investments_rub_net: number | null;
@@ -110,6 +111,7 @@ export interface NetworkPlanResponse {
   periods: NetworkPeriod[];
   plans: NetworkPlan[];
   totals: NetworkPlanTotals[];
+  year_totals: NetworkPlanTotals;
 }
 
 export interface NetworkPlanSaveResponse {
@@ -118,6 +120,16 @@ export interface NetworkPlanSaveResponse {
   periods: NetworkPeriod[];
   plans: NetworkPlan[];
   totals: NetworkPlanTotals[];
+  year_totals: NetworkPlanTotals;
+}
+
+// Пересчёт несохранённого черновика: то же, что вернётся после сохранения.
+export interface NetworkPlanPreviewResponse {
+  year: number;
+  periods: NetworkPeriod[];
+  plans: NetworkPlan[];
+  totals: NetworkPlanTotals[];
+  year_totals: NetworkPlanTotals;
 }
 
 // Строка плана в запросе на сохранение.
