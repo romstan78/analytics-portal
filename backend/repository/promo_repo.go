@@ -814,11 +814,16 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		values = append(values, updatedAt)
 	}
 
-	result, err := config.DB.Exec(query, values...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	var affected int64
+	err := WithPromoWrite(func(tx *sql.Tx) error {
+		result, execErr := tx.Exec(query, values...)
+		if execErr != nil {
+			return execErr
+		}
+		affected, execErr = result.RowsAffected()
+		return execErr
+	})
+	return affected, err
 }
 
 func InsertPromo(r *models.PromoRowDB) (int64, error) {
@@ -883,52 +888,64 @@ func InsertPromo(r *models.PromoRowDB) (int64, error) {
 	)`
 
 	var newID int64
-	err := config.DB.QueryRow(query,
-		r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
-		r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
-		r.BaselineUnits, r.BaselineRub,
-		r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
-		r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
-		r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
-		r.PlanInvestmentsPct, r.PlanROI,
-		r.ContractPrice, r.GM,
-		r.IDDirectum, r.DSNumber, r.DiscountAmount,
-		r.Conditions, r.Comments, r.EcomSegment,
-		r.TotalPharmacies, r.PromoPharmacies,
-		r.Status, r.Date,
-		r.KeyRegion, r.Top20Segment, r.OlapPrice,
-		r.PlanPromoCipOlap, r.FactPromoCipOlap,
-		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
-		r.ActualPromoSalesUnits, r.ActualInvestments,
-		r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
-		r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
-		r.Agreement1, r.Agreement2,
-		r.NetPromoUpliftRub, r.NetPromoUpliftPct,
-		r.ActualInvestmentsPct, r.ActualROI,
-		r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
-		r.ActualPromoUpliftRubWoEcom,
-		r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
-		r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
-		r.PlanVsFactRub, r.PlanVsFactInvestments,
-		r.TurnoverPerPoint, r.TurnoverPerPointPromo,
-	).Scan(&newID)
+	err := WithPromoWrite(func(tx *sql.Tx) error {
+		return tx.QueryRow(query,
+			r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
+			r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
+			r.BaselineUnits, r.BaselineRub,
+			r.PlanPromoUnits, r.PlanPromoRub, r.PlanInvestmentsRub,
+			r.PlanPromoUpliftUnits, r.PlanPromoUpliftRub,
+			r.PlanPromoUpliftPctUnits, r.PlanPromoUpliftPctRub,
+			r.PlanInvestmentsPct, r.PlanROI,
+			r.ContractPrice, r.GM,
+			r.IDDirectum, r.DSNumber, r.DiscountAmount,
+			r.Conditions, r.Comments, r.EcomSegment,
+			r.TotalPharmacies, r.PromoPharmacies,
+			r.Status, r.Date,
+			r.KeyRegion, r.Top20Segment, r.OlapPrice,
+			r.PlanPromoCipOlap, r.FactPromoCipOlap,
+			r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
+			r.ActualPromoSalesUnits, r.ActualInvestments,
+			r.ActualPromoRub, r.ActualPromoUpliftUnits, r.ActualPromoUpliftRub,
+			r.ActualExternalEcomUnits, r.ActualCorrectedBaseline,
+			r.Agreement1, r.Agreement2,
+			r.NetPromoUpliftRub, r.NetPromoUpliftPct,
+			r.ActualInvestmentsPct, r.ActualROI,
+			r.ActualPromoRubWoEcom, r.ActualPromoUpliftUnitsWoEcom,
+			r.ActualPromoUpliftRubWoEcom,
+			r.NetPromoUpliftRubWoEcom, r.NetPromoUpliftPctWoEcom,
+			r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
+			r.PlanVsFactRub, r.PlanVsFactInvestments,
+			r.TurnoverPerPoint, r.TurnoverPerPointPromo,
+		).Scan(&newID)
+	})
 	return newID, err
 }
 
 func SoftDeletePromo(id int) (int64, error) {
-	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE(), updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL", id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return execPromoWrite(
+		"UPDATE dbo.tbl_PromoActivities SET deleted_at = GETDATE(), updated_at = GETDATE() WHERE id = ? AND deleted_at IS NULL",
+		id)
 }
 
 func RestorePromo(id int) (int64, error) {
-	result, err := config.DB.Exec("UPDATE dbo.tbl_PromoActivities SET deleted_at = NULL, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NOT NULL", id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return execPromoWrite(
+		"UPDATE dbo.tbl_PromoActivities SET deleted_at = NULL, updated_at = GETDATE() WHERE id = ? AND deleted_at IS NOT NULL",
+		id)
+}
+
+// execPromoWrite выполняет одиночную правку промо под блокировкой записи.
+func execPromoWrite(query string, args ...interface{}) (int64, error) {
+	var affected int64
+	err := WithPromoWrite(func(tx *sql.Tx) error {
+		result, execErr := tx.Exec(query, args...)
+		if execErr != nil {
+			return execErr
+		}
+		affected, execErr = result.RowsAffected()
+		return execErr
+	})
+	return affected, err
 }
 
 // ─── Approvals ──────────────────────────────────────────────────────────────
@@ -1234,6 +1251,10 @@ func ApprovePromoWithStatus(
 	}
 	defer tx.Rollback()
 
+	if err := acquirePromoSharedLock(tx); err != nil {
+		return err
+	}
+
 	item := BatchApproveItem{ID: id, UpdatedAt: updatedAt}
 	locked, err := lockApprovalRow(tx, statusField, item)
 	if err != nil {
@@ -1283,6 +1304,10 @@ func BatchApprove(
 		return 0, err
 	}
 	defer tx.Rollback()
+
+	if err := acquirePromoSharedLock(tx); err != nil {
+		return 0, err
+	}
 
 	lockedRows := make(map[int]lockedApprovalRow, len(items))
 	conflictIDs := make([]int, 0)

@@ -25,6 +25,21 @@ import (
 
 // ─── Read ──────────────────────────────────────────────────────────────────
 
+// respondIfDedupInProgress отвечает 503, если запись промо временно закрыта
+// офлайн-дедупликацией (sync_script/dedupe_promo.py). Возвращает true, когда
+// ответ уже отправлен и обработчику больше делать нечего.
+func respondIfDedupInProgress(c *gin.Context, err error) bool {
+	if !errors.Is(err, repository.ErrPromoDedupInProgress) {
+		return false
+	}
+	config.Logger.Warn("promo_write_rejected_dedup_running", "path", c.FullPath())
+	c.Header("Retry-After", "30")
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "Идёт дедупликация промо, запись временно недоступна. Повторите через полминуты.",
+	})
+	return true
+}
+
 func GetPromoFilters(c *gin.Context) {
 	params := repository.PromoFilterParams{
 		YearFromStr: c.Query("yearFrom"),
@@ -532,6 +547,9 @@ func SavePromo(c *gin.Context) {
 			services.MergeCalculatedIntoDBRow(row, calc)
 
 			rowsAffected, err := repository.UpdatePromo(idInt, row, clientUpdatedAt)
+			if respondIfDedupInProgress(c, err) {
+				return
+			}
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -584,6 +602,9 @@ func SavePromo(c *gin.Context) {
 	}
 
 	newID, err := repository.InsertPromo(row)
+	if respondIfDedupInProgress(c, err) {
+		return
+	}
 	if err == nil && insertComments != "" && insertComments != "<nil>" {
 		usernameVal, _ := c.Get("username")
 		_ = repository.InsertComment(int(newID), fmt.Sprint(usernameVal), "КАМ", insertComments)
@@ -625,6 +646,9 @@ func DeletePromo(c *gin.Context) {
 
 	idInt, _ := strconv.Atoi(id)
 	rows, err := repository.SoftDeletePromo(idInt)
+	if respondIfDedupInProgress(c, err) {
+		return
+	}
 	if err != nil {
 		config.Logger.Error("promo_delete_failed", "id", id, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
@@ -652,6 +676,9 @@ func RestorePromo(c *gin.Context) {
 
 	idInt, _ := strconv.Atoi(id)
 	rows, err := repository.RestorePromo(idInt)
+	if respondIfDedupInProgress(c, err) {
+		return
+	}
 	if err != nil {
 		config.Logger.Error("promo_restore_failed", "id", id, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Restore failed"})
@@ -788,6 +815,9 @@ func ApprovePromo(c *gin.Context) {
 	if err := repository.ApprovePromoWithStatus(
 		agreementNum, req.ID, req.UpdatedAt, status, comment, legacyValue, fmt.Sprint(usernameVal),
 	); err != nil {
+		if respondIfDedupInProgress(c, err) {
+			return
+		}
 		config.Logger.Error("approve_failed", "error", err.Error(), "id", req.ID, "field", field)
 		var conflictErr *repository.ApprovalConflictError
 		if errors.As(err, &conflictErr) {
@@ -997,6 +1027,9 @@ func BatchApprovePromo(c *gin.Context) {
 		agreementNum, items, status, comment, legacyValue, fmt.Sprint(usernameVal),
 	)
 	if err != nil {
+		if respondIfDedupInProgress(c, err) {
+			return
+		}
 		config.Logger.Error("batch_approve_failed", "error", err.Error(), "count", len(req.Items))
 		var conflictErr *repository.ApprovalConflictError
 		if errors.As(err, &conflictErr) {

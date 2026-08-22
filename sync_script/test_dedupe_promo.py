@@ -104,5 +104,49 @@ class PlanValidationTests(unittest.TestCase):
             dedupe_promo.validate_plan(plan)
 
 
+class FakeCursor:
+    """Курсор, отвечающий заранее заданной очередью результатов."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.queries = []
+
+    def execute(self, query, *args):
+        self.queries.append((query, args))
+
+    def fetchone(self):
+        return self.results.pop(0)
+
+
+class DedupLockTests(unittest.TestCase):
+    def test_acquires_exclusive_lock_on_shared_resource(self):
+        cursor = FakeCursor([(1,), (0,)])
+
+        dedupe_promo.acquire_dedup_lock(cursor)
+
+        lock_query = cursor.queries[1][0]
+        self.assertIn('sp_getapplock', lock_query)
+        self.assertIn("@LockMode = 'Exclusive'", lock_query)
+        # Владелец — транзакция: блокировка снимается сама при обрыве.
+        self.assertIn("@LockOwner = 'Transaction'", lock_query)
+        self.assertEqual(
+            cursor.queries[1][1],
+            (dedupe_promo.DEDUP_LOCK_RESOURCE, dedupe_promo.DEDUP_LOCK_TIMEOUT_MS),
+        )
+
+    def test_refuses_to_run_without_transaction(self):
+        cursor = FakeCursor([(0,)])
+
+        with self.assertRaisesRegex(RuntimeError, 'открытой транзакции'):
+            dedupe_promo.acquire_dedup_lock(cursor)
+
+    def test_fails_when_backend_keeps_writing(self):
+        # -1 — истёк таймаут ожидания: бэкенд держит разделяемую блокировку.
+        cursor = FakeCursor([(1,), (-1,)])
+
+        with self.assertRaisesRegex(RuntimeError, 'код -1'):
+            dedupe_promo.acquire_dedup_lock(cursor)
+
+
 if __name__ == '__main__':
     unittest.main()

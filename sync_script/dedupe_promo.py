@@ -17,6 +17,13 @@ from import_promo import (
 )
 
 
+# Имя ресурса прикладной блокировки. Должно совпадать с
+# PromoDedupLockResource в backend/repository/promo_lock.go.
+DEDUP_LOCK_RESOURCE = 'promo_dedup'
+
+# Сколько ждать, пока бэкенд закончит уже начатые запросы записи.
+DEDUP_LOCK_TIMEOUT_MS = 60000
+
 PLAN_VERSION = 1
 CONFIRMATION_TOKEN = 'APPLY_SAFE_EXACT_DUPLICATES'
 ROLLBACK_CONFIRMATION_TOKEN = 'ROLLBACK_SAFE_DEDUP'
@@ -294,6 +301,53 @@ def fetch_locked_group(cursor, group, table_columns):
     return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
+def acquire_dedup_lock(cursor):
+    """Берёт исключительную блокировку записи промо на время транзакции.
+
+    Дедупликация переносит строки между promo_id и переписывает ссылки в
+    tbl_AuditLog и tbl_PromoComments. Бэкенд в это же время правит те же
+    строки, поэтому без разграничения правка из интерфейса может уйти в
+    запись, которую скрипт уже пометил удалённой.
+
+    Бэкенд удерживает на том же ресурсе разделяемую блокировку в каждой
+    транзакции записи (backend/repository/promo_lock.go). Разделяемые
+    блокировки совместимы между собой, поэтому обычная работа через API не
+    замедляется, а исключительная дожидается уже начатых запросов и не
+    пускает новые, пока дедупликация не закончится.
+
+    Владелец блокировки — транзакция: она снимается на commit, rollback и
+    при обрыве соединения, зависшей блокировки после падения не остаётся.
+    """
+    cursor.execute('SELECT @@TRANCOUNT')
+    if cursor.fetchone()[0] == 0:
+        raise RuntimeError(
+            'Блокировка требует открытой транзакции: '
+            'соединение не должно быть в режиме autocommit.'
+        )
+
+    cursor.execute(
+        """
+        SET NOCOUNT ON;
+        DECLARE @result int;
+        EXEC @result = sp_getapplock
+            @Resource = ?, @LockMode = 'Exclusive',
+            @LockOwner = 'Transaction', @LockTimeout = ?;
+        SELECT @result AS lock_result;
+        """,
+        DEDUP_LOCK_RESOURCE, DEDUP_LOCK_TIMEOUT_MS,
+    )
+    code = cursor.fetchone()[0]
+    # 0 и 1 — блокировка получена; отрицательные коды: -1 таймаут,
+    # -2 отмена, -3 взаимоблокировка, -999 ошибка вызова.
+    if code < 0:
+        raise RuntimeError(
+            f'Не удалось получить блокировку записи промо (код {code}). '
+            'Бэкенд продолжает писать в таблицу — повторите позже '
+            'или остановите приложение на время очистки.'
+        )
+    print('🔒 Запись промо заблокирована на время дедупликации')
+
+
 def apply_safe_groups(connection, plan):
     table_columns = plan['table_columns']
     safe_groups = [group for group in plan['groups'] if group.get('safe_to_apply')]
@@ -306,6 +360,7 @@ def apply_safe_groups(connection, plan):
 
     try:
         cursor.execute('SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;')
+        acquire_dedup_lock(cursor)
         ensure_ledger(cursor)
         current_columns = fetch_table_columns(cursor)
         if current_columns != table_columns:
@@ -435,6 +490,7 @@ def rollback_run(connection, run_id):
     cursor = connection.cursor()
     try:
         cursor.execute('SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;')
+        acquire_dedup_lock(cursor)
         ensure_ledger(cursor)
         cursor.execute("""
             SELECT status
