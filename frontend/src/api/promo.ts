@@ -23,6 +23,7 @@ import type {
   SalesDataResponse,
   SalesFilterOptions,
   SalesNetworkOptionsResponse,
+  SalesPivotResponse,
 } from '../types/sales';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
@@ -312,6 +313,19 @@ export const salesAPI = {
 
   getDashboard: (filters: Record<string, unknown> = {}): Promise<SalesDashboardResponse> =>
     fetchWithAuth(`${API_BASE}/api/sales/dashboard?${buildParams(filters)}`).then(r => parseJSONResponse<SalesDashboardResponse>(r, 'Ошибка загрузки дашборда')),
+
+  getPivot: (filters: Record<string, unknown> = {}): Promise<SalesPivotResponse> =>
+    fetchWithAuth(`${API_BASE}/api/sales/pivot?${buildParams(filters)}`, {}, 60000)
+      .then(r => parseJSONResponse<SalesPivotResponse>(r, 'Ошибка загрузки сводной таблицы')),
+
+  exportPivot: async (filters: Record<string, unknown> = {}): Promise<Blob> => {
+    const response = await fetchWithAuth(`${API_BASE}/api/sales/pivot/export-xlsx?${buildParams(filters)}`, {}, 180000);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(payload.error || 'Ошибка выгрузки сводной таблицы');
+    }
+    return response.blob();
+  },
 
   getNetworkOptions: (filters: Record<string, unknown> = {}): Promise<SalesNetworkOptionsResponse> =>
     fetchWithAuth(`${API_BASE}/api/sales/network-options?${buildParams(filters)}`).then(r => parseJSONResponse<SalesNetworkOptionsResponse>(r, 'Ошибка загрузки списка сетей')),

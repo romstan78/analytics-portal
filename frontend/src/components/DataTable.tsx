@@ -11,6 +11,8 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
+import { getUsername } from '../api/auth';
+import { fetchWithAuth } from '../api/promo';
 
 const EXPORT_WARNING_THRESHOLD = 10000;
 
@@ -21,6 +23,7 @@ interface DataTableProps {
   defaultPageSize?: number;
   exportFileName?: string;
   exportXlsxUrl?: string;
+  backgroundExportUrl?: string;
   onDataLoaded?: (data: unknown[], totalRows: number) => void;
   onRowClick?: (params: GridRowParams) => void;
   refreshKey?: number;
@@ -30,7 +33,7 @@ interface DataTableProps {
 
 export default function DataTable({
   columns, apiUrl, filters = {}, defaultPageSize = 100,
-  exportFileName = 'export', exportXlsxUrl, onDataLoaded,
+  exportFileName = 'export', exportXlsxUrl, backgroundExportUrl, onDataLoaded,
   onRowClick, refreshKey, defaultHiddenColumns = [], preferencesKey,
 }: DataTableProps) {
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
@@ -61,6 +64,17 @@ export default function DataTable({
   const apiRef = useRef(null);
   // Индикатор выгрузки: раньше переиспользовался loading от загрузки страницы.
   const [exporting, setExporting] = useState(false);
+  const backgroundStorageKey = `${preferencesKey || exportFileName}_background_export_job:${getUsername() || 'local'}`;
+  const [backgroundJob, setBackgroundJob] = useState<{
+    id: string;
+    status: 'queued' | 'running' | 'ready' | 'failed';
+    totalRows: number;
+    fileName: string;
+    error?: string;
+  } | null>(() => {
+    if (!backgroundExportUrl) return null;
+    try { return JSON.parse(sessionStorage.getItem(backgroundStorageKey) || 'null'); } catch { return null; }
+  });
 
   // Сброс страницы при смене фильтров или поискового запроса. Правка состояния
   // во время рендера — рекомендованная React альтернатива эффекту-синхронизатору.
@@ -117,13 +131,11 @@ export default function DataTable({
     }
   };
 
-  const fetchExportData = async (): Promise<unknown[]> => {
+  const buildExportParams = (includeColumns: boolean) => {
     const params = new URLSearchParams();
-    params.set('all', 'true');
-    if (debouncedSearch) {
-      params.set('search', debouncedSearch);
-    }
+    if (debouncedSearch) params.set('search', debouncedSearch);
     appendSortParams(params);
+    if (includeColumns) visibleCols.forEach(column => params.append('columns', column.field));
     Object.entries(filters).forEach(([key, value]) => {
       if (Array.isArray(value)) {
         value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
@@ -131,12 +143,14 @@ export default function DataTable({
         params.set(key, String(value));
       }
     });
+    return params;
+  };
+
+  const fetchExportData = async (): Promise<unknown[]> => {
+    const params = buildExportParams(false);
+    params.set('all', 'true');
     const url = `${apiUrl}?${params.toString()}`;
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
-      },
-    });
+    const response = await fetchWithAuth(url, {}, 60000);
     if (!response.ok) {
       // Сервер отклоняет слишком большую выгрузку с понятным текстом —
       // показываем его, а не безликое «HTTP 413».
@@ -145,6 +159,60 @@ export default function DataTable({
     }
     const json = await response.json() as { data?: unknown[] };
     return json.data || [];
+  };
+
+  useEffect(() => {
+    if (!backgroundExportUrl || !backgroundJob || backgroundJob.status === 'ready' || backgroundJob.status === 'failed') return;
+    let active = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const response = await fetchWithAuth(`${backgroundExportUrl}/${backgroundJob.id}`);
+        if (response.status === 404) {
+          sessionStorage.removeItem(backgroundStorageKey);
+          if (active) setBackgroundJob(null);
+          return;
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const next = await response.json() as typeof backgroundJob;
+        if (!active) return;
+        setBackgroundJob(next);
+        sessionStorage.setItem(backgroundStorageKey, JSON.stringify(next));
+        if (next.status === 'queued' || next.status === 'running') timer = window.setTimeout(poll, 1500);
+      } catch {
+        if (active) timer = window.setTimeout(poll, 3000);
+      }
+    };
+    timer = window.setTimeout(poll, 800);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [backgroundExportUrl, backgroundJob, backgroundStorageKey]);
+
+  const startBackgroundExport = async () => {
+    if (!backgroundExportUrl) throw new Error('Фоновая выгрузка не настроена.');
+    const response = await fetchWithAuth(`${backgroundExportUrl}?${buildExportParams(true).toString()}`, {
+      method: 'POST',
+    });
+    const payload = await response.json().catch(() => ({})) as { error?: string } & NonNullable<typeof backgroundJob>;
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    setBackgroundJob(payload);
+    sessionStorage.setItem(backgroundStorageKey, JSON.stringify(payload));
+  };
+
+  const downloadBackgroundExport = async () => {
+    if (!backgroundExportUrl || !backgroundJob || backgroundJob.status !== 'ready') return;
+    setExporting(true);
+    try {
+      const response = await fetchWithAuth(`${backgroundExportUrl}/${backgroundJob.id}/download`, {}, 120000);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+      saveAs(await response.blob(), backgroundJob.fileName);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось скачать подготовленный файл.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleExportCSV = async () => {
@@ -210,25 +278,19 @@ export default function DataTable({
       }
       if (count > EXPORT_WARNING_THRESHOLD) {
         const ok = window.confirm(
-          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${count.toLocaleString('ru-RU')}). Продолжить?`
+          backgroundExportUrl
+            ? `Файл на ${count.toLocaleString('ru-RU')} строк будет подготовлен в фоне. Можно продолжать работу с таблицей. Запустить?`
+            : `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${count.toLocaleString('ru-RU')}). Продолжить?`
         );
         if (!ok) return;
-      }
-      const params = new URLSearchParams();
-      params.set('all', 'true');
-      if (debouncedSearch) params.set('search', debouncedSearch);
-      appendSortParams(params);
-      visibleCols.forEach(column => params.append('columns', column.field));
-      Object.entries(filters).forEach(([key, value]) => {
-        if (Array.isArray(value)) {
-          value.forEach(v => { if (v !== '' && v != null) params.append(key, String(v)); });
-        } else if (value !== '' && value != null) {
-          params.set(key, String(value));
+        if (backgroundExportUrl) {
+          await startBackgroundExport();
+          return;
         }
-      });
-      const resp = await fetch(`${exportXlsxUrl}?${params.toString()}`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      });
+      }
+      const params = buildExportParams(true);
+      params.set('all', 'true');
+      const resp = await fetchWithAuth(`${exportXlsxUrl}?${params.toString()}`, {}, 180000);
       if (!resp.ok) {
         const payload = await resp.json().catch(() => ({})) as { error?: string };
         throw new Error(payload.error || `HTTP ${resp.status}`);
@@ -265,17 +327,16 @@ export default function DataTable({
       });
       const qs = params.toString();
       const url = `${apiUrl}?${qs}`;
-      const response = await fetch(url, {
-        signal,
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const response = await fetchWithAuth(url, { signal }, 60000);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
       const json = await response.json() as { data?: unknown[]; totalRows?: number };
       const rows = json.data || [];
       return { rows, totalRows: json.totalRows ?? rows.length };
     },
+    placeholderData: previousData => previousData,
   });
 
   const { data: pageData, isFetching, error: queryError } = pageQuery;
@@ -302,10 +363,13 @@ export default function DataTable({
     ? (queryError as Error).message
     : (connectionPaused ? 'Нет связи с сервером' : null);
 
-  if (error) return <Alert severity="error" sx={{ mb: 2 }}>Ошибка загрузки: {error}</Alert>;
-
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }} action={<Button color="inherit" size="small" onClick={() => pageQuery.refetch()}>Повторить</Button>}>
+          Ошибка загрузки: {error}
+        </Alert>
+      )}
       {/* Тулбар */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap',
@@ -343,6 +407,20 @@ export default function DataTable({
           <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
             {totalRows.toLocaleString('ru-RU')} строк
           </Typography>
+        )}
+
+        {backgroundJob?.status === 'ready' && (
+          <Button size="small" color="success" variant="outlined" onClick={downloadBackgroundExport} disabled={exporting}>
+            Excel готов — скачать
+          </Button>
+        )}
+        {(backgroundJob?.status === 'queued' || backgroundJob?.status === 'running') && (
+          <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <CircularProgress size={14} /> Excel готовится в фоне
+          </Typography>
+        )}
+        {backgroundJob?.status === 'failed' && (
+          <Typography variant="caption" color="error">{backgroundJob.error || 'Не удалось подготовить Excel'}</Typography>
         )}
 
         <ButtonGroup size="small" variant="text">

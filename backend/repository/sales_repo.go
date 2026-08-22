@@ -113,6 +113,18 @@ type SalesBreakdownRow struct {
 	Value   float64
 }
 
+// SalesPivotLeafRow — минимальный агрегат новой сводной: один SKU одной сети
+// внутри канала/сегмента за месяц. Иерархию и итоги собирает service-слой.
+type SalesPivotLeafRow struct {
+	Channel string
+	Segment string
+	Network string
+	Product string
+	Year    int
+	Month   int
+	Value   float64
+}
+
 // SalesSummaryRow — агрегаты шапки дашборда.
 type SalesSummaryRow struct {
 	Total          float64
@@ -472,6 +484,43 @@ func SalesMonthlyTotals(f SalesFilter) ([]SalesMonthlyRow, error) {
 		if err := rows.Scan(&row.Year, &row.Month, &row.Value); err == nil {
 			result = append(result, row)
 		}
+	}
+	return result, rows.Err()
+}
+
+// SalesPivotMonthly возвращает все листовые значения будущей сводной одним
+// агрегирующим запросом. Технические id в выборку намеренно не входят.
+func SalesPivotMonthly(f SalesFilter) ([]SalesPivotLeafRow, error) {
+	where, args := BuildSalesWhere(f)
+	rows, err := config.DB.Query(`SELECT n.channel, n.segment, n.networkName, n.productName,
+		n.[year], n.[month], SUM(n.metric_value)
+		FROM `+salesTable+` n`+where+`
+		GROUP BY n.channel, n.segment, n.networkName, n.productName, n.[year], n.[month]
+		ORDER BY n.channel, n.segment, n.networkName, n.productName, n.[year], n.[month]`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	valueOrFallback := func(value sql.NullString, fallback string) string {
+		if value.Valid && strings.TrimSpace(value.String) != "" {
+			return strings.TrimSpace(value.String)
+		}
+		return fallback
+	}
+
+	result := make([]SalesPivotLeafRow, 0)
+	for rows.Next() {
+		var row SalesPivotLeafRow
+		var channel, segment, network, product sql.NullString
+		if err := rows.Scan(&channel, &segment, &network, &product, &row.Year, &row.Month, &row.Value); err != nil {
+			return nil, err
+		}
+		row.Channel = valueOrFallback(channel, "Без канала")
+		row.Segment = valueOrFallback(segment, "Без сегмента")
+		row.Network = valueOrFallback(network, "Без сети")
+		row.Product = valueOrFallback(product, "Без SKU")
+		result = append(result, row)
 	}
 	return result, rows.Err()
 }

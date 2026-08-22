@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -8,17 +8,19 @@ import {
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
+  Analytics as AnalyticsIcon,
   ExpandMore as ExpandMoreIcon,
   RestartAlt as RestartAltIcon,
+  Summarize as SummarizeIcon,
+  TableRows as TableRowsIcon,
   Tune as TuneIcon,
 } from '@mui/icons-material';
 import type { GridColDef } from '@mui/x-data-grid';
 import DataTable from '../components/DataTable';
 import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboardData } from '../components/InternetSalesDashboard';
-import InternetSalesSummaryTable from '../components/InternetSalesSummaryTable';
+import InternetSalesSummaryTable, { type SalesPivotGranularity } from '../components/InternetSalesSummaryTable';
+import InternetSalesSavedViews, { type InternetSalesViewSnapshot } from '../components/InternetSalesSavedViews';
 import { salesAPI } from '../api/promo';
-
-const DrilldownModal = lazy(() => import('../components/DrilldownModal'));
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 const FILTERS_STORAGE_KEY = 'internet_sales_filters_v9';
@@ -78,7 +80,7 @@ const normalizeStringList = (value: unknown) => Array.isArray(value) ? value.fil
 
 export default function InternetSales() {
   const navigate = useNavigate();
-  const [view, setView] = useState<'dashboard' | 'summary' | 'details'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'summary' | 'details'>('summary');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [meta, setMeta] = useState<SalesMeta>({
     year: [], brandName: [], productName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
@@ -90,9 +92,9 @@ export default function InternetSales() {
   const [focusSegments, setFocusSegments] = useState<string[]>(['OLAP SS']);
   const [comparisonChannels, setComparisonChannels] = useState<string[]>([]);
   const [unit, setUnit] = useState<'руб' | 'евро' | 'уп'>('руб');
+  const [summaryGranularity, setSummaryGranularity] = useState<SalesPivotGranularity>('year');
   const [dashboardFocus, setDashboardFocus] = useState<DashboardFocus[]>([]);
   const [rowCount, setRowCount] = useState(0);
-  const [drilldownRow, setDrilldownRow] = useState(null);
 
   const [filters, setFilters] = useState<SalesFilters>(() => {
     try {
@@ -173,7 +175,7 @@ export default function InternetSales() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusChannel, focusSegments, unit]);
 
-  const dashboardEnabled = Boolean(analysisYear) && focusSegments.length > 0;
+  const dashboardEnabled = view === 'dashboard' && Boolean(analysisYear) && focusSegments.length > 0;
   const { data: dashboardData, isFetching: dashboardFetching, error: dashboardQueryError } = useQuery({
     queryKey: ['salesDashboard', analysisYear, appliedFilters, focusChannel, focusSegments, unit, comparisonChannels, dashboardFocus] as const,
     enabled: dashboardEnabled,
@@ -191,7 +193,7 @@ export default function InternetSales() {
 
   const dashboard = (dashboardData as InternetSalesDashboardData | undefined) ?? null;
   // До первой применимой комбинации фильтров показываем индикатор, как раньше.
-  const dashboardLoading = dashboardEnabled ? dashboardFetching : true;
+  const dashboardLoading = dashboardEnabled && dashboardFetching;
   const dashboardError = dashboardQueryError
     ? ((dashboardQueryError as { message?: string }).message || 'Не удалось загрузить дашборд')
     : '';
@@ -224,9 +226,9 @@ export default function InternetSales() {
     setFocusSegments(defaultSegments.includes('OLAP SS') ? ['OLAP SS'] : defaultSegments);
     setComparisonChannels([]);
     setUnit('руб');
+    setSummaryGranularity('year');
     setDashboardFocus([]);
     setRowCount(0);
-    setDrilldownRow(null);
     localStorage.removeItem(FILTERS_STORAGE_KEY);
   }, [analysisYear, meta.channel, meta.channelSegmentMap, meta.segment, meta.year]);
 
@@ -255,6 +257,39 @@ export default function InternetSales() {
     else localStorage.removeItem(FILTERS_STORAGE_KEY);
   }, [filters]);
 
+  const savedViewSnapshot = useMemo<InternetSalesViewSnapshot>(() => ({
+    view,
+    analysisYear,
+    filters,
+    focusChannel,
+    focusSegments,
+    comparisonChannels,
+    unit,
+    summaryGranularity,
+  }), [analysisYear, comparisonChannels, filters, focusChannel, focusSegments, summaryGranularity, unit, view]);
+
+  const applySavedView = useCallback((snapshot: InternetSalesViewSnapshot) => {
+    const nextFilters = {
+      ...EMPTY_FILTERS,
+      ...snapshot.filters,
+      months: [...(snapshot.filters.months || [])],
+      quarters: [...(snapshot.filters.quarters || [])],
+      brandName: [...(snapshot.filters.brandName || [])],
+      productName: [...(snapshot.filters.productName || [])],
+      networkName: [...(snapshot.filters.networkName || [])],
+    };
+    setView(snapshot.view);
+    setAnalysisYear(snapshot.analysisYear);
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+    setFocusChannel(snapshot.focusChannel);
+    setFocusSegments([...(snapshot.focusSegments || [])]);
+    setComparisonChannels([...(snapshot.comparisonChannels || [])]);
+    setUnit(snapshot.unit);
+    setSummaryGranularity(snapshot.summaryGranularity || 'year');
+    setDashboardFocus([]);
+  }, []);
+
   const activeFilterCount = filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
 
   return (
@@ -262,16 +297,19 @@ export default function InternetSales() {
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Box>
-          <Typography variant="h5" sx={{ fontWeight: 750 }}>Интернет-продажи</Typography>
-          <Typography variant="caption" color="text.secondary">Динамика, вклад в изменение и структура онлайн-каналов</Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Typography variant="h5" sx={{ fontWeight: 750 }}>Интернет-продажи</Typography>
+            <Chip size="small" color="primary" variant="outlined" label="Иерархическая сводная" />
+          </Stack>
+          <Typography variant="caption" color="text.secondary">Аналитика, сводная и исходные строки — независимые рабочие режимы</Typography>
         </Box>
         {meta.loading && <CircularProgress size={20} />}
         <Box sx={{ flex: 1 }} />
         {view === 'details' && rowCount > 0 && <Typography variant="body2" color="text.secondary">{rowCount.toLocaleString('ru-RU')} строк</Typography>}
         <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}>
-          <Tab value="dashboard" label="Аналитика" />
-          <Tab value="summary" label="Сводная таблица" />
-          <Tab value="details" label="Исходные данные" />
+          <Tab value="dashboard" icon={<AnalyticsIcon fontSize="small" />} iconPosition="start" label="Аналитика" />
+          <Tab value="summary" icon={<SummarizeIcon fontSize="small" />} iconPosition="start" label="Сводная таблица" />
+          <Tab value="details" icon={<TableRowsIcon fontSize="small" />} iconPosition="start" label="Исходные данные" />
         </Tabs>
       </Stack>
 
@@ -297,16 +335,19 @@ export default function InternetSales() {
             onChange={(_, values) => setFilters(current => ({ ...current, productName: values }))}
             renderInput={(params) => <TextField {...params} label="SKU" />}
             limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
-          <Autocomplete multiple size="small" options={networkOptions} value={filters.networkName} loading={networkOptionsLoading}
-            onChange={(_, values) => setFilters(current => ({ ...current, networkName: values }))}
-            renderInput={(params) => <TextField {...params} label="Сеть" helperText="Только сети с данными" />}
-            limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
+          <Tooltip title="Список содержит только сети, по которым есть данные при выбранных фильтрах">
+            <Box sx={{ minWidth: 210, flex: 1.2 }}>
+              <Autocomplete multiple size="small" options={networkOptions} value={filters.networkName} loading={networkOptionsLoading}
+                onChange={(_, values) => setFilters(current => ({ ...current, networkName: values }))}
+                renderInput={(params) => <TextField {...params} label="Сеть" />}
+                limitTags={1} />
+            </Box>
+          </Tooltip>
           <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => {
             if (!value) return;
             setUnit(value);
             if (value === 'евро') {
               setRowCount(0);
-              setDrilldownRow(null);
             }
           }}>
             <ToggleButton value="руб">₽</ToggleButton>
@@ -323,7 +364,7 @@ export default function InternetSales() {
           {activeFilterCount > 0 && <Chip size="small" label={`Активно: ${activeFilterCount}`} />}
           <Button size="small" color="inherit" startIcon={<RestartAltIcon />} onClick={handleReset}>Сбросить</Button>
           <Box sx={{ flex: 1 }} />
-          {dashboardLoading && <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
+          {view === 'dashboard' && dashboardLoading && <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
         </Stack>
 
         <Collapse in={advancedOpen}>
@@ -335,10 +376,12 @@ export default function InternetSales() {
               onChange={(_, values) => { if (values.length > 0) { setFocusSegments(values); setDashboardFocus([]); } }}
               renderInput={(params) => <TextField {...params} label="Сегменты канала" />}
               limitTags={2} sx={{ minWidth: 245 }} />
-            <Autocomplete multiple size="small" options={meta.channel} value={comparisonChannels}
-              onChange={(_, values) => setComparisonChannels(values.slice(0, 5))}
-              renderInput={(params) => <TextField {...params} label="Сравнить каналы" />}
-              limitTags={1} sx={{ minWidth: 230, flex: 1 }} />
+            {view === 'dashboard' && (
+              <Autocomplete multiple size="small" options={meta.channel} value={comparisonChannels}
+                onChange={(_, values) => setComparisonChannels(values.slice(0, 5))}
+                renderInput={(params) => <TextField {...params} label="Сравнить каналы" />}
+                limitTags={1} sx={{ width: 190, minWidth: 190, flex: '0 0 190px' }} />
+            )}
             <Autocomplete multiple size="small" options={Array.from({ length: 12 }, (_, index) => index + 1)} value={filters.months}
               getOptionLabel={(value) => new Intl.DateTimeFormat('ru-RU', { month: 'short' }).format(new Date(2026, value - 1, 1))}
               onChange={(_, values) => setFilters(current => ({ ...current, months: values, quarters: [] }))}
@@ -346,10 +389,16 @@ export default function InternetSales() {
               limitTags={1} sx={{ minWidth: 210 }} />
             <FormControlLabel control={<Switch size="small" checked={persistFilters} onChange={(_, checked) => handlePersistChange(checked)} />} label={<Typography variant="caption">Запомнить</Typography>} />
           </Stack>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-            Ctrl/⌘ + клик по сети или SKU добавляет до пяти рядов на сравнительный график.
-          </Typography>
+          {view === 'dashboard' && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+              Ctrl/⌘ + клик по сети или SKU добавляет до пяти рядов на сравнительный график.
+            </Typography>
+          )}
         </Collapse>
+
+        <Box sx={{ mt: 1.25, pt: 1.25, borderTop: '1px solid #e7ebf1' }}>
+          <InternetSalesSavedViews current={savedViewSnapshot} onApply={applySavedView} />
+        </Box>
       </Paper>
 
       {meta.error && <Typography color="error" sx={{ mb: 1 }}>{meta.error}</Typography>}
@@ -367,7 +416,15 @@ export default function InternetSales() {
           onClearFocus={() => setDashboardFocus([])}
         />
       ) : view === 'summary' ? (
-        <InternetSalesSummaryTable data={dashboard} loading={dashboardLoading} error={dashboardError} />
+        <InternetSalesSummaryTable
+          analysisYear={analysisYear}
+          filters={{ ...appliedFilters }}
+          channel={focusChannel}
+          segments={focusSegments}
+          unit={unit}
+          granularity={summaryGranularity}
+          onGranularityChange={setSummaryGranularity}
+        />
       ) : unit === 'евро' ? (
         <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUnit('руб')}>Показать в ₽</Button>}>
           Исходные строки хранятся в рублях и упаковках. Пересчёт в евро доступен в аналитике и сводной таблице.
@@ -376,16 +433,10 @@ export default function InternetSales() {
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <DataTable columns={COLUMNS} apiUrl={`${API_BASE}/api/data`} filters={detailFilters}
             exportFileName="internet-sales" exportXlsxUrl={`${API_BASE}/api/data/export-xlsx`}
+            backgroundExportUrl={`${API_BASE}/api/data/export-jobs`}
             defaultHiddenColumns={['updated_at', 'id']} preferencesKey={TABLE_PREFERENCES_KEY}
-            onDataLoaded={(_, totalRows) => setRowCount(totalRows)}
-            onRowClick={(params) => { if (params.row.networkName && params.row.brandName) setDrilldownRow(params.row); }} />
+            onDataLoaded={(_, totalRows) => setRowCount(totalRows)} />
         </Box>
-      )}
-
-      {drilldownRow && (
-        <Suspense fallback={<CircularProgress size={24} />}>
-          <DrilldownModal open onClose={() => setDrilldownRow(null)} rowData={drilldownRow} appliedFilters={detailFilters} />
-        </Suspense>
       )}
     </Box>
   );

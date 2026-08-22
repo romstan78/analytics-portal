@@ -306,25 +306,22 @@ func selectedSalesExcelColumns(requested []string) []salesExcelColumn {
 	return selected
 }
 
-func ExportSalesExcel(c *gin.Context) {
-	rows, err := repository.SalesRowsCursor(salesFilterFromQuery(c))
+func buildSalesExcel(filter repository.SalesFilter, columns []salesExcelColumn) (*excelize.File, error) {
+	rows, err := repository.SalesRowsCursor(filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed"})
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
 	f := excelize.NewFile()
-	defer f.Close()
 
 	sheet := "Интернет-продажи"
 	f.SetSheetName("Sheet1", sheet)
-	columns := selectedSalesExcelColumns(c.QueryArray("columns"))
 
 	sw, err := f.NewStreamWriter(sheet)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "StreamWriter creation failed"})
-		return
+		f.Close()
+		return nil, err
 	}
 
 	// Заголовки через StreamWriter
@@ -333,8 +330,8 @@ func ExportSalesExcel(c *gin.Context) {
 		headers = append(headers, column.Header)
 	}
 	if err := sw.SetRow("A1", headers); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Header write failed"})
-		return
+		f.Close()
+		return nil, err
 	}
 
 	// Данные — пишем напрямую из курсора БД, строку за строкой
@@ -342,7 +339,8 @@ func ExportSalesExcel(c *gin.Context) {
 	for rows.Next() {
 		r, scanErr := repository.ScanSalesRow(rows)
 		if scanErr != nil {
-			continue
+			f.Close()
+			return nil, scanErr
 		}
 		vals := make([]interface{}, 0, len(columns))
 		for _, column := range columns {
@@ -350,13 +348,19 @@ func ExportSalesExcel(c *gin.Context) {
 		}
 		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
 		if err := sw.SetRow(cell, vals); err != nil {
-			continue
+			f.Close()
+			return nil, err
 		}
 		rowNum++
 	}
+	if err := rows.Err(); err != nil {
+		f.Close()
+		return nil, err
+	}
 
 	if err := sw.Flush(); err != nil {
-		config.Logger.Error("excel_stream_flush_failed", "error", err.Error())
+		f.Close()
+		return nil, err
 	}
 
 	// Стиль заголовка
@@ -372,6 +376,17 @@ func ExportSalesExcel(c *gin.Context) {
 		col, _ := excelize.ColumnNumberToName(i + 1)
 		f.SetColWidth(sheet, col, col, column.Width)
 	}
+	return f, nil
+}
+
+func ExportSalesExcel(c *gin.Context) {
+	f, err := buildSalesExcel(salesFilterFromQuery(c), selectedSalesExcelColumns(c.QueryArray("columns")))
+	if err != nil {
+		config.Logger.Error("excel_export_sales_build_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Excel export failed"})
+		return
+	}
+	defer f.Close()
 
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=internet-sales_%s.xlsx", time.Now().Format("2006-01-02")))

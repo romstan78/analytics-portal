@@ -49,6 +49,7 @@ upload/
 /outputs/
 
 # 🖥 IDE & EDITOR
+.claude/
 .vscode/
 .idea/
 *.swp

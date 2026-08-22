@@ -37,6 +37,43 @@ type DrilldownResponse struct {
 	Data        []DrilldownRow `json:"data"`
 }
 
+// ─── Иерархическая сводная ────────────────────────────────────────────────
+
+// SalesPivotPeriod описывает одну числовую колонку. При детализации по
+// кварталам/месяцам каждый год заканчивается колонкой kind=total.
+type SalesPivotPeriod struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Year  int    `json:"year"`
+	Kind  string `json:"kind"` // month | quarter | total
+}
+
+// SalesPivotNode — узел дерева channel → segment → network → sku.
+// Values индексируются ключами из SalesPivotPeriod.
+type SalesPivotNode struct {
+	ID       string             `json:"id"`
+	Level    string             `json:"level"`
+	Name     string             `json:"name"`
+	Values   map[string]float64 `json:"values"`
+	Children []SalesPivotNode   `json:"children"`
+}
+
+// SalesPivotResponse используется одновременно экраном и Excel-выгрузкой.
+type SalesPivotResponse struct {
+	AnalysisYear     int                `json:"analysisYear"`
+	Channel          string             `json:"channel"`
+	Segments         []string           `json:"segments"`
+	Unit             string             `json:"unit"`
+	Granularity      string             `json:"granularity"`
+	CurrencySource   string             `json:"currencySource"`
+	Periods          []SalesPivotPeriod `json:"periods"`
+	Rows             []SalesPivotNode   `json:"rows"`
+	Totals           map[string]float64 `json:"totals"`
+	PreviousTotalKey string             `json:"previousTotalKey"`
+	CurrentTotalKey  string             `json:"currentTotalKey"`
+	LeafRows         int                `json:"leafRows"`
+}
+
 // ─── Дашборд ───────────────────────────────────────────────────────────────
 
 // SalesDashboardPoint — точка помесячного тренда.

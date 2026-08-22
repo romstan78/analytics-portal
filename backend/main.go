@@ -134,8 +134,13 @@ func main() {
 		// Интернет-продажи
 		api.GET("/data", handlers.GetData)
 		api.GET("/sales/dashboard", handlers.GetSalesDashboard)
+		api.GET("/sales/pivot", handlers.GetSalesPivot)
+		api.GET("/sales/pivot/export-xlsx", handlers.ExportSalesPivotExcel)
 		api.GET("/sales/network-options", handlers.GetSalesNetworkOptions)
 		api.GET("/data/export-xlsx", handlers.ExportSalesExcel)
+		api.POST("/data/export-jobs", handlers.StartSalesExcelExport)
+		api.GET("/data/export-jobs/:id", handlers.GetSalesExcelExportJob)
+		api.GET("/data/export-jobs/:id/download", handlers.DownloadSalesExcelExport)
 		api.GET("/filters", handlers.GetFilterOptions)
 		api.GET("/drilldown", handlers.GetDrilldown)
 

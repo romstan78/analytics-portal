@@ -56,6 +56,36 @@ export interface DrilldownResponse {
   data: DrilldownRow[];
 }
 
+export interface SalesPivotPeriod {
+  key: string;
+  label: string;
+  year: number;
+  kind: string;
+}
+
+export interface SalesPivotNode {
+  id: string;
+  level: string;
+  name: string;
+  values: Record<string, number>;
+  children: SalesPivotNode[];
+}
+
+export interface SalesPivotResponse {
+  analysisYear: number;
+  channel: string;
+  segments: string[];
+  unit: string;
+  granularity: string;
+  currencySource: string;
+  periods: SalesPivotPeriod[];
+  rows: SalesPivotNode[];
+  totals: Record<string, number>;
+  previousTotalKey: string;
+  currentTotalKey: string;
+  leafRows: number;
+}
+
 export interface SalesDashboardPoint {
   year: number;
   month: number;
