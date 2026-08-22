@@ -1,112 +1,18 @@
-// Типы, соответствующие backend/models/types.go
+// Типы промо: строки — из Go, конверты ответов и формы — здесь.
 
-export interface PromoRow {
-  id: number;
-  network_name: string | null;
-  kam: string | null;
-  id_directum: string | null;
-  ds_number: string | null;
-  year: number;
-  month: number | null;
-  quarter: number | null;
-  sku: string | null;
-  brand: string | null;
-  brand_as: string | null;
-  mechanics: string | null;
-  discount_amount: number | null;
-  gtn_opex: string | null;
-  conditions: string | null;
-  comments: string | null;
-  baseline_units: number | null;
-  baseline_rub: number | null;
-  plan_promo_units: number | null;
-  plan_promo_rub: number | null;
-  plan_investments_rub: number | null;
-  plan_promo_uplift_units: number | null;
-  plan_promo_uplift_rub: number | null;
-  plan_promo_uplift_pct_units: number | null;
-  plan_promo_uplift_pct_rub: number | null;
-  plan_investments_pct: number | null;
-  plan_roi: number | null;
-  contract_price: number | null;
-  gm: number | null;
-  total_pharmacies: number | null;
-  promo_pharmacies: number | null;
-  actual_promo_sales_units: number | null;
-  actual_investments: number | null;
-  status: string | null;
-  actual_promo_rub: number | null;
-  actual_promo_uplift_units: number | null;
-  actual_promo_uplift_rub: number | null;
-  actual_external_ecom_units: number | null;
-  actual_corrected_baseline: number | null;
-  actual_roi: number | null;
-  plan_vs_fact_rub: number | null;
-  plan_vs_fact_investments: number | null;
-  channel: string | null;
-  agreement1: string | null;
-  agreement2: string | null;
-  date: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  deleted_at: string | null;
-}
+// Строки промо описаны в Go (backend/models/types.go) и собираются генератором
+// в ./api.generated.ts. Ниже — только конверты ответов и формы,
+// которых в Go нет.
+import type { ApprovalRow, CommentRow, HistoryRow, PromoRow } from './api.generated';
 
-export interface CommentRow {
-  id: number;
-  promo_id: number;
-  user_name: string;
-  role: string;
-  comment_text: string;
-  created_at: string | null;
-}
-
-// models.HistoryRow — история промо по SKU/сети/механике
-export interface HistoryRow {
-  id: number;
-  network_name: string | null;
-  year: number;
-  month: number;
-  mechanics: string | null;
-  sku: string | null;
-  baseline_units: number | null;
-  plan_promo_units: number | null;
-  actual_promo_sales_units: number | null;
-  plan_investments_rub: number | null;
-  actual_investments: number | null;
-  plan_promo_uplift_units: number | null;
-  actual_promo_uplift_units: number | null;
-  plan_roi: number | null;
-  actual_roi: number | null;
-}
-
-export interface ApprovalRow {
-  id: number;
-  network_name: string | null;
-  brand_as: string | null;
-  sku: string | null;
-  mechanics: string | null;
-  year: number;
-  month: number | null;
-  baseline_units: number | null;
-  plan_promo_units: number | null;
-  actual_promo_sales_units: number | null;
-  plan_investments_rub: number | null;
-  plan_roi: number | null;
-  actual_roi: number | null;
-  conditions: string | null;
-  comments: string | null;
-  agreement1: string | null;
-  agreement1_status: string | null;
-  agreement1_comment: string | null;
-  agreement2: string | null;
-  agreement2_status: string | null;
-  agreement2_comment: string | null;
-  status: string | null;
-  historical_count: number;
-  avg_historical_roi: number | null;
-  updated_at: string;
-}
+export type {
+  PromoRow,
+  CommentRow,
+  HistoryRow,
+  ApprovalRow,
+  NetworkGeo,
+  LastSKUData,
+} from './api.generated';
 
 export interface FilterOptions {
   kam: string[];

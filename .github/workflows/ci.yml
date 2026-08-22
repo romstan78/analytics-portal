@@ -24,6 +24,11 @@ jobs:
           go test ./config ./middleware ./handlers ./repository ./services
           go vet ./...
 
+      # Контракт API описан в Go; типы фронтенда генерируются из него.
+      # Шаг падает, если api.generated.ts не пересобрали после правки структур.
+      - name: Generated API types are up to date
+        run: make types-check
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
