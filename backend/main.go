@@ -174,6 +174,8 @@ func main() {
 		api.GET("/networks", handlers.GetNetworks)
 		api.GET("/networks/brands", handlers.GetNetworkBrands)
 		api.GET("/networks/:id/plan", handlers.GetNetworkPlan)
+		api.GET("/networks/:id/forecast", handlers.GetNetworkForecast)
+		api.GET("/networks/:id/prices", handlers.GetNetworkPrices)
 		api.GET("/networks/:id/comments", handlers.GetNetworkComments)
 		api.GET("/networks/:id/audit", handlers.GetNetworkAudit)
 
@@ -181,6 +183,8 @@ func main() {
 		api.POST("/networks", middleware.RoleRequired("admin", "kam"), handlers.CreateNetwork)
 		api.PATCH("/networks/:id", middleware.RoleRequired("admin", "kam"), handlers.UpdateNetwork)
 		api.POST("/networks/:id/plan", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPlan)
+		api.POST("/networks/:id/forecast", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkForecast)
+		api.POST("/networks/:id/prices", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPrices)
 		// Пересчёт черновика: расчёт живёт только на бэкенде, в БД не пишет.
 		api.POST("/networks/:id/plan/preview", middleware.RoleRequired("admin", "kam"), handlers.PreviewNetworkPlan)
 		api.POST("/networks/:id/comments", middleware.RoleRequired("admin", "kam", "agreement1", "agreement2"), handlers.AddNetworkComment)

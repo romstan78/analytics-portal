@@ -4,7 +4,12 @@
 // в ./api.generated.ts. Здесь остаётся только то, чего в Go нет: сужения
 // значений для интерфейса и тело запроса на сохранение.
 
-import type { AuditLogRow, NetworkPlanInput } from './api.generated';
+import type {
+  AuditLogRow,
+  NetworkContractPriceInput,
+  NetworkForecastInput,
+  NetworkPlanInput,
+} from './api.generated';
 
 export type {
   Network,
@@ -21,6 +26,19 @@ export type {
   NetworkCommentsResponse,
   NetworkAuditResponse,
   NetworkBrandsResponse,
+  NetworkMonthlyFact,
+  NetworkForecastLine,
+  NetworkPromoIndicator,
+  NetworkForecastMonth,
+  NetworkForecastBrandTotals,
+  NetworkForecastTotals,
+  NetworkForecastResponse,
+  NetworkForecastSaveResponse,
+  NetworkContractPrice,
+  NetworkPricesResponse,
+  NetworkPricesSaveResponse,
+  NetworkForecastInput,
+  NetworkContractPriceInput,
 } from './api.generated';
 
 // В Go тип сети — строка с проверкой на стороне сервера; интерфейсу нужен выбор
@@ -49,4 +67,15 @@ export interface NetworkPlanSaveRequest {
     vat_rate: number;
   }>;
   plans: NetworkPlanInput[];
+}
+
+export interface NetworkForecastSaveRequest {
+  year: number;
+  quarter: number;
+  lines: NetworkForecastInput[];
+}
+
+export interface NetworkPricesSaveRequest {
+  year: number;
+  rows: NetworkContractPriceInput[];
 }

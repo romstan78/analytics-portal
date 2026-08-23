@@ -59,6 +59,12 @@ func EnrichNetworkPlans(plans []models.NetworkPlan, periods []models.NetworkPeri
 			net := NetRub(*p.FactInvestmentsRub, vatIncluded, vatRate)
 			p.FactInvestmentsNet = &net
 		}
+		// Официальный помесячный прогноз инвестиций агрегируется отдельно от
+		// процента. Если он сохранён, процент квартала его не перезаписывает.
+		if p.ForecastInvestmentsRub != nil {
+			net := NetRub(*p.ForecastInvestmentsRub, vatIncluded, vatRate)
+			p.ForecastInvestmentsNet = &net
+		}
 
 		if p.InvestmentsPct == nil {
 			continue
@@ -68,7 +74,7 @@ func EnrichNetworkPlans(plans []models.NetworkPlan, periods []models.NetworkPeri
 			p.InvestmentsRub = &gross
 			p.InvestmentsNet = &net
 		}
-		if p.ForecastRub != nil {
+		if p.ForecastRub != nil && p.ForecastInvestmentsRub == nil {
 			gross, net := investmentsFor(*p.ForecastRub, *p.InvestmentsPct, vatIncluded, vatRate)
 			p.ForecastInvestmentsRub = &gross
 			p.ForecastInvestmentsNet = &net
@@ -134,6 +140,11 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.Network
 			t.FactInvestmentsRubNet = round2(t.FactInvestmentsRubNet +
 				NetRub(*p.FactInvestmentsRub, period.VATIncluded, period.VATRate))
 		}
+		if p.ForecastInvestmentsRub != nil {
+			t.ForecastInvestmentsRub = round2(t.ForecastInvestmentsRub + *p.ForecastInvestmentsRub)
+			t.ForecastInvestmentsRubNet = round2(t.ForecastInvestmentsRubNet +
+				NetRub(*p.ForecastInvestmentsRub, period.VATIncluded, period.VATRate))
+		}
 
 		if p.InvestmentsPct == nil {
 			continue
@@ -143,7 +154,7 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.Network
 			t.InvestmentsRub = round2(t.InvestmentsRub + gross)
 			t.InvestmentsRubNet = round2(t.InvestmentsRubNet + net)
 		}
-		if p.ForecastRub != nil {
+		if p.ForecastRub != nil && p.ForecastInvestmentsRub == nil {
 			gross, net := investmentsFor(*p.ForecastRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
 			t.ForecastInvestmentsRub = round2(t.ForecastInvestmentsRub + gross)
 			t.ForecastInvestmentsRubNet = round2(t.ForecastInvestmentsRubNet + net)
@@ -224,6 +235,9 @@ type NetworkPlanDraft struct {
 	PlanRub        *float64
 	ForecastRub    *float64
 	InvestmentsPct *float64
+	Month1Pct      float64
+	Month2Pct      float64
+	Month3Pct      float64
 }
 
 // draftKey — ключ строки внутри года: квартал + бренд (пусто = валовый пул).
@@ -260,6 +274,9 @@ func PreviewNetworkPlans(
 			PlanRub:        row.PlanRub,
 			ForecastRub:    row.ForecastRub,
 			InvestmentsPct: row.InvestmentsPct,
+			Month1Pct:      row.Month1Pct,
+			Month2Pct:      row.Month2Pct,
+			Month3Pct:      row.Month3Pct,
 		}
 		if saved, ok := factByKey[draftKey(row.Quarter, row.BrandAS)]; ok {
 			plan.ID = saved.ID
@@ -268,6 +285,7 @@ func PreviewNetworkPlans(
 			plan.PlanUnits = saved.PlanUnits
 			plan.FactRub = saved.FactRub
 			plan.FactInvestmentsRub = saved.FactInvestmentsRub
+			plan.ForecastInvestmentsRub = saved.ForecastInvestmentsRub
 			plan.UpdatedBy = saved.UpdatedBy
 			plan.UpdatedAt = saved.UpdatedAt
 		}

@@ -122,12 +122,8 @@ export default function NetworkQuarterTable({
             tone={completionTone(factPct == null ? null : 100 + factPct)}
           />
         </TableCell>
-        <TableCell>
-          <PlanNumberField
-            value={cell.forecastRub}
-            disabled={!canEdit}
-            onChange={(v) => onCellChange(brand, { forecastRub: v })}
-          />
+        <TableCell align="right">
+          <ValueCell value={row.forecast} />
           {!!forecastPct && (
             <Typography
               variant="caption"
@@ -290,12 +286,8 @@ export default function NetworkQuarterTable({
                 <TableCell align="right">
                   <ValueCell value={totals.gross_pool_fact_rub || null} muted={!totals.gross_pool_fact_rub} />
                 </TableCell>
-                <TableCell>
-                  <PlanNumberField
-                    value={draft[planKey(quarter, null)]?.forecastRub ?? ''}
-                    disabled={!canEdit}
-                    onChange={(v) => onCellChange(null, { forecastRub: v })}
-                  />
+                <TableCell align="right">
+                  <ValueCell value={totals.gross_pool_forecast_rub} muted={totals.gross_pool_forecast_rub == null} />
                 </TableCell>
                 <TableCell align="right"><Typography variant="body2" color="text.disabled">—</Typography></TableCell>
                 <TableCell align="right"><Typography variant="body2" color="text.disabled">—</Typography></TableCell>

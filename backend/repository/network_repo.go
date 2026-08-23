@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"backend/config"
@@ -195,7 +196,9 @@ func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) err
 func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	rows, err := config.DB.Query(
 		`SELECT id, network_id, [year], [quarter], brand_as, in_gross, plan_rub, plan_units,
-			fact_rub, forecast_rub, investments_pct, fact_investments_rub, updated_by,
+			month1_pct, month2_pct, month3_pct,
+			fact_rub, forecast_rub, investments_pct, fact_investments_rub,
+			forecast_investments_rub, updated_by,
 			CONVERT(NVARCHAR, updated_at, 121)
 		 FROM dbo.tbl_NetworkPlans WHERE network_id = ? AND [year] = ?
 		 ORDER BY [quarter], brand_as`,
@@ -210,8 +213,9 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	for rows.Next() {
 		var p models.NetworkPlan
 		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.BrandAS, &p.InGross,
-			&p.PlanRub, &p.PlanUnits, &p.FactRub, &p.ForecastRub, &p.InvestmentsPct,
-			&p.FactInvestmentsRub, &p.UpdatedBy, &p.UpdatedAt); err != nil {
+			&p.PlanRub, &p.PlanUnits, &p.Month1Pct, &p.Month2Pct, &p.Month3Pct,
+			&p.FactRub, &p.ForecastRub, &p.InvestmentsPct, &p.FactInvestmentsRub,
+			&p.ForecastInvestmentsRub, &p.UpdatedBy, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, p)
@@ -229,6 +233,9 @@ type NetworkPlanInput struct {
 	PlanRub        *float64 `json:"plan_rub"`
 	ForecastRub    *float64 `json:"forecast_rub"`
 	InvestmentsPct *float64 `json:"investments_pct"`
+	Month1Pct      *float64 `json:"month1_pct"`
+	Month2Pct      *float64 `json:"month2_pct"`
+	Month3Pct      *float64 `json:"month3_pct"`
 	UpdatedAt      string   `json:"updated_at"`
 }
 
@@ -369,6 +376,23 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 
 		key := planKey(p.Quarter, p.BrandAS)
 		old, exists := existingByKey[key]
+		month1Pct, month2Pct, month3Pct := 30.0, 30.0, 40.0
+		if exists {
+			month1Pct, month2Pct, month3Pct = old.Month1Pct, old.Month2Pct, old.Month3Pct
+		}
+		if p.Month1Pct != nil {
+			month1Pct = *p.Month1Pct
+		}
+		if p.Month2Pct != nil {
+			month2Pct = *p.Month2Pct
+		}
+		if p.Month3Pct != nil {
+			month3Pct = *p.Month3Pct
+		}
+		if month1Pct < 0 || month2Pct < 0 || month3Pct < 0 ||
+			math.Abs(month1Pct+month2Pct+month3Pct-100) > 0.001 {
+			return "", fmt.Errorf("распределение квартала должно давать 100%%: %.2f + %.2f + %.2f", month1Pct, month2Pct, month3Pct)
+		}
 		brandLabel := ""
 		if p.BrandAS != nil {
 			brandLabel = *p.BrandAS
@@ -391,12 +415,21 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			if old.InGross != p.InGross {
 				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "in_gross", Old: old.InGross, New: p.InGross})
 			}
+			if old.Month1Pct != month1Pct || old.Month2Pct != month2Pct || old.Month3Pct != month3Pct {
+				changes = append(changes, planChange{
+					Quarter: p.Quarter, Brand: brandLabel, Field: "month_distribution",
+					Old: []float64{old.Month1Pct, old.Month2Pct, old.Month3Pct},
+					New: []float64{month1Pct, month2Pct, month3Pct},
+				})
+			}
 			if _, err := tx.Exec(
 				`UPDATE dbo.tbl_NetworkPlans
 				 SET plan_rub = ?, forecast_rub = ?, investments_pct = ?, in_gross = ?,
+					 month1_pct = ?, month2_pct = ?, month3_pct = ?,
 					 updated_by = ?, updated_at = GETDATE()
 				 WHERE id = ?`,
-				p.PlanRub, p.ForecastRub, p.InvestmentsPct, p.InGross, in.UserName, old.ID,
+				p.PlanRub, p.ForecastRub, p.InvestmentsPct, p.InGross,
+				month1Pct, month2Pct, month3Pct, in.UserName, old.ID,
 			); err != nil {
 				return "", err
 			}
@@ -427,10 +460,10 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		}
 		if _, err := tx.Exec(
 			`INSERT INTO dbo.tbl_NetworkPlans (network_id, [year], [quarter], brand_as, in_gross,
-				plan_rub, forecast_rub, investments_pct, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				plan_rub, forecast_rub, investments_pct, month1_pct, month2_pct, month3_pct, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			in.NetworkID, in.Year, p.Quarter, p.BrandAS, p.InGross,
-			p.PlanRub, p.ForecastRub, p.InvestmentsPct, in.UserName,
+			p.PlanRub, p.ForecastRub, p.InvestmentsPct, month1Pct, month2Pct, month3Pct, in.UserName,
 		); err != nil {
 			return "", err
 		}
@@ -531,7 +564,7 @@ func GetNetworkAuditLog(networkID int) ([]models.AuditLogRow, error) {
 		`SELECT id, entity_type, entity_id, user_name, action_type, changed_fields,
 			CONVERT(NVARCHAR, created_at, 121)
 		 FROM dbo.tbl_AuditLog
-		 WHERE entity_id = ? AND entity_type IN ('network', 'network_plan')
+		 WHERE entity_id = ? AND entity_type IN ('network', 'network_plan', 'network_forecast', 'network_price')
 		 ORDER BY id DESC`,
 		networkID,
 	)

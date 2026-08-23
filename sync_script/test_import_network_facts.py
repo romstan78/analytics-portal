@@ -9,9 +9,11 @@ def valid_source():
     return pd.DataFrame({
         'Сеть': ['Магнит', 'Магнит'],
         'Бренд': ['Альфа', 'Бета'],
+        'SKU': ['', 'Бета 100 мл'],
         'Год': ['2026', '2026'],
-        'Квартал': ['1', '1'],
+        'Месяц': ['1', '2'],
         'Факт, руб': ['5 120 000', '1 755 000,50'],
+        'Факт, уп': ['51200', '17 550'],
         'Факт инвестиций, руб': ['512000', ''],
     })
 
@@ -23,11 +25,14 @@ class PrepareDataframeTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]['network_name'], 'Магнит')
         self.assertEqual(rows[0]['year'], 2026)
-        self.assertEqual(rows[0]['quarter'], 1)
+        self.assertEqual(rows[0]['month'], 1)
+        self.assertIsNone(rows[0]['sku'])
         self.assertEqual(rows[0]['fact_rub'], 5120000)
+        self.assertEqual(rows[0]['fact_units'], 51200)
         self.assertEqual(rows[0]['fact_investments_rub'], 512000)
         # Пустой факт инвестиций — это отсутствие значения, а не ноль.
         self.assertEqual(rows[1]['fact_rub'], 1755000.5)
+        self.assertEqual(rows[1]['sku'], 'Бета 100 мл')
         self.assertIsNone(rows[1]['fact_investments_rub'])
 
     def test_headers_are_matched_case_and_punctuation_insensitively(self):
@@ -40,14 +45,19 @@ class PrepareDataframeTests(unittest.TestCase):
         rows = facts.prepare_dataframe(source)
         self.assertIsNone(rows[0]['fact_investments_rub'])
 
+    def test_accepts_units_as_the_only_value(self):
+        source = valid_source().drop(columns=['Факт, руб', 'Факт инвестиций, руб'])
+        rows = facts.prepare_dataframe(source)
+        self.assertEqual(rows[1]['fact_units'], 17550)
+
     def test_rejects_missing_required_column(self):
-        source = valid_source().drop(columns=['Квартал'])
+        source = valid_source().drop(columns=['Месяц'])
         with self.assertRaises(facts.ImportError_) as ctx:
             facts.prepare_dataframe(source)
-        self.assertIn('quarter', str(ctx.exception))
+        self.assertIn('month', str(ctx.exception))
 
     def test_rejects_file_without_any_value_column(self):
-        source = valid_source().drop(columns=['Факт, руб', 'Факт инвестиций, руб'])
+        source = valid_source().drop(columns=['Факт, руб', 'Факт, уп', 'Факт инвестиций, руб'])
         with self.assertRaises(facts.ImportError_):
             facts.prepare_dataframe(source)
 
@@ -57,14 +67,14 @@ class PrepareDataframeTests(unittest.TestCase):
             facts.prepare_dataframe(source)
         self.assertIn('дубль', str(ctx.exception))
 
-    def test_rejects_bad_quarter_and_negative_values(self):
+    def test_rejects_bad_month_and_negative_values(self):
         source = valid_source()
-        source.loc[0, 'Квартал'] = '5'
+        source.loc[0, 'Месяц'] = '13'
         source.loc[1, 'Факт, руб'] = '-100'
         with self.assertRaises(facts.ImportError_) as ctx:
             facts.prepare_dataframe(source)
         message = str(ctx.exception)
-        self.assertIn('квартал вне диапазона', message)
+        self.assertIn('месяц вне диапазона', message)
         self.assertIn('отрицательный', message)
 
     def test_rejects_non_numeric_value(self):
@@ -77,6 +87,7 @@ class PrepareDataframeTests(unittest.TestCase):
     def test_skips_rows_without_any_value(self):
         source = valid_source()
         source.loc[1, 'Факт, руб'] = ''
+        source.loc[1, 'Факт, уп'] = ''
         source.loc[1, 'Факт инвестиций, руб'] = ''
         rows = facts.prepare_dataframe(source)
         self.assertEqual(len(rows), 1)
@@ -84,6 +95,7 @@ class PrepareDataframeTests(unittest.TestCase):
     def test_rejects_file_where_every_row_is_empty(self):
         source = valid_source()
         source['Факт, руб'] = ''
+        source['Факт, уп'] = ''
         source['Факт инвестиций, руб'] = ''
         with self.assertRaises(facts.ImportError_):
             facts.prepare_dataframe(source)
@@ -128,12 +140,20 @@ class MergeSqlTests(unittest.TestCase):
     def test_merge_keeps_existing_value_when_column_absent(self):
         # COALESCE: пустая колонка выгрузки не затирает уже загруженное значение.
         self.assertIn('COALESCE(s.fact_rub, t.fact_rub)', facts.MERGE_SQL)
+        self.assertIn('COALESCE(s.fact_units, t.fact_units)', facts.MERGE_SQL)
         self.assertIn('COALESCE(s.fact_investments_rub, t.fact_investments_rub)', facts.MERGE_SQL)
 
-    def test_merge_creates_row_for_unplanned_brand(self):
+    def test_merge_uses_month_and_nullable_sku_key(self):
         self.assertIn('WHEN NOT MATCHED THEN', facts.MERGE_SQL)
-        # Новая строка не попадает в валовый объём сама по себе.
-        self.assertIn('in_gross', facts.MERGE_SQL)
+        self.assertIn('dbo.tbl_NetworkMonthlyFacts', facts.MERGE_SQL)
+        self.assertIn('t.[month] = s.[month]', facts.MERGE_SQL)
+        self.assertIn('t.sku IS NULL AND s.sku IS NULL', facts.MERGE_SQL)
+
+    def test_rollup_prefers_brand_summary_and_keeps_legacy_plan(self):
+        self.assertIn('sku IS NULL AND fact_rub IS NOT NULL', facts.ROLLUP_SQL)
+        self.assertIn('GROUP BY [month]', facts.ROLLUP_SQL)
+        self.assertIn('MERGE dbo.tbl_NetworkPlans', facts.ROLLUP_SQL)
+        self.assertIn('in_gross', facts.ROLLUP_SQL)
 
 
 if __name__ == '__main__':

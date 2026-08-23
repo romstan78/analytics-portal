@@ -37,7 +37,10 @@ type NetworkPlan struct {
 	InGross     bool     `json:"in_gross"`   // бренд входит в валовый объём этого квартала
 	PlanRub     *float64 `json:"plan_rub"`   // план как введён, НДС к нему не применяется
 	PlanUnits   *float64 `json:"plan_units"` // задел под таблицу цен контракта
-	FactRub     *float64 `json:"fact_rub"`   // факт отгрузок, заполняется загрузкой
+	Month1Pct   float64  `json:"month1_pct"` // распределение квартального плана: первый месяц
+	Month2Pct   float64  `json:"month2_pct"`
+	Month3Pct   float64  `json:"month3_pct"`
+	FactRub     *float64 `json:"fact_rub"` // факт отгрузок, заполняется загрузкой
 	ForecastRub *float64 `json:"forecast_rub"`
 	// Факт инвестиций приходит той же загрузкой; процентом не пересчитывается,
 	// но база «без НДС» считается по ставке того же квартала.
@@ -159,4 +162,168 @@ type NetworkAuditResponse struct {
 // NetworkBrandsResponse — бренды, доступные для строк плана.
 type NetworkBrandsResponse struct {
 	Data []string `json:"data"`
+}
+
+// NetworkMonthlyFact — атомарный факт сети. SKU может быть пустым, если источник
+// отдаёт готовый итог бренда; квартальные суммы всегда собираются из этих строк.
+type NetworkMonthlyFact struct {
+	ID                 int64    `json:"id"`
+	NetworkID          int      `json:"network_id"`
+	Year               int      `json:"year"`
+	Month              int      `json:"month"`
+	BrandAS            string   `json:"brand_as"`
+	SKU                *string  `json:"sku"`
+	FactRub            *float64 `json:"fact_rub"`
+	FactUnits          *float64 `json:"fact_units"`
+	FactInvestmentsRub *float64 `json:"fact_investments_rub"`
+	IsFinal            bool     `json:"is_final"`
+	SourceName         *string  `json:"source_name"`
+	UpdatedAt          string   `json:"updated_at"`
+}
+
+// NetworkForecastLine — сохранённая ручная/официальная версия прогноза месяца.
+// Строка без SKU является официальным прогнозом бренда; SKU-строки объясняют его
+// снизу и могут заполняться постепенно.
+type NetworkForecastLine struct {
+	ID                     int64    `json:"id"`
+	NetworkID              int      `json:"network_id"`
+	Year                   int      `json:"year"`
+	Month                  int      `json:"month"`
+	BrandAS                string   `json:"brand_as"`
+	SKU                    *string  `json:"sku"`
+	ForecastRub            *float64 `json:"forecast_rub"`
+	ForecastUnits          *float64 `json:"forecast_units"`
+	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
+	SystemForecastRub      *float64 `json:"system_forecast_rub"`
+	SystemForecastUnits    *float64 `json:"system_forecast_units"`
+	Confidence             *string  `json:"confidence"`
+	AdjustmentReason       *string  `json:"adjustment_reason"`
+	UpdatedBy              *string  `json:"updated_by"`
+	UpdatedAt              string   `json:"updated_at"`
+}
+
+// NetworkPromoIndicator — компактная сводка запланированных промо в ячейке
+// бренд+месяц. Детали промо остаются в промо-реестре и открываются по фильтру.
+type NetworkPromoIndicator struct {
+	Year               int     `json:"year"`
+	Month              int     `json:"month"`
+	BrandAS            string  `json:"brand_as"`
+	PromoCount         int     `json:"promo_count"`
+	ApprovedCount      int     `json:"approved_count"`
+	DraftCount         int     `json:"draft_count"`
+	PlanPromoUnits     float64 `json:"plan_promo_units"`
+	PlanPromoRub       float64 `json:"plan_promo_rub"`
+	PlanInvestmentsRub float64 `json:"plan_investments_rub"`
+	PlanUpliftRub      float64 `json:"plan_uplift_rub"`
+	PlanUpliftUnits    float64 `json:"plan_uplift_units"`
+}
+
+// NetworkForecastMonth — готовая ячейка прогноза. План распределён из квартала,
+// факт загружен, официальный и системный прогнозы показаны рядом.
+type NetworkForecastMonth struct {
+	Year                   int      `json:"year"`
+	Quarter                int      `json:"quarter"`
+	Month                  int      `json:"month"`
+	BrandAS                string   `json:"brand_as"`
+	SKU                    *string  `json:"sku"`
+	ContractPrice          *float64 `json:"contract_price"`
+	PlanRub                *float64 `json:"plan_rub"`
+	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
+	FactRub                *float64 `json:"fact_rub"`
+	FactUnits              *float64 `json:"fact_units"`
+	FactInvestmentsRub     *float64 `json:"fact_investments_rub"`
+	ForecastRub            *float64 `json:"forecast_rub"`
+	ForecastUnits          *float64 `json:"forecast_units"`
+	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
+	SystemForecastRub      *float64 `json:"system_forecast_rub"`
+	SystemForecastUnits    *float64 `json:"system_forecast_units"`
+	EACRub                 *float64 `json:"eac_rub"`
+	EACInvestmentsRub      *float64 `json:"eac_investments_rub"`
+	Confidence             *string  `json:"confidence"`
+	AdjustmentReason       *string  `json:"adjustment_reason"`
+	PromoCount             int      `json:"promo_count"`
+	ApprovedPromoCount     int      `json:"approved_promo_count"`
+	DraftPromoCount        int      `json:"draft_promo_count"`
+	PromoPlanUnits         float64  `json:"promo_plan_units"`
+	PromoPlanRub           float64  `json:"promo_plan_rub"`
+	PromoInvestmentsRub    float64  `json:"promo_investments_rub"`
+	PromoUpliftRub         float64  `json:"promo_uplift_rub"`
+	IsClosed               bool     `json:"is_closed"`
+	IsCurrent              bool     `json:"is_current"`
+	UpdatedAt              string   `json:"updated_at"`
+}
+
+// NetworkForecastBrandTotals — итог одной строки бренда за выбранный квартал.
+type NetworkForecastBrandTotals struct {
+	BrandAS               string   `json:"brand_as"`
+	PlanRub               float64  `json:"plan_rub"`
+	FactRub               float64  `json:"fact_rub"`
+	EACRub                float64  `json:"eac_rub"`
+	CompletionPct         *float64 `json:"completion_pct"`
+	GapRub                float64  `json:"gap_rub"`
+	PlanInvestmentsRub    float64  `json:"plan_investments_rub"`
+	FactInvestmentsRub    float64  `json:"fact_investments_rub"`
+	EACInvestmentsRub     float64  `json:"eac_investments_rub"`
+	InvestmentVarianceRub float64  `json:"investment_variance_rub"`
+	PromoCount            int      `json:"promo_count"`
+}
+
+// NetworkForecastTotals — верхние карточки рабочего места прогноза.
+type NetworkForecastTotals struct {
+	PlanRub               float64  `json:"plan_rub"`
+	FactRub               float64  `json:"fact_rub"`
+	EACRub                float64  `json:"eac_rub"`
+	CompletionPct         *float64 `json:"completion_pct"`
+	GapRub                float64  `json:"gap_rub"`
+	PlanInvestmentsRub    float64  `json:"plan_investments_rub"`
+	FactInvestmentsRub    float64  `json:"fact_investments_rub"`
+	EACInvestmentsRub     float64  `json:"eac_investments_rub"`
+	InvestmentVarianceRub float64  `json:"investment_variance_rub"`
+	PromoCount            int      `json:"promo_count"`
+}
+
+type NetworkForecastResponse struct {
+	Network Network                      `json:"network"`
+	Year    int                          `json:"year"`
+	Quarter int                          `json:"quarter"`
+	Months  []NetworkForecastMonth       `json:"months"`
+	Brands  []NetworkForecastBrandTotals `json:"brands"`
+	Totals  NetworkForecastTotals        `json:"totals"`
+}
+
+type NetworkForecastSaveResponse struct {
+	Message string                  `json:"message"`
+	Data    NetworkForecastResponse `json:"data"`
+}
+
+// NetworkContractPrice — цена договора с периодом действия и последней
+// доступной OLAP-ценой для сравнения.
+type NetworkContractPrice struct {
+	ID            int64    `json:"id"`
+	NetworkID     int      `json:"network_id"`
+	BrandAS       string   `json:"brand_as"`
+	SKU           string   `json:"sku"`
+	ContractPrice float64  `json:"contract_price"`
+	ValidFrom     string   `json:"valid_from"`
+	ValidTo       string   `json:"valid_to"`
+	SourceType    string   `json:"source_type"`
+	SourceYear    *int     `json:"source_year"`
+	SourceMonth   *int     `json:"source_month"`
+	IsConfirmed   bool     `json:"is_confirmed"`
+	OlapPrice     *float64 `json:"olap_price"`
+	OlapYear      *int     `json:"olap_year"`
+	OlapMonth     *int     `json:"olap_month"`
+	UpdatedBy     *string  `json:"updated_by"`
+	UpdatedAt     string   `json:"updated_at"`
+}
+
+type NetworkPricesResponse struct {
+	Network Network                `json:"network"`
+	Year    int                    `json:"year"`
+	Data    []NetworkContractPrice `json:"data"`
+}
+
+type NetworkPricesSaveResponse struct {
+	Message string                `json:"message"`
+	Data    NetworkPricesResponse `json:"data"`
 }

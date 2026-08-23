@@ -33,11 +33,11 @@ import { PlanNumberField, ValueCell } from './networkPlanCells';
 import type { YearMetric } from '../utils/networkPlanView';
 
 // Величины, которые вводятся руками; остальные считаются.
-type EditableField = 'planRub' | 'forecastRub' | 'investmentsPct';
+type EditableField = 'planRub' | 'investmentsPct';
 
 const EDITABLE: Record<YearMetric, EditableField | null> = {
   plan: 'planRub',
-  forecast: 'forecastRub',
+  forecast: null,
   pct: 'investmentsPct',
   fact: null,
   investPlan: null,
@@ -180,7 +180,7 @@ export default function NetworkYearTable({
   );
 
   // Строка валового пула: у неё есть только объём — план и прогноз.
-  const poolField = metric === 'plan' ? 'planRub' : metric === 'forecast' ? 'forecastRub' : null;
+  const poolField = metric === 'plan' ? 'planRub' : null;
   const poolOf = (t: NetworkPlanTotals): number | null => {
     if (metric === 'fact') return t.gross_pool_fact_rub || null;
     if (metric === 'plan') return t.gross_pool_rub;

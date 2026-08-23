@@ -37,6 +37,7 @@ import {
 } from '../utils/networkPlan';
 import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
+import NetworkAllocationEditor from './NetworkAllocationEditor';
 import NetworkQuarterTable from './NetworkQuarterTable';
 import NetworkYearTable from './NetworkYearTable';
 import { YEAR_METRICS } from '../utils/networkPlanView';
@@ -130,6 +131,9 @@ export default function NetworkPlanGrid({
           plan_rub: parseNumberInput(cell.planRub),
           forecast_rub: parseNumberInput(cell.forecastRub),
           investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
+          month1_pct: parseNumberInput(cell.month1Pct),
+          month2_pct: parseNumberInput(cell.month2Pct),
+          month3_pct: parseNumberInput(cell.month3Pct),
           updated_at: versions.get(planKey(quarter, brand)) ?? '',
         });
       });
@@ -145,13 +149,20 @@ export default function NetworkPlanGrid({
     };
   }, [data.plans, data.year, brands, draft, settings]);
 
+  const allocationValid = useMemo(() => Object.values(draft).every((cell) => {
+    const sum = (parseNumberInput(cell.month1Pct) ?? 0)
+      + (parseNumberInput(cell.month2Pct) ?? 0)
+      + (parseNumberInput(cell.month3Pct) ?? 0);
+    return Math.abs(sum - 100) < 0.001;
+  }), [draft]);
+
   // НДС, инвестиции и итоги считает бэкенд — здесь их не воспроизводим.
   // До первого ответа показываем то, что пришло с загрузкой года.
   const debouncedRequest = useDebounced(planRequest, PREVIEW_DEBOUNCE_MS);
   const previewQuery = useQuery({
     queryKey: ['network-plan-preview', data.network.id, debouncedRequest],
     queryFn: () => networkAPI.previewPlan(data.network.id, debouncedRequest),
-    enabled: dirty,
+    enabled: dirty && allocationValid,
     placeholderData: (previous) => previous,
     staleTime: Infinity,
   });
@@ -292,7 +303,13 @@ export default function NetworkPlanGrid({
         )}
         {dirty && <Typography variant="caption" color="warning.main">Есть несохранённые изменения</Typography>}
         {canEdit && (
-          <Button variant="contained" size="small" startIcon={<SaveIcon />} disabled={saving || !dirty} onClick={handleSave}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<SaveIcon />}
+            disabled={saving || !dirty || !allocationValid}
+            onClick={handleSave}
+          >
             Сохранить
           </Button>
         )}
@@ -333,6 +350,24 @@ export default function NetworkPlanGrid({
           )}
         </Box>
       </Paper>
+
+      {period !== 'year' && (
+        <NetworkAllocationEditor
+          key={`${data.year}-${period}`}
+          year={data.year}
+          quarter={period}
+          brands={brands}
+          draft={draft}
+          canEdit={canEdit}
+          onCellChange={(brand, patch) => setCell(period, brand, patch)}
+        />
+      )}
+
+      {!allocationValid && (
+        <Typography variant="caption" color="warning.main">
+          Сохранение недоступно: распределение каждого квартального плана должно давать 100%.
+        </Typography>
+      )}
 
       <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} />
 

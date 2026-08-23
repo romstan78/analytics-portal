@@ -36,7 +36,9 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
+import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
+import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
 import type { NewNetworkValues } from '../components/NewNetworkDialog';
 import type {
@@ -53,6 +55,7 @@ const YEARS = [new Date().getFullYear() - 1, new Date().getFullYear(), new Date(
 const FIELD_LABELS: Record<string, string> = {
   plan_rub: 'План, ₽',
   forecast_rub: 'Прогноз, ₽',
+  forecast_investments_rub: 'Прогноз инвестиций, ₽',
   fact_rub: 'Факт, ₽',
   investments_pct: 'Инвестиции, %',
   in_gross: 'Валовый объём',
@@ -60,6 +63,7 @@ const FIELD_LABELS: Record<string, string> = {
   vat_included: 'НДС',
   vat_rate: 'Ставка НДС',
   period: 'Квартал открыт',
+  month_distribution: 'Распределение по месяцам',
   name: 'Название',
   network_type: 'Тип сети',
   kam: 'КАМ',
@@ -168,7 +172,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const auditQuery = useQuery({
     queryKey: ['networkAudit', selectedId],
     queryFn: () => networkAPI.getAudit(selectedId!),
-    enabled: selectedId != null && tab === 3,
+    enabled: selectedId != null && tab === 5,
   });
 
   const showError = (error: unknown) =>
@@ -326,7 +330,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
         <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2.5 }, minHeight: 420, minWidth: 0 }}>
           {!selected && (
             <Typography variant="body1" color="text.secondary">
-              Выберите сеть слева, чтобы открыть планы, комментарии и историю изменений.
+              Выберите сеть слева, чтобы открыть план, прогноз и цены.
             </Typography>
           )}
 
@@ -349,8 +353,10 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </TextField>
               </Box>
 
-              <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-                <Tab label="Планы" />
+              <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ mb: 2 }}>
+                <Tab label="План и факт" />
+                <Tab label="Прогноз" />
+                <Tab label="Цены и SKU" />
                 <Tab label="Профиль" />
                 <Tab label={`Комментарии${comments.length ? ` · ${comments.length}` : ''}`} />
                 <Tab label="История" />
@@ -375,6 +381,14 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               )}
 
               {tab === 1 && (
+                <NetworkForecastTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
+              )}
+
+              {tab === 2 && (
+                <NetworkPricesTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
+              )}
+
+              {tab === 3 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 480 }}>
                   <TextField
                     label="Название сети"
@@ -410,7 +424,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     label="Сеть активна"
                   />
                   <Typography variant="caption" color="text.secondary">
-                    Тип контракта и НДС относятся к кварталу и меняются во вкладке «Планы».
+                    Тип контракта и НДС относятся к кварталу и меняются во вкладке «План и факт».
                   </Typography>
                   {canEdit && (
                     <Box>
@@ -426,7 +440,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </Box>
               )}
 
-              {tab === 2 && (
+              {tab === 4 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 720 }}>
                   <Box sx={{ display: 'flex', gap: 1 }}>
                     <TextField
@@ -473,7 +487,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </Box>
               )}
 
-              {tab === 3 && (
+              {tab === 5 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 860 }}>
                   {auditQuery.isLoading && <CircularProgress size={22} />}
                   {auditQuery.isError && <Alert severity="error">Не удалось загрузить историю</Alert>}

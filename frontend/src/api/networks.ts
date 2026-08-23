@@ -7,11 +7,17 @@ import type {
   NetworkAuditResponse,
   NetworkBrandsResponse,
   NetworkCommentsResponse,
+  NetworkForecastResponse,
+  NetworkForecastSaveRequest,
+  NetworkForecastSaveResponse,
   NetworkListResponse,
   NetworkPlanPreviewResponse,
   NetworkPlanResponse,
   NetworkPlanSaveRequest,
   NetworkPlanSaveResponse,
+  NetworkPricesResponse,
+  NetworkPricesSaveRequest,
+  NetworkPricesSaveResponse,
   NetworkSaveResponse,
 } from '../types/network';
 
@@ -67,6 +73,22 @@ export const networkAPI = {
     fetchWithAuth(`${API_BASE}/api/networks/${id}/plan/preview`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkPlanPreviewResponse>(r, 'Ошибка пересчёта планов')),
 
+  getForecast: (id: number, year: number, quarter: number): Promise<NetworkForecastResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast?year=${year}&quarter=${quarter}`)
+      .then(r => parseJSONResponse<NetworkForecastResponse>(r, 'Ошибка загрузки прогноза')),
+
+  saveForecast: (id: number, data: NetworkForecastSaveRequest): Promise<NetworkForecastSaveResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast`, { method: 'POST', body: JSON.stringify(data) })
+      .then(r => parseJSONResponse<NetworkForecastSaveResponse>(r, 'Ошибка сохранения прогноза')),
+
+  getPrices: (id: number, year: number): Promise<NetworkPricesResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/prices?year=${year}`)
+      .then(r => parseJSONResponse<NetworkPricesResponse>(r, 'Ошибка загрузки цен')),
+
+  savePrices: (id: number, data: NetworkPricesSaveRequest): Promise<NetworkPricesSaveResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/prices`, { method: 'POST', body: JSON.stringify(data) })
+      .then(r => parseJSONResponse<NetworkPricesSaveResponse>(r, 'Ошибка сохранения цен')),
+
   // Комментарии: без года/квартала/бренда — ко всей сети
   getComments: (id: number): Promise<NetworkCommentsResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/comments`)
@@ -86,4 +108,3 @@ export const networkAPI = {
     fetchWithAuth(`${API_BASE}/api/networks/${id}/audit`)
       .then(r => parseJSONResponse<NetworkAuditResponse>(r, 'Ошибка загрузки истории')),
 };
-

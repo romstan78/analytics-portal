@@ -228,6 +228,9 @@ export interface NetworkPlan {
   in_gross: boolean;
   plan_rub: number | null;
   plan_units: number | null;
+  month1_pct: number;
+  month2_pct: number;
+  month3_pct: number;
   fact_rub: number | null;
   forecast_rub: number | null;
   fact_investments_rub: number | null;
@@ -332,6 +335,157 @@ export interface NetworkBrandsResponse {
   data: string[];
 }
 
+export interface NetworkMonthlyFact {
+  id: number;
+  network_id: number;
+  year: number;
+  month: number;
+  brand_as: string;
+  sku: string | null;
+  fact_rub: number | null;
+  fact_units: number | null;
+  fact_investments_rub: number | null;
+  is_final: boolean;
+  source_name: string | null;
+  updated_at: string;
+}
+
+export interface NetworkForecastLine {
+  id: number;
+  network_id: number;
+  year: number;
+  month: number;
+  brand_as: string;
+  sku: string | null;
+  forecast_rub: number | null;
+  forecast_units: number | null;
+  forecast_investments_rub: number | null;
+  system_forecast_rub: number | null;
+  system_forecast_units: number | null;
+  confidence: string | null;
+  adjustment_reason: string | null;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface NetworkPromoIndicator {
+  year: number;
+  month: number;
+  brand_as: string;
+  promo_count: number;
+  approved_count: number;
+  draft_count: number;
+  plan_promo_units: number;
+  plan_promo_rub: number;
+  plan_investments_rub: number;
+  plan_uplift_rub: number;
+  plan_uplift_units: number;
+}
+
+export interface NetworkForecastMonth {
+  year: number;
+  quarter: number;
+  month: number;
+  brand_as: string;
+  sku: string | null;
+  contract_price: number | null;
+  plan_rub: number | null;
+  plan_investments_rub: number | null;
+  fact_rub: number | null;
+  fact_units: number | null;
+  fact_investments_rub: number | null;
+  forecast_rub: number | null;
+  forecast_units: number | null;
+  forecast_investments_rub: number | null;
+  system_forecast_rub: number | null;
+  system_forecast_units: number | null;
+  eac_rub: number | null;
+  eac_investments_rub: number | null;
+  confidence: string | null;
+  adjustment_reason: string | null;
+  promo_count: number;
+  approved_promo_count: number;
+  draft_promo_count: number;
+  promo_plan_units: number;
+  promo_plan_rub: number;
+  promo_investments_rub: number;
+  promo_uplift_rub: number;
+  is_closed: boolean;
+  is_current: boolean;
+  updated_at: string;
+}
+
+export interface NetworkForecastBrandTotals {
+  brand_as: string;
+  plan_rub: number;
+  fact_rub: number;
+  eac_rub: number;
+  completion_pct: number | null;
+  gap_rub: number;
+  plan_investments_rub: number;
+  fact_investments_rub: number;
+  eac_investments_rub: number;
+  investment_variance_rub: number;
+  promo_count: number;
+}
+
+export interface NetworkForecastTotals {
+  plan_rub: number;
+  fact_rub: number;
+  eac_rub: number;
+  completion_pct: number | null;
+  gap_rub: number;
+  plan_investments_rub: number;
+  fact_investments_rub: number;
+  eac_investments_rub: number;
+  investment_variance_rub: number;
+  promo_count: number;
+}
+
+export interface NetworkForecastResponse {
+  network: Network;
+  year: number;
+  quarter: number;
+  months: NetworkForecastMonth[];
+  brands: NetworkForecastBrandTotals[];
+  totals: NetworkForecastTotals;
+}
+
+export interface NetworkForecastSaveResponse {
+  message: string;
+  data: NetworkForecastResponse;
+}
+
+export interface NetworkContractPrice {
+  id: number;
+  network_id: number;
+  brand_as: string;
+  sku: string;
+  contract_price: number;
+  valid_from: string;
+  valid_to: string;
+  source_type: string;
+  source_year: number | null;
+  source_month: number | null;
+  is_confirmed: boolean;
+  olap_price: number | null;
+  olap_year: number | null;
+  olap_month: number | null;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface NetworkPricesResponse {
+  network: Network;
+  year: number;
+  data: NetworkContractPrice[];
+}
+
+export interface NetworkPricesSaveResponse {
+  message: string;
+  data: NetworkPricesResponse;
+}
+
 export interface NetworkPlanInput {
   quarter: number;
   brand_as: string | null;
@@ -339,6 +493,31 @@ export interface NetworkPlanInput {
   plan_rub: number | null;
   forecast_rub: number | null;
   investments_pct: number | null;
+  month1_pct: number | null;
+  month2_pct: number | null;
+  month3_pct: number | null;
+  updated_at: string;
+}
+
+export interface NetworkForecastInput {
+  month: number;
+  brand_as: string;
+  sku: string | null;
+  forecast_rub: number | null;
+  forecast_units: number | null;
+  forecast_investments_rub: number | null;
+  adjustment_reason: string | null;
+  updated_at: string;
+}
+
+export interface NetworkContractPriceInput {
+  id: number;
+  brand_as: string;
+  sku: string;
+  contract_price: number;
+  valid_from: string;
+  valid_to: string;
+  is_confirmed: boolean;
   updated_at: string;
 }
 

@@ -44,6 +44,20 @@ func planYear(c *gin.Context) (int, bool) {
 	return year, true
 }
 
+func planQuarter(c *gin.Context) (int, bool) {
+	raw := strings.TrimSpace(c.Query("quarter"))
+	if raw == "" {
+		month := int(time.Now().Month())
+		return (month-1)/3 + 1, true
+	}
+	quarter, err := strconv.Atoi(raw)
+	if err != nil || quarter < 1 || quarter > 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный квартал"})
+		return 0, false
+	}
+	return quarter, true
+}
+
 func currentUser(c *gin.Context) (username, role string) {
 	if v, ok := c.Get("username"); ok {
 		username = fmt.Sprint(v)
@@ -76,6 +90,10 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Сеть с таким названием уже есть в реестре"})
 	case errors.Is(err, repository.ErrNetworkConflict):
 		c.JSON(http.StatusConflict, gin.H{"error": "Данные изменены другим пользователем. Обновите страницу и повторите."})
+	case errors.Is(err, repository.ErrNetworkPriceOverlap):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Периоды цены одного SKU не должны пересекаться"})
+	case errors.Is(err, repository.ErrNetworkClosedMonth):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Закрытый месяц нельзя изменять"})
 	default:
 		config.Logger.Error(logEvent, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки запроса"})
@@ -397,6 +415,16 @@ func PreviewNetworkPlan(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный квартал"})
 			return
 		}
+		month1Pct, month2Pct, month3Pct := 30.0, 30.0, 40.0
+		if p.Month1Pct != nil {
+			month1Pct = *p.Month1Pct
+		}
+		if p.Month2Pct != nil {
+			month2Pct = *p.Month2Pct
+		}
+		if p.Month3Pct != nil {
+			month3Pct = *p.Month3Pct
+		}
 		draft = append(draft, services.NetworkPlanDraft{
 			Quarter:        p.Quarter,
 			BrandAS:        p.BrandAS,
@@ -404,6 +432,9 @@ func PreviewNetworkPlan(c *gin.Context) {
 			PlanRub:        p.PlanRub,
 			ForecastRub:    p.ForecastRub,
 			InvestmentsPct: p.InvestmentsPct,
+			Month1Pct:      month1Pct,
+			Month2Pct:      month2Pct,
+			Month3Pct:      month3Pct,
 		})
 	}
 
@@ -422,6 +453,180 @@ func PreviewNetworkPlan(c *gin.Context) {
 		Plans:      plans,
 		Totals:     totals,
 		YearTotals: yearTotals,
+	})
+}
+
+// ─── Помесячный прогноз ─────────────────────────────────────────────────────
+
+func loadNetworkForecast(networkID, year, quarter int) (models.NetworkForecastResponse, error) {
+	network, err := repository.GetNetworkByID(networkID)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	periods, err := repository.GetNetworkPeriods(networkID, year)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	plans, err := repository.GetNetworkPlans(networkID, year)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	facts, err := repository.GetNetworkMonthlyFacts(networkID, year-1, year)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	forecasts, err := repository.GetNetworkForecastLines(networkID, year, quarter)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	promos, err := repository.GetNetworkPromoIndicators(network.Name, year, quarter)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	prices, err := repository.GetNetworkContractPrices(networkID, year)
+	if err != nil {
+		return models.NetworkForecastResponse{}, err
+	}
+	return services.BuildNetworkForecast(
+		network, year, quarter, plans, periods, facts, forecasts, promos, prices, time.Now(),
+	), nil
+}
+
+func GetNetworkForecast(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	year, ok := planYear(c)
+	if !ok {
+		return
+	}
+	quarter, ok := planQuarter(c)
+	if !ok {
+		return
+	}
+	response, err := loadNetworkForecast(id, year, quarter)
+	if err != nil {
+		respondNetworkError(c, err, "network_forecast_failed")
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+type saveForecastInput struct {
+	Year    int                               `json:"year"`
+	Quarter int                               `json:"quarter"`
+	Lines   []repository.NetworkForecastInput `json:"lines"`
+}
+
+func SaveNetworkForecast(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	var input saveForecastInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Year < 2000 || input.Year > 2100 || input.Quarter < 1 || input.Quarter > 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный период прогноза"})
+		return
+	}
+	if _, err := repository.GetNetworkByID(id); err != nil {
+		respondNetworkError(c, err, "network_forecast_save_fetch_failed")
+		return
+	}
+	username, _ := currentUser(c)
+	if err := repository.SaveNetworkForecastLines(repository.SaveNetworkForecastInput{
+		NetworkID: id, Year: input.Year, Quarter: input.Quarter,
+		Lines: input.Lines, UserName: username,
+	}); err != nil {
+		respondNetworkError(c, err, "network_forecast_save_failed")
+		return
+	}
+	response, err := loadNetworkForecast(id, input.Year, input.Quarter)
+	if err != nil {
+		respondNetworkError(c, err, "network_forecast_refetch_failed")
+		return
+	}
+	if err := repository.UpdateNetworkPlanForecastRollup(id, input.Year, input.Quarter, response.Brands); err != nil {
+		config.Logger.Error("network_forecast_rollup_failed", "error", err.Error(), "network_id", id)
+	}
+	_ = repository.InsertEntityAuditLog(
+		"network_forecast", id, username, "UPDATE",
+		jsonString(map[string]interface{}{"year": input.Year, "quarter": input.Quarter, "lines": len(input.Lines)}),
+	)
+	c.JSON(http.StatusOK, models.NetworkForecastSaveResponse{Message: "Saved", Data: response})
+}
+
+// ─── Цены контракта ─────────────────────────────────────────────────────────
+
+func GetNetworkPrices(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	year, ok := planYear(c)
+	if !ok {
+		return
+	}
+	network, err := repository.GetNetworkByID(id)
+	if err != nil {
+		respondNetworkError(c, err, "network_prices_fetch_failed")
+		return
+	}
+	prices, err := repository.GetNetworkContractPrices(id, year)
+	if err != nil {
+		respondNetworkError(c, err, "network_prices_failed")
+		return
+	}
+	c.JSON(http.StatusOK, models.NetworkPricesResponse{Network: network, Year: year, Data: prices})
+}
+
+type savePricesInput struct {
+	Year int                                    `json:"year"`
+	Rows []repository.NetworkContractPriceInput `json:"rows"`
+}
+
+func SaveNetworkPrices(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	var input savePricesInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Year < 2000 || input.Year > 2100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
+		return
+	}
+	network, err := repository.GetNetworkByID(id)
+	if err != nil {
+		respondNetworkError(c, err, "network_prices_save_fetch_failed")
+		return
+	}
+	username, _ := currentUser(c)
+	if err := repository.SaveNetworkContractPrices(repository.SaveNetworkPricesInput{
+		NetworkID: id, Rows: input.Rows, UserName: username,
+	}); err != nil {
+		respondNetworkError(c, err, "network_prices_save_failed")
+		return
+	}
+	prices, err := repository.GetNetworkContractPrices(id, input.Year)
+	if err != nil {
+		respondNetworkError(c, err, "network_prices_refetch_failed")
+		return
+	}
+	_ = repository.InsertEntityAuditLog(
+		"network_price", id, username, "UPDATE",
+		jsonString(map[string]interface{}{"year": input.Year, "rows": len(input.Rows)}),
+	)
+	c.JSON(http.StatusOK, models.NetworkPricesSaveResponse{
+		Message: "Saved",
+		Data:    models.NetworkPricesResponse{Network: network, Year: input.Year, Data: prices},
 	})
 }
 
