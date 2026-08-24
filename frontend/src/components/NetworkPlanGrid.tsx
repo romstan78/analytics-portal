@@ -43,6 +43,7 @@ import {
 import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
 import NetworkAllocationEditor from './NetworkAllocationEditor';
+import NetworkAnnualInvestmentCumulative from './NetworkAnnualInvestmentCumulative';
 import NetworkPeriodGroupsEditor from './NetworkPeriodGroupsEditor';
 import NetworkQuarterTable from './NetworkQuarterTable';
 import NetworkYearTable from './NetworkYearTable';
@@ -406,18 +407,24 @@ export default function NetworkPlanGrid({
       <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} />
 
       {period === 'year' ? (
-        <NetworkYearTable
-          metric={yearMetric}
-          brands={brands}
-          draft={draft}
-          amounts={amounts}
-          totals={totals}
-          yearTotals={view.year_totals}
-          canEdit={canEdit}
-          onCellChange={setCell}
-          onToggleGross={toggleGross}
-          onRemoveBrand={removeBrand}
-        />
+        <>
+          <NetworkYearTable
+            metric={yearMetric}
+            brands={brands}
+            draft={draft}
+            amounts={amounts}
+            totals={totals}
+            yearTotals={view.year_totals}
+            canEdit={canEdit}
+            onCellChange={setCell}
+            onToggleGross={toggleGross}
+            onRemoveBrand={removeBrand}
+          />
+          <NetworkAnnualInvestmentCumulative
+            year={data.year}
+            data={view.annual_investment_cumulative}
+          />
+        </>
       ) : (
         <NetworkQuarterTable
           quarter={period}
@@ -446,6 +453,9 @@ export default function NetworkPlanGrid({
         с вычетом НДС по ставке квартала показывается в подсказке ячейки. Факт объёма
         и факт инвестиций загружаются из отгрузок и в форме не редактируются. Объединение
         кварталов меняет только период оценки: исходные суммы каждого квартала остаются на месте.
+        Годовой кумулятив доступен только после выполнения плана всего портфеля;
+        внутри него доплата рассчитывается для выполнивших годовой план брендов
+        или валового объёма с вычетом фактических выплат Q1–Q3 и прогноза Q4.
       </Typography>
     </Box>
   );

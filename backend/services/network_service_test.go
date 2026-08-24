@@ -335,6 +335,123 @@ func TestCalculateNetworkPeriodGroupTotalsPortfolioAndBrand(t *testing.T) {
 	}
 }
 
+func TestCalculateNetworkAnnualInvestmentCumulativeGrossAndBrand(t *testing.T) {
+	periods := []models.NetworkPeriod{
+		{Quarter: 1}, {Quarter: 2}, {Quarter: 3}, {Quarter: 4},
+	}
+	plans := []models.NetworkPlan{}
+	for quarter, grossEAC := range []float64{600, 1100, 900, 1400} {
+		q := quarter + 1
+		plans = append(plans,
+			models.NetworkPlan{Quarter: q, BrandAS: nil, PlanRub: models.PtrFloat(1000)},
+			models.NetworkPlan{
+				Quarter: q, BrandAS: brandPtr("Альфа"), InGross: true,
+				PlanRub: models.PtrFloat(600), ForecastRub: models.PtrFloat(grossEAC),
+				InvestmentsPct: models.PtrFloat(10),
+			},
+			models.NetworkPlan{
+				Quarter: q, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(250),
+				ForecastRub: models.PtrFloat(250), InvestmentsPct: models.PtrFloat(20),
+			},
+		)
+	}
+	// Выплаченные суммы Q1-Q3 не обязаны совпадать с процентом от объёма.
+	plans[1].FactInvestmentsRub = models.PtrFloat(40)
+	plans[4].FactInvestmentsRub = models.PtrFloat(50)
+	plans[7].FactInvestmentsRub = models.PtrFloat(60)
+	plans[2].FactInvestmentsRub = models.PtrFloat(20)
+	plans[5].FactInvestmentsRub = models.PtrFloat(20)
+	plans[8].FactInvestmentsRub = models.PtrFloat(20)
+	// Q4 вычитается по официальному прогнозу выплат, а не по расчётному начислению.
+	plans[10].ForecastInvestmentsRub = models.PtrFloat(100)
+	plans[11].ForecastInvestmentsRub = models.PtrFloat(50)
+
+	plans = EnrichNetworkPlans(plans, periods)
+	totals := CalculateNetworkTotals(plans, periods)
+	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
+
+	if got.PortfolioPlanRub != 5000 || got.PortfolioEACRub != 5000 || !got.PortfolioCompleted {
+		t.Fatalf("портфельный порог рассчитан неверно: %#v", got)
+	}
+	if len(got.Rows) != 2 {
+		t.Fatalf("строк кумулятива = %d, ожидалось gross + бренд", len(got.Rows))
+	}
+	gross := got.Rows[0]
+	if gross.ScopeType != "gross" || gross.PlanRub != 4000 || gross.EACRub != 4000 || !gross.Eligible {
+		t.Errorf("валовый объём рассчитан неверно: %#v", gross)
+	}
+	if gross.AccruedInvestmentsRub != 400 || gross.PaidInvestmentsRub != 150 ||
+		gross.Q4ForecastInvestmentsRub != 100 || gross.SupplementRub != 150 {
+		t.Errorf("доплата валового объёма рассчитана неверно: %#v", gross)
+	}
+	brand := got.Rows[1]
+	if models.ValString(brand.BrandAS) != "Бета" || brand.PlanRub != 1000 || brand.EACRub != 1000 || !brand.Eligible {
+		t.Errorf("отдельный бренд рассчитан неверно: %#v", brand)
+	}
+	if brand.AccruedInvestmentsRub != 200 || brand.PaidInvestmentsRub != 60 ||
+		brand.Q4ForecastInvestmentsRub != 50 || brand.SupplementRub != 90 {
+		t.Errorf("доплата бренда рассчитана неверно: %#v", brand)
+	}
+	if got.TotalSupplementRub != 240 || got.TotalSupplementRubNet != 240 {
+		t.Errorf("общая доплата = %v / %v, ожидалось 240 / 240", got.TotalSupplementRub, got.TotalSupplementRubNet)
+	}
+}
+
+func TestCalculateNetworkAnnualInvestmentCumulativeRequiresPortfolioAndScopeCompletion(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
+	plans := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: brandPtr("Выполнен"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(120), InvestmentsPct: models.PtrFloat(10)},
+		{Quarter: 1, BrandAS: brandPtr("Не выполнен"), PlanRub: models.PtrFloat(200),
+			FactRub: models.PtrFloat(50), InvestmentsPct: models.PtrFloat(10)},
+	}
+	plans = EnrichNetworkPlans(plans, periods)
+	totals := CalculateNetworkTotals(plans, periods)
+	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
+
+	if got.PortfolioEACRub != 170 {
+		t.Errorf("EAC должен использовать forecast с fallback на факт, получено %v", got.PortfolioEACRub)
+	}
+	if got.PortfolioCompleted {
+		t.Error("портфель не должен считаться выполненным")
+	}
+	if len(got.Rows) != 2 {
+		t.Fatalf("строк = %d, ожидалось 2", len(got.Rows))
+	}
+	for _, row := range got.Rows {
+		if row.Eligible || row.SupplementRub != 0 || row.SupplementRubNet != 0 {
+			t.Errorf("без выполнения портфеля доплаты быть не должно: %#v", row)
+		}
+	}
+}
+
+func TestCalculateNetworkAnnualInvestmentCumulativeRequiresRowCompletionAndClampsSupplement(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1}}
+	plans := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: brandPtr("A"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(110), InvestmentsPct: models.PtrFloat(10),
+			FactInvestmentsRub: models.PtrFloat(20)},
+		{Quarter: 1, BrandAS: brandPtr("B"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(90), InvestmentsPct: models.PtrFloat(10)},
+	}
+	plans = EnrichNetworkPlans(plans, periods)
+	totals := CalculateNetworkTotals(plans, periods)
+	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
+
+	if !got.PortfolioCompleted {
+		t.Fatal("портфель с EAC 200 при плане 200 должен быть выполнен")
+	}
+	if len(got.Rows) != 2 {
+		t.Fatalf("строк = %d, ожидалось 2", len(got.Rows))
+	}
+	if !got.Rows[0].Eligible || got.Rows[0].SupplementRub != 0 {
+		t.Errorf("выполненный бренд должен быть доступен, но доплата не может быть отрицательной: %#v", got.Rows[0])
+	}
+	if got.Rows[1].Eligible || got.Rows[1].SupplementRub != 0 {
+		t.Errorf("невыполненный бренд не должен получать доплату: %#v", got.Rows[1])
+	}
+}
+
 func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	stored := []models.NetworkPlan{{

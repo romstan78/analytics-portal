@@ -299,14 +299,15 @@ func GetNetworkPlan(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, models.NetworkPlanResponse{
-		Network:           network,
-		Year:              year,
-		Periods:           periods,
-		Plans:             plans,
-		Totals:            totals,
-		YearTotals:        services.SumYearTotals(totals),
-		PeriodGroups:      periodGroups,
-		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
+		Network:                    network,
+		Year:                       year,
+		Periods:                    periods,
+		Plans:                      plans,
+		Totals:                     totals,
+		YearTotals:                 services.SumYearTotals(totals),
+		PeriodGroups:               periodGroups,
+		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals),
 	})
 }
 
@@ -386,14 +387,15 @@ func SaveNetworkPlan(c *gin.Context) {
 
 	config.Logger.Info("network_plan_saved", "network_id", id, "year", input.Year, "user", username)
 	c.JSON(http.StatusOK, models.NetworkPlanSaveResponse{
-		Message:           "Saved",
-		Year:              input.Year,
-		Periods:           updatedPeriods,
-		Plans:             updatedPlans,
-		Totals:            totals,
-		YearTotals:        services.SumYearTotals(totals),
-		PeriodGroups:      periodGroups,
-		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, updatedPlans, totals),
+		Message:                    "Saved",
+		Year:                       input.Year,
+		Periods:                    updatedPeriods,
+		Plans:                      updatedPlans,
+		Totals:                     totals,
+		YearTotals:                 services.SumYearTotals(totals),
+		PeriodGroups:               periodGroups,
+		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, updatedPlans, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(updatedPlans, updatedPeriods, totals),
 	})
 }
 
@@ -484,13 +486,14 @@ func PreviewNetworkPlan(c *gin.Context) {
 
 	plans, totals, yearTotals := services.PreviewNetworkPlans(draft, stored, periods)
 	c.JSON(http.StatusOK, models.NetworkPlanPreviewResponse{
-		Year:              input.Year,
-		Periods:           periods,
-		Plans:             plans,
-		Totals:            totals,
-		YearTotals:        yearTotals,
-		PeriodGroups:      periodGroups,
-		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
+		Year:                       input.Year,
+		Periods:                    periods,
+		Plans:                      plans,
+		Totals:                     totals,
+		YearTotals:                 yearTotals,
+		PeriodGroups:               periodGroups,
+		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals),
 	})
 }
 

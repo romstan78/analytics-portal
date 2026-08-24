@@ -17,6 +17,8 @@ export type {
   NetworkPeriod,
   NetworkPlan,
   NetworkPlanTotals,
+  NetworkAnnualInvestmentRow,
+  NetworkAnnualInvestmentCumulative,
   NetworkPeriodGroup,
   NetworkPeriodGroupTotals,
   NetworkPeriodGroupInput,

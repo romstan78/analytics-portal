@@ -2,6 +2,7 @@ package services
 
 import (
 	"math"
+	"sort"
 	"strconv"
 
 	"backend/models"
@@ -282,6 +283,133 @@ func CalculateNetworkPeriodGroupTotals(
 			combined.FactInvestmentsRubNet = round2(combined.FactInvestmentsRubNet + models.ValFloat(plan.FactInvestmentsNet))
 		}
 		result = append(result, combined)
+	}
+
+	return result
+}
+
+// annualEACRub возвращает лучший доступный итог объёма строки за квартал.
+// forecast_rub хранит квартальный EAC (факт закрытых месяцев + прогноз
+// остальных); до появления прогноза используем уже загруженный факт.
+func annualEACRub(plan models.NetworkPlan) float64 {
+	if plan.ForecastRub != nil {
+		return *plan.ForecastRub
+	}
+	return models.ValFloat(plan.FactRub)
+}
+
+// CalculateNetworkAnnualInvestmentCumulative считает годовой кумулятив
+// инвестиций. Начисление каждой области складывается из квартальных EAC,
+// умноженных на процент инвестиций соответствующего квартала. Из начисления
+// вычитаются фактические выплаты Q1-Q3 и официальный прогноз инвестиций Q4.
+// Отрицательная доплата не создаётся.
+func CalculateNetworkAnnualInvestmentCumulative(
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+	totals []NetworkPlanTotals,
+) models.NetworkAnnualInvestmentCumulative {
+	result := models.NetworkAnnualInvestmentCumulative{Rows: []models.NetworkAnnualInvestmentRow{}}
+	byQuarter := periodsByQuarter(periods)
+
+	var gross models.NetworkAnnualInvestmentRow
+	gross.ScopeType = "gross"
+	grossExists := false
+	brands := make(map[string]*models.NetworkAnnualInvestmentRow)
+
+	for _, total := range totals {
+		if total.GrossPoolRub != nil || total.GrossBrandsCount > 0 {
+			grossExists = true
+			grossPlan := total.GrossBrandsPlan
+			if total.GrossPoolRub != nil {
+				grossPlan = *total.GrossPoolRub
+			}
+			gross.PlanRub = round2(gross.PlanRub + grossPlan)
+		}
+		result.PortfolioPlanRub = round2(result.PortfolioPlanRub + total.ContractPlanRub)
+	}
+
+	addPlan := func(row *models.NetworkAnnualInvestmentRow, plan models.NetworkPlan) {
+		eac := annualEACRub(plan)
+		row.EACRub = round2(row.EACRub + eac)
+
+		period := byQuarter[plan.Quarter]
+		if plan.InvestmentsPct != nil {
+			grossInvestment, netInvestment := investmentsFor(
+				eac, *plan.InvestmentsPct, period.VATIncluded, period.VATRate,
+			)
+			row.AccruedInvestmentsRub = round2(row.AccruedInvestmentsRub + grossInvestment)
+			row.AccruedInvestmentsRubNet = round2(row.AccruedInvestmentsRubNet + netInvestment)
+		}
+
+		if plan.Quarter < 4 && plan.FactInvestmentsRub != nil {
+			row.PaidInvestmentsRub = round2(row.PaidInvestmentsRub + *plan.FactInvestmentsRub)
+			row.PaidInvestmentsRubNet = round2(row.PaidInvestmentsRubNet +
+				NetRub(*plan.FactInvestmentsRub, period.VATIncluded, period.VATRate))
+		}
+		if plan.Quarter == 4 && plan.ForecastInvestmentsRub != nil {
+			row.Q4ForecastInvestmentsRub = round2(row.Q4ForecastInvestmentsRub + *plan.ForecastInvestmentsRub)
+			row.Q4ForecastInvestmentsNet = round2(row.Q4ForecastInvestmentsNet +
+				NetRub(*plan.ForecastInvestmentsRub, period.VATIncluded, period.VATRate))
+		}
+	}
+
+	for _, plan := range plans {
+		if plan.BrandAS == nil {
+			continue
+		}
+		eac := annualEACRub(plan)
+		result.PortfolioEACRub = round2(result.PortfolioEACRub + eac)
+
+		if plan.InGross {
+			grossExists = true
+			addPlan(&gross, plan)
+			continue
+		}
+
+		brand := *plan.BrandAS
+		row := brands[brand]
+		if row == nil {
+			brandCopy := brand
+			row = &models.NetworkAnnualInvestmentRow{ScopeType: "brand", BrandAS: &brandCopy}
+			brands[brand] = row
+		}
+		row.PlanRub = round2(row.PlanRub + models.ValFloat(plan.PlanRub))
+		addPlan(row, plan)
+	}
+
+	result.PortfolioCompletionPct = completionPct(result.PortfolioEACRub, result.PortfolioPlanRub)
+	result.PortfolioCompleted = result.PortfolioPlanRub > 0 && result.PortfolioEACRub >= result.PortfolioPlanRub
+
+	finishRow := func(row models.NetworkAnnualInvestmentRow) models.NetworkAnnualInvestmentRow {
+		row.CompletionPct = completionPct(row.EACRub, row.PlanRub)
+		row.Completed = row.PlanRub > 0 && row.EACRub >= row.PlanRub
+		row.Eligible = result.PortfolioCompleted && row.Completed
+		if row.Eligible {
+			row.SupplementRub = round2(math.Max(0,
+				row.AccruedInvestmentsRub-row.PaidInvestmentsRub-row.Q4ForecastInvestmentsRub))
+			row.SupplementRubNet = round2(math.Max(0,
+				row.AccruedInvestmentsRubNet-row.PaidInvestmentsRubNet-row.Q4ForecastInvestmentsNet))
+			result.TotalSupplementRub = round2(result.TotalSupplementRub + row.SupplementRub)
+			result.TotalSupplementRubNet = round2(result.TotalSupplementRubNet + row.SupplementRubNet)
+		}
+		return row
+	}
+
+	if grossExists {
+		result.Rows = append(result.Rows, finishRow(gross))
+	}
+	brandNames := make([]string, 0, len(brands))
+	for brand := range brands {
+		brandNames = append(brandNames, brand)
+	}
+	sort.Strings(brandNames)
+	for _, brand := range brandNames {
+		row := brands[brand]
+		if row.PlanRub == 0 && row.EACRub == 0 && row.AccruedInvestmentsRub == 0 &&
+			row.PaidInvestmentsRub == 0 && row.Q4ForecastInvestmentsRub == 0 {
+			continue
+		}
+		result.Rows = append(result.Rows, finishRow(*row))
 	}
 
 	return result

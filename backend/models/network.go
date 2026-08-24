@@ -127,6 +127,43 @@ type NetworkPeriodGroupTotals struct {
 	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
 }
 
+// NetworkAnnualInvestmentRow — одна область годового кумулятива: общий
+// валовый объём либо отдельный бренд. Если бренд в разных кварталах менял тип,
+// в эту строку попадают только кварталы, где он планировался отдельно; его
+// валовые кварталы учитываются в общей строке gross.
+type NetworkAnnualInvestmentRow struct {
+	ScopeType string  `json:"scope_type"` // gross | brand
+	BrandAS   *string `json:"brand_as"`
+
+	PlanRub       float64  `json:"plan_rub"`
+	EACRub        float64  `json:"eac_rub"`
+	CompletionPct *float64 `json:"completion_pct"`
+	Completed     bool     `json:"completed"`
+	Eligible      bool     `json:"eligible"`
+
+	AccruedInvestmentsRub    float64 `json:"accrued_investments_rub"`
+	AccruedInvestmentsRubNet float64 `json:"accrued_investments_rub_net"`
+	PaidInvestmentsRub       float64 `json:"paid_investments_rub"`
+	PaidInvestmentsRubNet    float64 `json:"paid_investments_rub_net"`
+	Q4ForecastInvestmentsRub float64 `json:"q4_forecast_investments_rub"`
+	Q4ForecastInvestmentsNet float64 `json:"q4_forecast_investments_rub_net"`
+	SupplementRub            float64 `json:"supplement_rub"`
+	SupplementRubNet         float64 `json:"supplement_rub_net"`
+}
+
+// NetworkAnnualInvestmentCumulative — расчёт годовой доплаты. Сначала сеть
+// должна выполнить годовой план всего портфеля; после этого доплата доступна
+// только выполнившим годовой план отдельным брендам или валовому объёму.
+type NetworkAnnualInvestmentCumulative struct {
+	PortfolioPlanRub       float64                      `json:"portfolio_plan_rub"`
+	PortfolioEACRub        float64                      `json:"portfolio_eac_rub"`
+	PortfolioCompletionPct *float64                     `json:"portfolio_completion_pct"`
+	PortfolioCompleted     bool                         `json:"portfolio_completed"`
+	Rows                   []NetworkAnnualInvestmentRow `json:"rows"`
+	TotalSupplementRub     float64                      `json:"total_supplement_rub"`
+	TotalSupplementRubNet  float64                      `json:"total_supplement_rub_net"`
+}
+
 // NetworkComment — комментарий к сети целиком либо к конкретной ячейке плана.
 type NetworkComment struct {
 	ID          int64   `json:"id"`
@@ -144,38 +181,41 @@ type NetworkComment struct {
 
 // NetworkPlanResponse — данные вкладки «Планы» за год.
 type NetworkPlanResponse struct {
-	Network           Network                    `json:"network"`
-	Year              int                        `json:"year"`
-	Periods           []NetworkPeriod            `json:"periods"`
-	Plans             []NetworkPlan              `json:"plans"`
-	Totals            []NetworkPlanTotals        `json:"totals"`
-	YearTotals        NetworkPlanTotals          `json:"year_totals"`
-	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
-	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
+	Network                    Network                           `json:"network"`
+	Year                       int                               `json:"year"`
+	Periods                    []NetworkPeriod                   `json:"periods"`
+	Plans                      []NetworkPlan                     `json:"plans"`
+	Totals                     []NetworkPlanTotals               `json:"totals"`
+	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
+	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
 }
 
 // NetworkPlanSaveResponse — состояние года после сохранения.
 type NetworkPlanSaveResponse struct {
-	Message           string                     `json:"message"`
-	Year              int                        `json:"year"`
-	Periods           []NetworkPeriod            `json:"periods"`
-	Plans             []NetworkPlan              `json:"plans"`
-	Totals            []NetworkPlanTotals        `json:"totals"`
-	YearTotals        NetworkPlanTotals          `json:"year_totals"`
-	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
-	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
+	Message                    string                            `json:"message"`
+	Year                       int                               `json:"year"`
+	Periods                    []NetworkPeriod                   `json:"periods"`
+	Plans                      []NetworkPlan                     `json:"plans"`
+	Totals                     []NetworkPlanTotals               `json:"totals"`
+	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
+	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
 }
 
 // NetworkPlanPreviewResponse — пересчёт несохранённого черновика.
 // В БД ничего не пишется: ответ показывает, что получится после сохранения.
 type NetworkPlanPreviewResponse struct {
-	Year              int                        `json:"year"`
-	Periods           []NetworkPeriod            `json:"periods"`
-	Plans             []NetworkPlan              `json:"plans"`
-	Totals            []NetworkPlanTotals        `json:"totals"`
-	YearTotals        NetworkPlanTotals          `json:"year_totals"`
-	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
-	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
+	Year                       int                               `json:"year"`
+	Periods                    []NetworkPeriod                   `json:"periods"`
+	Plans                      []NetworkPlan                     `json:"plans"`
+	Totals                     []NetworkPlanTotals               `json:"totals"`
+	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
+	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
 }
 
 // NetworkListResponse — список сетей реестра.

@@ -291,6 +291,34 @@ export interface NetworkPeriodGroupTotals {
   fact_investments_rub_net: number;
 }
 
+export interface NetworkAnnualInvestmentRow {
+  scope_type: string;
+  brand_as: string | null;
+  plan_rub: number;
+  eac_rub: number;
+  completion_pct: number | null;
+  completed: boolean;
+  eligible: boolean;
+  accrued_investments_rub: number;
+  accrued_investments_rub_net: number;
+  paid_investments_rub: number;
+  paid_investments_rub_net: number;
+  q4_forecast_investments_rub: number;
+  q4_forecast_investments_rub_net: number;
+  supplement_rub: number;
+  supplement_rub_net: number;
+}
+
+export interface NetworkAnnualInvestmentCumulative {
+  portfolio_plan_rub: number;
+  portfolio_eac_rub: number;
+  portfolio_completion_pct: number | null;
+  portfolio_completed: boolean;
+  rows: NetworkAnnualInvestmentRow[];
+  total_supplement_rub: number;
+  total_supplement_rub_net: number;
+}
+
 export interface NetworkComment {
   id: number;
   network_id: number;
@@ -322,6 +350,7 @@ export interface NetworkPlanResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
+  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkPlanSaveResponse {
@@ -333,6 +362,7 @@ export interface NetworkPlanSaveResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
+  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkPlanPreviewResponse {
@@ -343,6 +373,7 @@ export interface NetworkPlanPreviewResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
+  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkListResponse {

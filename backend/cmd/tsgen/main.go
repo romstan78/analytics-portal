@@ -62,6 +62,8 @@ var exported = []entry{
 	{models.NetworkPlanTotals{}, ""},
 	{models.NetworkPeriodGroup{}, ""},
 	{models.NetworkPeriodGroupTotals{}, ""},
+	{models.NetworkAnnualInvestmentRow{}, ""},
+	{models.NetworkAnnualInvestmentCumulative{}, ""},
 	{models.NetworkComment{}, ""},
 	{models.AuditLogRow{}, ""},
 	{models.NetworkPlanResponse{}, ""},
