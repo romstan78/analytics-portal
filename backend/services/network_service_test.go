@@ -295,6 +295,46 @@ func TestSumYearTotalsKeepsPoolAbsent(t *testing.T) {
 	}
 }
 
+func TestCalculateNetworkPeriodGroupTotalsPortfolioAndBrand(t *testing.T) {
+	periods := []models.NetworkPeriod{
+		{Quarter: 1, VATIncluded: true, VATRate: 20},
+		{Quarter: 2, VATIncluded: true, VATRate: 20},
+	}
+	plans := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: nil, PlanRub: models.PtrFloat(1000)},
+		{Quarter: 1, BrandAS: brandPtr("Альфа"), InGross: true, PlanRub: models.PtrFloat(600),
+			FactRub: models.PtrFloat(400), InvestmentsPct: models.PtrFloat(10), FactInvestmentsRub: models.PtrFloat(48)},
+		{Quarter: 1, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(200),
+			FactRub: models.PtrFloat(100), InvestmentsPct: models.PtrFloat(20), FactInvestmentsRub: models.PtrFloat(24)},
+		{Quarter: 2, BrandAS: nil, PlanRub: models.PtrFloat(1200)},
+		{Quarter: 2, BrandAS: brandPtr("Альфа"), InGross: true, PlanRub: models.PtrFloat(700),
+			FactRub: models.PtrFloat(800), InvestmentsPct: models.PtrFloat(10), FactInvestmentsRub: models.PtrFloat(72)},
+		{Quarter: 2, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(300),
+			FactRub: models.PtrFloat(200), InvestmentsPct: models.PtrFloat(20), FactInvestmentsRub: models.PtrFloat(36)},
+	}
+	plans = EnrichNetworkPlans(plans, periods)
+	totals := CalculateNetworkTotals(plans, periods)
+	groups := []models.NetworkPeriodGroup{
+		{StartQuarter: 1, EndQuarter: 2},
+		{StartQuarter: 1, EndQuarter: 2, BrandAS: brandPtr("Бета")},
+	}
+
+	got := CalculateNetworkPeriodGroupTotals(groups, plans, totals)
+	if len(got) != 2 {
+		t.Fatalf("итогов = %d, ожидалось 2", len(got))
+	}
+	// Портфельный план использует валовые обязательства: (1000+200)+(1200+300).
+	if got[0].PlanRub != 2700 || got[0].FactRub != 1500 || got[0].InvestmentsRub != 230 {
+		t.Errorf("портфель Q1–Q2 рассчитан неверно: %#v", got[0])
+	}
+	if got[0].FactInvestmentsRubNet != 150 {
+		t.Errorf("факт инвестиций портфеля без НДС = %v, ожидалось 150", got[0].FactInvestmentsRubNet)
+	}
+	if got[1].PlanRub != 500 || got[1].FactRub != 300 || got[1].InvestmentsRub != 100 {
+		t.Errorf("бренд Q1–Q2 рассчитан неверно: %#v", got[1])
+	}
+}
+
 func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	stored := []models.NetworkPlan{{

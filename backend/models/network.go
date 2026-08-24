@@ -92,6 +92,41 @@ type NetworkPlanTotals struct {
 	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
 }
 
+// NetworkPeriodGroup — правило совместного зачёта смежных кварталов.
+// BrandAS = nil означает весь портфель сети; заполненный бренд ограничивает
+// правило одной строкой бренда. Исходные планы и инвестиции по-прежнему
+// хранятся поквартально — группа меняет только период, в котором их оценивают.
+type NetworkPeriodGroup struct {
+	ID           int     `json:"id"`
+	NetworkID    int     `json:"network_id"`
+	Year         int     `json:"year"`
+	StartQuarter int     `json:"start_quarter"`
+	EndQuarter   int     `json:"end_quarter"`
+	BrandAS      *string `json:"brand_as"`
+	UpdatedBy    *string `json:"updated_by"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
+// NetworkPeriodGroupTotals — суммы плана, факта и прогноза по одному правилу
+// объединения. Для всего портфеля планом считается обязательство по контракту;
+// для бренда — его собственные квартальные строки.
+type NetworkPeriodGroupTotals struct {
+	StartQuarter int     `json:"start_quarter"`
+	EndQuarter   int     `json:"end_quarter"`
+	BrandAS      *string `json:"brand_as"`
+
+	PlanRub     float64 `json:"plan_rub"`
+	FactRub     float64 `json:"fact_rub"`
+	ForecastRub float64 `json:"forecast_rub"`
+
+	InvestmentsRub            float64 `json:"investments_rub"`
+	InvestmentsRubNet         float64 `json:"investments_rub_net"`
+	ForecastInvestmentsRub    float64 `json:"forecast_investments_rub"`
+	ForecastInvestmentsRubNet float64 `json:"forecast_investments_rub_net"`
+	FactInvestmentsRub        float64 `json:"fact_investments_rub"`
+	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
+}
+
 // NetworkComment — комментарий к сети целиком либо к конкретной ячейке плана.
 type NetworkComment struct {
 	ID          int64   `json:"id"`
@@ -109,32 +144,38 @@ type NetworkComment struct {
 
 // NetworkPlanResponse — данные вкладки «Планы» за год.
 type NetworkPlanResponse struct {
-	Network    Network             `json:"network"`
-	Year       int                 `json:"year"`
-	Periods    []NetworkPeriod     `json:"periods"`
-	Plans      []NetworkPlan       `json:"plans"`
-	Totals     []NetworkPlanTotals `json:"totals"`
-	YearTotals NetworkPlanTotals   `json:"year_totals"`
+	Network           Network                    `json:"network"`
+	Year              int                        `json:"year"`
+	Periods           []NetworkPeriod            `json:"periods"`
+	Plans             []NetworkPlan              `json:"plans"`
+	Totals            []NetworkPlanTotals        `json:"totals"`
+	YearTotals        NetworkPlanTotals          `json:"year_totals"`
+	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
+	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
 }
 
 // NetworkPlanSaveResponse — состояние года после сохранения.
 type NetworkPlanSaveResponse struct {
-	Message    string              `json:"message"`
-	Year       int                 `json:"year"`
-	Periods    []NetworkPeriod     `json:"periods"`
-	Plans      []NetworkPlan       `json:"plans"`
-	Totals     []NetworkPlanTotals `json:"totals"`
-	YearTotals NetworkPlanTotals   `json:"year_totals"`
+	Message           string                     `json:"message"`
+	Year              int                        `json:"year"`
+	Periods           []NetworkPeriod            `json:"periods"`
+	Plans             []NetworkPlan              `json:"plans"`
+	Totals            []NetworkPlanTotals        `json:"totals"`
+	YearTotals        NetworkPlanTotals          `json:"year_totals"`
+	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
+	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
 }
 
 // NetworkPlanPreviewResponse — пересчёт несохранённого черновика.
 // В БД ничего не пишется: ответ показывает, что получится после сохранения.
 type NetworkPlanPreviewResponse struct {
-	Year       int                 `json:"year"`
-	Periods    []NetworkPeriod     `json:"periods"`
-	Plans      []NetworkPlan       `json:"plans"`
-	Totals     []NetworkPlanTotals `json:"totals"`
-	YearTotals NetworkPlanTotals   `json:"year_totals"`
+	Year              int                        `json:"year"`
+	Periods           []NetworkPeriod            `json:"periods"`
+	Plans             []NetworkPlan              `json:"plans"`
+	Totals            []NetworkPlanTotals        `json:"totals"`
+	YearTotals        NetworkPlanTotals          `json:"year_totals"`
+	PeriodGroups      []NetworkPeriodGroup       `json:"period_groups"`
+	PeriodGroupTotals []NetworkPeriodGroupTotals `json:"period_group_totals"`
 }
 
 // NetworkListResponse — список сетей реестра.

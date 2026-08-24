@@ -265,6 +265,32 @@ export interface NetworkPlanTotals {
   fact_investments_rub_net: number;
 }
 
+export interface NetworkPeriodGroup {
+  id: number;
+  network_id: number;
+  year: number;
+  start_quarter: number;
+  end_quarter: number;
+  brand_as: string | null;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface NetworkPeriodGroupTotals {
+  start_quarter: number;
+  end_quarter: number;
+  brand_as: string | null;
+  plan_rub: number;
+  fact_rub: number;
+  forecast_rub: number;
+  investments_rub: number;
+  investments_rub_net: number;
+  forecast_investments_rub: number;
+  forecast_investments_rub_net: number;
+  fact_investments_rub: number;
+  fact_investments_rub_net: number;
+}
+
 export interface NetworkComment {
   id: number;
   network_id: number;
@@ -294,6 +320,8 @@ export interface NetworkPlanResponse {
   plans: NetworkPlan[];
   totals: NetworkPlanTotals[];
   year_totals: NetworkPlanTotals;
+  period_groups: NetworkPeriodGroup[];
+  period_group_totals: NetworkPeriodGroupTotals[];
 }
 
 export interface NetworkPlanSaveResponse {
@@ -303,6 +331,8 @@ export interface NetworkPlanSaveResponse {
   plans: NetworkPlan[];
   totals: NetworkPlanTotals[];
   year_totals: NetworkPlanTotals;
+  period_groups: NetworkPeriodGroup[];
+  period_group_totals: NetworkPeriodGroupTotals[];
 }
 
 export interface NetworkPlanPreviewResponse {
@@ -311,6 +341,8 @@ export interface NetworkPlanPreviewResponse {
   plans: NetworkPlan[];
   totals: NetworkPlanTotals[];
   year_totals: NetworkPlanTotals;
+  period_groups: NetworkPeriodGroup[];
+  period_group_totals: NetworkPeriodGroupTotals[];
 }
 
 export interface NetworkListResponse {
@@ -496,6 +528,13 @@ export interface NetworkPlanInput {
   month1_pct: number | null;
   month2_pct: number | null;
   month3_pct: number | null;
+  updated_at: string;
+}
+
+export interface NetworkPeriodGroupInput {
+  start_quarter: number;
+  end_quarter: number;
+  brand_as: string | null;
   updated_at: string;
 }
 

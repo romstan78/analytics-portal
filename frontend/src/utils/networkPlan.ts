@@ -4,7 +4,7 @@
 // (backend/services/network_service.go): во время ввода их возвращает
 // POST /api/networks/:id/plan/preview, после сохранения — сам ответ на запись.
 
-import type { NetworkPlan, NetworkPeriod } from '../types/network';
+import type { NetworkPeriod, NetworkPeriodGroupInput, NetworkPlan } from '../types/network';
 
 export const QUARTERS = [1, 2, 3, 4] as const;
 
@@ -12,6 +12,35 @@ export const round2 = (v: number): number => Math.round(v * 100) / 100;
 
 // Ключ строки плана: квартал + бренд. Пустой бренд — общий объём валового контракта.
 export const planKey = (quarter: number, brand: string | null): string => `${quarter}|${brand ?? ''}`;
+
+// Устойчивый ключ правила совместного зачёта. «*» — весь портфель сети.
+export const periodGroupKey = (group: Pick<NetworkPeriodGroupInput, 'start_quarter' | 'end_quarter' | 'brand_as'>): string =>
+  `${group.start_quarter}|${group.end_quarter}|${group.brand_as ?? '*'}`;
+
+// Клиентская подсказка повторяет серверное правило пересечений: портфельная
+// группа занимает диапазон для всех брендов, брендовые группы могут идти
+// параллельно только для разных брендов.
+export function periodGroupConflict(
+  groups: NetworkPeriodGroupInput[],
+  candidate: NetworkPeriodGroupInput,
+): string | null {
+  if (
+    candidate.start_quarter < 1 || candidate.end_quarter > 4
+    || candidate.start_quarter >= candidate.end_quarter
+  ) {
+    return 'Диапазон должен содержать минимум два смежных квартала.';
+  }
+
+  const conflict = groups.find((group) => {
+    const overlaps = group.start_quarter <= candidate.end_quarter
+      && candidate.start_quarter <= group.end_quarter;
+    if (!overlaps) return false;
+    return group.brand_as == null || candidate.brand_as == null || group.brand_as === candidate.brand_as;
+  });
+  if (!conflict) return null;
+  const scope = conflict.brand_as ?? 'весь портфель';
+  return `Пересекается с Q${conflict.start_quarter}–Q${conflict.end_quarter} · ${scope}.`;
+}
 
 // Разбор введённого числа: пробелы-разделители и запятая как в Excel.
 // Пустая строка — значение снято, а не ноль.

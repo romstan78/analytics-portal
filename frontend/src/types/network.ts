@@ -8,6 +8,7 @@ import type {
   AuditLogRow,
   NetworkContractPriceInput,
   NetworkForecastInput,
+  NetworkPeriodGroupInput,
   NetworkPlanInput,
 } from './api.generated';
 
@@ -16,6 +17,9 @@ export type {
   NetworkPeriod,
   NetworkPlan,
   NetworkPlanTotals,
+  NetworkPeriodGroup,
+  NetworkPeriodGroupTotals,
+  NetworkPeriodGroupInput,
   NetworkComment,
   NetworkPlanInput,
   NetworkPlanResponse,
@@ -67,6 +71,7 @@ export interface NetworkPlanSaveRequest {
     vat_rate: number;
   }>;
   plans: NetworkPlanInput[];
+  period_groups: NetworkPeriodGroupInput[];
 }
 
 export interface NetworkForecastSaveRequest {

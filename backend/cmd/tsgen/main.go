@@ -60,6 +60,8 @@ var exported = []entry{
 	{models.NetworkPeriod{}, ""},
 	{models.NetworkPlan{}, ""},
 	{models.NetworkPlanTotals{}, ""},
+	{models.NetworkPeriodGroup{}, ""},
+	{models.NetworkPeriodGroupTotals{}, ""},
 	{models.NetworkComment{}, ""},
 	{models.AuditLogRow{}, ""},
 	{models.NetworkPlanResponse{}, ""},
@@ -82,6 +84,7 @@ var exported = []entry{
 	{models.NetworkPricesResponse{}, ""},
 	{models.NetworkPricesSaveResponse{}, ""},
 	{repository.NetworkPlanInput{}, ""},
+	{repository.NetworkPeriodGroupInput{}, ""},
 	{repository.NetworkForecastInput{}, ""},
 	{repository.NetworkContractPriceInput{}, ""},
 

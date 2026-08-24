@@ -64,6 +64,7 @@ const FIELD_LABELS: Record<string, string> = {
   vat_rate: 'Ставка НДС',
   period: 'Квартал открыт',
   month_distribution: 'Распределение по месяцам',
+  period_group: 'Объединение кварталов',
   name: 'Название',
   network_type: 'Тип сети',
   kam: 'КАМ',

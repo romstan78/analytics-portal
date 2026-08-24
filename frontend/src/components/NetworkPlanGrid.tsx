@@ -21,7 +21,12 @@ import {
   Typography,
 } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
-import type { NetworkPlanResponse, NetworkPlanSaveRequest, NetworkPlanInput } from '../types/network';
+import type {
+  NetworkPeriodGroupInput,
+  NetworkPlanInput,
+  NetworkPlanResponse,
+  NetworkPlanSaveRequest,
+} from '../types/network';
 import { networkAPI } from '../api/networks';
 import {
   EMPTY_CELL,
@@ -38,12 +43,21 @@ import {
 import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
 import NetworkAllocationEditor from './NetworkAllocationEditor';
+import NetworkPeriodGroupsEditor from './NetworkPeriodGroupsEditor';
 import NetworkQuarterTable from './NetworkQuarterTable';
 import NetworkYearTable from './NetworkYearTable';
 import { YEAR_METRICS } from '../utils/networkPlanView';
 import type { YearMetric } from '../utils/networkPlanView';
 
 const DEFAULT_SETTINGS: QuarterSettings = { vat_included: true, vat_rate: 20 };
+
+const buildPeriodGroups = (data: NetworkPlanResponse): NetworkPeriodGroupInput[] =>
+  data.period_groups.map((group) => ({
+    start_quarter: group.start_quarter,
+    end_quarter: group.end_quarter,
+    brand_as: group.brand_as,
+    updated_at: group.updated_at,
+  }));
 
 // Пауза перед пересчётом на бэкенде: набранное число успевает дописаться,
 // а таблица не дёргает сервер на каждое нажатие.
@@ -83,6 +97,7 @@ export default function NetworkPlanGrid({
   const [draft, setDraft] = useState<Record<string, DraftCell>>(() => buildDraft(data.plans));
   const [settings, setSettings] = useState<Record<number, QuarterSettings>>(() => buildSettings(data.periods, DEFAULT_SETTINGS));
   const [brands, setBrands] = useState<string[]>(() => brandsFromPlans(data.plans));
+  const [periodGroups, setPeriodGroups] = useState<NetworkPeriodGroupInput[]>(() => buildPeriodGroups(data));
   const [dirty, setDirty] = useState(false);
   const [period, setPeriod] = useState<Period>('year');
   const [yearMetric, setYearMetric] = useState<YearMetric>('plan');
@@ -95,6 +110,7 @@ export default function NetworkPlanGrid({
     setDraft(buildDraft(data.plans));
     setSettings(buildSettings(data.periods, DEFAULT_SETTINGS));
     setBrands(brandsFromPlans(data.plans));
+    setPeriodGroups(buildPeriodGroups(data));
     setDirty(false);
   }
 
@@ -146,8 +162,9 @@ export default function NetworkPlanGrid({
         return { quarter, vat_included: setting.vat_included, vat_rate: setting.vat_rate };
       }),
       plans: rows,
+      period_groups: periodGroups,
     };
-  }, [data.plans, data.year, brands, draft, settings]);
+  }, [data.plans, data.year, brands, draft, periodGroups, settings]);
 
   const allocationValid = useMemo(() => Object.values(draft).every((cell) => {
     const sum = (parseNumberInput(cell.month1Pct) ?? 0)
@@ -222,6 +239,7 @@ export default function NetworkPlanGrid({
   // Строку убираем из таблицы и обнуляем значения — сохранение снимет их и в БД.
   const removeBrand = (brand: string) => {
     setBrands((prev) => prev.filter((b) => b !== brand));
+    setPeriodGroups((prev) => prev.filter((group) => group.brand_as !== brand));
     setDraft((prev) => {
       const next = { ...prev };
       QUARTERS.forEach((quarter) => {
@@ -253,6 +271,11 @@ export default function NetworkPlanGrid({
   };
 
   const handleSave = () => onSave(planRequest);
+
+  const changePeriodGroups = (next: NetworkPeriodGroupInput[]) => {
+    setPeriodGroups(next);
+    setDirty(true);
+  };
 
   const availableBrands = brandOptions.filter((b) => !brands.includes(b));
   const vatQuarters: number[] = period === 'year' ? [...QUARTERS] : [period];
@@ -351,6 +374,17 @@ export default function NetworkPlanGrid({
         </Box>
       </Paper>
 
+      {period === 'year' && (
+        <NetworkPeriodGroupsEditor
+          year={data.year}
+          brands={brands}
+          groups={periodGroups}
+          totals={view.period_group_totals}
+          canEdit={canEdit}
+          onChange={changePeriodGroups}
+        />
+      )}
+
       {period !== 'year' && (
         <NetworkAllocationEditor
           key={`${data.year}-${period}`}
@@ -410,7 +444,8 @@ export default function NetworkPlanGrid({
         Инвестиции по плану и по прогнозу считаются одним
         процентом, факт инвестиций приходит суммой и процентом не пересчитывается. Сумма
         с вычетом НДС по ставке квартала показывается в подсказке ячейки. Факт объёма
-        и факт инвестиций загружаются из отгрузок и в форме не редактируются.
+        и факт инвестиций загружаются из отгрузок и в форме не редактируются. Объединение
+        кварталов меняет только период оценки: исходные суммы каждого квартала остаются на месте.
       </Typography>
     </Box>
   );

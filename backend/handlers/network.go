@@ -94,6 +94,9 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Периоды цены одного SKU не должны пересекаться"})
 	case errors.Is(err, repository.ErrNetworkClosedMonth):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Закрытый месяц нельзя изменять"})
+	case errors.Is(err, repository.ErrNetworkPeriodGroupInvalid):
+		message := strings.TrimPrefix(err.Error(), repository.ErrNetworkPeriodGroupInvalid.Error()+": ")
+		c.JSON(http.StatusBadRequest, gin.H{"error": message})
 	default:
 		config.Logger.Error(logEvent, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки запроса"})
@@ -290,19 +293,27 @@ func GetNetworkPlan(c *gin.Context) {
 
 	plans = services.EnrichNetworkPlans(plans, periods)
 	totals := services.CalculateNetworkTotals(plans, periods)
+	periodGroups, err := repository.GetNetworkPeriodGroups(id, year)
+	if err != nil {
+		respondNetworkError(c, err, "network_period_groups_failed")
+		return
+	}
 	c.JSON(http.StatusOK, models.NetworkPlanResponse{
-		Network:    network,
-		Year:       year,
-		Periods:    periods,
-		Plans:      plans,
-		Totals:     totals,
-		YearTotals: services.SumYearTotals(totals),
+		Network:           network,
+		Year:              year,
+		Periods:           periods,
+		Plans:             plans,
+		Totals:            totals,
+		YearTotals:        services.SumYearTotals(totals),
+		PeriodGroups:      periodGroups,
+		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
 	})
 }
 
 type savePlanInput struct {
-	Year    int `json:"year"`
-	Periods []struct {
+	Year         int                                  `json:"year"`
+	PeriodGroups []repository.NetworkPeriodGroupInput `json:"period_groups"`
+	Periods      []struct {
 		Quarter     int     `json:"quarter"`
 		VATIncluded bool    `json:"vat_included"`
 		VATRate     float64 `json:"vat_rate"`
@@ -344,7 +355,8 @@ func SaveNetworkPlan(c *gin.Context) {
 
 	username, _ := currentUser(c)
 	diff, err := repository.SaveNetworkPlan(repository.SaveNetworkPlanInput{
-		NetworkID: id, Year: input.Year, Periods: periods, Plans: input.Plans, UserName: username,
+		NetworkID: id, Year: input.Year, Periods: periods, Plans: input.Plans,
+		PeriodGroups: input.PeriodGroups, UserName: username,
 	})
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_save_failed")
@@ -366,15 +378,22 @@ func SaveNetworkPlan(c *gin.Context) {
 	}
 	updatedPlans = services.EnrichNetworkPlans(updatedPlans, updatedPeriods)
 	totals := services.CalculateNetworkTotals(updatedPlans, updatedPeriods)
+	periodGroups, err := repository.GetNetworkPeriodGroups(id, input.Year)
+	if err != nil {
+		respondNetworkError(c, err, "network_period_groups_failed")
+		return
+	}
 
 	config.Logger.Info("network_plan_saved", "network_id", id, "year", input.Year, "user", username)
 	c.JSON(http.StatusOK, models.NetworkPlanSaveResponse{
-		Message:    "Saved",
-		Year:       input.Year,
-		Periods:    updatedPeriods,
-		Plans:      updatedPlans,
-		Totals:     totals,
-		YearTotals: services.SumYearTotals(totals),
+		Message:           "Saved",
+		Year:              input.Year,
+		Periods:           updatedPeriods,
+		Plans:             updatedPlans,
+		Totals:            totals,
+		YearTotals:        services.SumYearTotals(totals),
+		PeriodGroups:      periodGroups,
+		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, updatedPlans, totals),
 	})
 }
 
@@ -410,6 +429,7 @@ func PreviewNetworkPlan(c *gin.Context) {
 	}
 
 	draft := make([]services.NetworkPlanDraft, 0, len(input.Plans))
+	allowedBrands := make(map[string]bool)
 	for _, p := range input.Plans {
 		if p.Quarter < 1 || p.Quarter > 4 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный квартал"})
@@ -436,6 +456,22 @@ func PreviewNetworkPlan(c *gin.Context) {
 			Month2Pct:      month2Pct,
 			Month3Pct:      month3Pct,
 		})
+		if p.BrandAS != nil {
+			allowedBrands[strings.TrimSpace(*p.BrandAS)] = true
+		}
+	}
+	normalizedGroups, err := repository.NormalizeNetworkPeriodGroups(input.PeriodGroups, allowedBrands)
+	if err != nil {
+		respondNetworkError(c, err, "network_period_groups_preview_failed")
+		return
+	}
+	periodGroups := make([]models.NetworkPeriodGroup, 0, len(normalizedGroups))
+	for _, group := range normalizedGroups {
+		periodGroups = append(periodGroups, models.NetworkPeriodGroup{
+			NetworkID: id, Year: input.Year,
+			StartQuarter: group.StartQuarter, EndQuarter: group.EndQuarter,
+			BrandAS: group.BrandAS, UpdatedAt: group.UpdatedAt,
+		})
 	}
 
 	// Факт в черновик не входит: он приходит загрузкой, поэтому берётся
@@ -448,11 +484,13 @@ func PreviewNetworkPlan(c *gin.Context) {
 
 	plans, totals, yearTotals := services.PreviewNetworkPlans(draft, stored, periods)
 	c.JSON(http.StatusOK, models.NetworkPlanPreviewResponse{
-		Year:       input.Year,
-		Periods:    periods,
-		Plans:      plans,
-		Totals:     totals,
-		YearTotals: yearTotals,
+		Year:              input.Year,
+		Periods:           periods,
+		Plans:             plans,
+		Totals:            totals,
+		YearTotals:        yearTotals,
+		PeriodGroups:      periodGroups,
+		PeriodGroupTotals: services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
 	})
 }
 

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"testing"
 
 	"backend/models"
@@ -115,5 +116,59 @@ func TestPlanRowsToWriteDoesNotMutateIncoming(t *testing.T) {
 	}
 	if grown := incoming[:cap(incoming)]; grown[1].BrandAS != nil {
 		t.Fatalf("запись ушла в буфер вызывающего: %#v", grown[1])
+	}
+}
+
+func TestNormalizeNetworkPeriodGroupsAllowsDifferentBrands(t *testing.T) {
+	groups := []NetworkPeriodGroupInput{
+		{StartQuarter: 1, EndQuarter: 3, BrandAS: brandPtr("Бренд А")},
+		{StartQuarter: 2, EndQuarter: 4, BrandAS: brandPtr("Бренд Б")},
+	}
+	allowed := map[string]bool{"Бренд А": true, "Бренд Б": true}
+
+	got, err := NormalizeNetworkPeriodGroups(groups, allowed)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("разные бренды должны объединяться независимо: got=%#v err=%v", got, err)
+	}
+}
+
+func TestNormalizeNetworkPeriodGroupsRejectsPortfolioOverlap(t *testing.T) {
+	groups := []NetworkPeriodGroupInput{
+		{StartQuarter: 1, EndQuarter: 2},
+		{StartQuarter: 2, EndQuarter: 4, BrandAS: brandPtr("Бренд А")},
+	}
+
+	_, err := NormalizeNetworkPeriodGroups(groups, map[string]bool{"Бренд А": true})
+	if !errors.Is(err, ErrNetworkPeriodGroupInvalid) {
+		t.Fatalf("пересечение портфеля и бренда: err=%v, ожидалась ErrNetworkPeriodGroupInvalid", err)
+	}
+}
+
+func TestNormalizeNetworkPeriodGroupsRejectsSameBrandOverlap(t *testing.T) {
+	groups := []NetworkPeriodGroupInput{
+		{StartQuarter: 1, EndQuarter: 3, BrandAS: brandPtr("Бренд А")},
+		{StartQuarter: 3, EndQuarter: 4, BrandAS: brandPtr("Бренд А")},
+	}
+
+	_, err := NormalizeNetworkPeriodGroups(groups, map[string]bool{"Бренд А": true})
+	if !errors.Is(err, ErrNetworkPeriodGroupInvalid) {
+		t.Fatalf("два зачёта одного квартала бренда: err=%v, ожидалась ErrNetworkPeriodGroupInvalid", err)
+	}
+}
+
+func TestNormalizeNetworkPeriodGroupsRejectsSingleQuarterAndUnknownBrand(t *testing.T) {
+	_, rangeErr := NormalizeNetworkPeriodGroups(
+		[]NetworkPeriodGroupInput{{StartQuarter: 2, EndQuarter: 2}}, nil,
+	)
+	if !errors.Is(rangeErr, ErrNetworkPeriodGroupInvalid) {
+		t.Fatalf("один квартал: err=%v, ожидалась ErrNetworkPeriodGroupInvalid", rangeErr)
+	}
+
+	_, brandErr := NormalizeNetworkPeriodGroups(
+		[]NetworkPeriodGroupInput{{StartQuarter: 1, EndQuarter: 2, BrandAS: brandPtr("Нет в плане")}},
+		map[string]bool{"Бренд А": true},
+	)
+	if !errors.Is(brandErr, ErrNetworkPeriodGroupInvalid) {
+		t.Fatalf("неизвестный бренд: err=%v, ожидалась ErrNetworkPeriodGroupInvalid", brandErr)
 	}
 }

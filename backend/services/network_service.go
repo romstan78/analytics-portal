@@ -226,6 +226,67 @@ func SumYearTotals(totals []NetworkPlanTotals) NetworkPlanTotals {
 	return year
 }
 
+// CalculateNetworkPeriodGroupTotals считает совместный зачёт смежных
+// кварталов. Квартальные строки остаются источником истины: здесь они только
+// складываются по диапазону и области правила.
+//
+// Для всего портфеля план — обязательство по контракту, чтобы валовый пул не
+// потерял нераспределённый остаток. Для бренда берётся его собственный план.
+func CalculateNetworkPeriodGroupTotals(
+	groups []models.NetworkPeriodGroup,
+	plans []models.NetworkPlan,
+	totals []NetworkPlanTotals,
+) []models.NetworkPeriodGroupTotals {
+	result := make([]models.NetworkPeriodGroupTotals, 0, len(groups))
+
+	for _, group := range groups {
+		combined := models.NetworkPeriodGroupTotals{
+			StartQuarter: group.StartQuarter,
+			EndQuarter:   group.EndQuarter,
+			BrandAS:      group.BrandAS,
+		}
+
+		if group.BrandAS == nil {
+			for quarter := group.StartQuarter; quarter <= group.EndQuarter; quarter++ {
+				if quarter < 1 || quarter > len(totals) {
+					continue
+				}
+				t := totals[quarter-1]
+				combined.PlanRub = round2(combined.PlanRub + t.ContractPlanRub)
+				combined.FactRub = round2(combined.FactRub + t.FactRub)
+				combined.ForecastRub = round2(combined.ForecastRub + t.ForecastRub)
+				combined.InvestmentsRub = round2(combined.InvestmentsRub + t.InvestmentsRub)
+				combined.InvestmentsRubNet = round2(combined.InvestmentsRubNet + t.InvestmentsRubNet)
+				combined.ForecastInvestmentsRub = round2(combined.ForecastInvestmentsRub + t.ForecastInvestmentsRub)
+				combined.ForecastInvestmentsRubNet = round2(combined.ForecastInvestmentsRubNet + t.ForecastInvestmentsRubNet)
+				combined.FactInvestmentsRub = round2(combined.FactInvestmentsRub + t.FactInvestmentsRub)
+				combined.FactInvestmentsRubNet = round2(combined.FactInvestmentsRubNet + t.FactInvestmentsRubNet)
+			}
+			result = append(result, combined)
+			continue
+		}
+
+		for _, plan := range plans {
+			if plan.BrandAS == nil || *plan.BrandAS != *group.BrandAS ||
+				plan.Quarter < group.StartQuarter || plan.Quarter > group.EndQuarter {
+				continue
+			}
+			combined.PlanRub = round2(combined.PlanRub + models.ValFloat(plan.PlanRub))
+			combined.FactRub = round2(combined.FactRub + models.ValFloat(plan.FactRub))
+			combined.ForecastRub = round2(combined.ForecastRub + models.ValFloat(plan.ForecastRub))
+			combined.InvestmentsRub = round2(combined.InvestmentsRub + models.ValFloat(plan.InvestmentsRub))
+			combined.InvestmentsRubNet = round2(combined.InvestmentsRubNet + models.ValFloat(plan.InvestmentsNet))
+			combined.ForecastInvestmentsRub = round2(combined.ForecastInvestmentsRub + models.ValFloat(plan.ForecastInvestmentsRub))
+			combined.ForecastInvestmentsRubNet = round2(combined.ForecastInvestmentsRubNet + models.ValFloat(plan.ForecastInvestmentsNet))
+			combined.FactInvestmentsRub = round2(combined.FactInvestmentsRub + models.ValFloat(plan.FactInvestmentsRub))
+			combined.FactInvestmentsRubNet = round2(combined.FactInvestmentsRubNet + models.ValFloat(plan.FactInvestmentsNet))
+		}
+		result = append(result, combined)
+	}
+
+	return result
+}
+
 // NetworkPlanDraft — строка сетки, как её ввёл пользователь.
 // Факта здесь нет: он приходит загрузкой отгрузок и берётся из сохранённых строк.
 type NetworkPlanDraft struct {

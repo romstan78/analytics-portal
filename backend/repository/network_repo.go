@@ -21,6 +21,9 @@ var (
 	ErrNetworkExists = errors.New("network already exists")
 	// ErrNetworkConflict — данные изменены другим пользователем.
 	ErrNetworkConflict = errors.New("network data conflict")
+	// ErrNetworkPeriodGroupInvalid — некорректное или неоднозначное правило
+	// совместного зачёта кварталов.
+	ErrNetworkPeriodGroupInvalid = errors.New("invalid network period group")
 )
 
 // ─── Карточка сети ──────────────────────────────────────────────────────────
@@ -190,6 +193,110 @@ func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) err
 	return err
 }
 
+// ─── Объединение кварталов ──────────────────────────────────────────────────
+
+// NetworkPeriodGroupInput — правило из полного запроса вкладки «Планы».
+// UpdatedAt защищает сохранённое правило от незаметной параллельной правки.
+type NetworkPeriodGroupInput struct {
+	StartQuarter int     `json:"start_quarter"`
+	EndQuarter   int     `json:"end_quarter"`
+	BrandAS      *string `json:"brand_as"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
+func periodGroupKey(startQuarter, endQuarter int, brand *string) string {
+	scope := "*"
+	if brand != nil {
+		scope = *brand
+	}
+	return fmt.Sprintf("%d|%d|%s", startQuarter, endQuarter, scope)
+}
+
+func periodGroupsOverlap(a, b NetworkPeriodGroupInput) bool {
+	return a.StartQuarter <= b.EndQuarter && b.StartQuarter <= a.EndQuarter
+}
+
+// NormalizeNetworkPeriodGroups проверяет, что каждый диапазон содержит хотя
+// бы два смежных квартала и что правила не дают двум областям неоднозначный
+// зачёт. Портфельное правило конфликтует с любым пересекающимся правилом;
+// брендовые правила могут пересекаться только у разных брендов.
+func NormalizeNetworkPeriodGroups(
+	groups []NetworkPeriodGroupInput,
+	allowedBrands map[string]bool,
+) ([]NetworkPeriodGroupInput, error) {
+	normalized := make([]NetworkPeriodGroupInput, len(groups))
+	copy(normalized, groups)
+
+	seen := make(map[string]bool, len(normalized))
+	for i := range normalized {
+		group := &normalized[i]
+		if group.StartQuarter < 1 || group.StartQuarter > 4 ||
+			group.EndQuarter < 1 || group.EndQuarter > 4 ||
+			group.StartQuarter >= group.EndQuarter {
+			return nil, fmt.Errorf("%w: диапазон должен содержать от двух смежных кварталов в пределах года", ErrNetworkPeriodGroupInvalid)
+		}
+		if group.BrandAS != nil {
+			brand := strings.TrimSpace(*group.BrandAS)
+			if brand == "" || !allowedBrands[brand] {
+				return nil, fmt.Errorf("%w: бренд %q отсутствует в плане года", ErrNetworkPeriodGroupInvalid, brand)
+			}
+			group.BrandAS = &brand
+		}
+		key := periodGroupKey(group.StartQuarter, group.EndQuarter, group.BrandAS)
+		if seen[key] {
+			return nil, fmt.Errorf("%w: правило Q%d–Q%d задано дважды", ErrNetworkPeriodGroupInvalid, group.StartQuarter, group.EndQuarter)
+		}
+		seen[key] = true
+	}
+
+	for i := range normalized {
+		for j := i + 1; j < len(normalized); j++ {
+			left, right := normalized[i], normalized[j]
+			if !periodGroupsOverlap(left, right) {
+				continue
+			}
+			sameBrand := left.BrandAS != nil && right.BrandAS != nil && *left.BrandAS == *right.BrandAS
+			if left.BrandAS == nil || right.BrandAS == nil || sameBrand {
+				return nil, fmt.Errorf(
+					"%w: пересекающиеся правила Q%d–Q%d и Q%d–Q%d имеют общую область действия",
+					ErrNetworkPeriodGroupInvalid,
+					left.StartQuarter, left.EndQuarter, right.StartQuarter, right.EndQuarter,
+				)
+			}
+		}
+	}
+	return normalized, nil
+}
+
+// GetNetworkPeriodGroups возвращает правила совместного зачёта за год.
+func GetNetworkPeriodGroups(networkID, year int) ([]models.NetworkPeriodGroup, error) {
+	rows, err := config.DB.Query(
+		`SELECT id, network_id, [year], start_quarter, end_quarter, brand_as,
+			updated_by, CONVERT(NVARCHAR, updated_at, 121)
+		 FROM dbo.tbl_NetworkPeriodGroups
+		 WHERE network_id = ? AND [year] = ?
+		 ORDER BY start_quarter, end_quarter, CASE WHEN brand_as IS NULL THEN 0 ELSE 1 END, brand_as`,
+		networkID, year,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []models.NetworkPeriodGroup{}
+	for rows.Next() {
+		var group models.NetworkPeriodGroup
+		if err := rows.Scan(
+			&group.ID, &group.NetworkID, &group.Year, &group.StartQuarter,
+			&group.EndQuarter, &group.BrandAS, &group.UpdatedBy, &group.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, group)
+	}
+	return result, rows.Err()
+}
+
 // ─── Планы ──────────────────────────────────────────────────────────────────
 
 // GetNetworkPlans возвращает строки плана сети за год.
@@ -250,11 +357,12 @@ func planKey(quarter int, brand *string) string {
 
 // SaveNetworkPlanInput — полный пакет сохранения вкладки «Планы».
 type SaveNetworkPlanInput struct {
-	NetworkID int
-	Year      int
-	Periods   []models.NetworkPeriod
-	Plans     []NetworkPlanInput
-	UserName  string
+	NetworkID    int
+	Year         int
+	Periods      []models.NetworkPeriod
+	Plans        []NetworkPlanInput
+	PeriodGroups []NetworkPeriodGroupInput
+	UserName     string
 }
 
 // planChange — одно изменение для аудит-лога.
@@ -325,6 +433,37 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 	oldPeriodByQuarter := make(map[int]models.NetworkPeriod, len(oldPeriods))
 	for _, p := range oldPeriods {
 		oldPeriodByQuarter[p.Quarter] = p
+	}
+
+	// nil означает старого клиента, который про правила ещё не знает: такие
+	// запросы не должны молча удалить сохранённые объединения. Пустой массив,
+	// напротив, является явным удалением всех правил года.
+	var normalizedGroups []NetworkPeriodGroupInput
+	var existingGroups []models.NetworkPeriodGroup
+	if in.PeriodGroups != nil {
+		allowedBrands := make(map[string]bool)
+		for _, plan := range in.Plans {
+			if plan.BrandAS != nil {
+				allowedBrands[strings.TrimSpace(*plan.BrandAS)] = true
+			}
+		}
+		normalizedGroups, err = NormalizeNetworkPeriodGroups(in.PeriodGroups, allowedBrands)
+		if err != nil {
+			return "", err
+		}
+		existingGroups, err = GetNetworkPeriodGroups(in.NetworkID, in.Year)
+		if err != nil {
+			return "", err
+		}
+		existingVersions := make(map[string]bool, len(existingGroups))
+		for _, group := range existingGroups {
+			existingVersions[group.UpdatedAt] = true
+		}
+		for _, group := range normalizedGroups {
+			if group.UpdatedAt != "" && !existingVersions[group.UpdatedAt] {
+				return "", ErrNetworkConflict
+			}
+		}
 	}
 
 	writePlans, removePlans := planRowsToWrite(in.Plans, existing)
@@ -477,6 +616,60 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		})
 		if _, err := tx.Exec(`DELETE FROM dbo.tbl_NetworkPlans WHERE id = ?`, old.ID); err != nil {
 			return "", err
+		}
+	}
+
+	if in.PeriodGroups != nil {
+		existingByKey := make(map[string]models.NetworkPeriodGroup, len(existingGroups))
+		incomingByKey := make(map[string]NetworkPeriodGroupInput, len(normalizedGroups))
+		for _, group := range existingGroups {
+			existingByKey[periodGroupKey(group.StartQuarter, group.EndQuarter, group.BrandAS)] = group
+		}
+		for _, group := range normalizedGroups {
+			incomingByKey[periodGroupKey(group.StartQuarter, group.EndQuarter, group.BrandAS)] = group
+		}
+
+		for key, old := range existingByKey {
+			incoming, kept := incomingByKey[key]
+			if kept {
+				if incoming.UpdatedAt != "" && incoming.UpdatedAt != old.UpdatedAt {
+					return "", ErrNetworkConflict
+				}
+				continue
+			}
+			brand := ""
+			if old.BrandAS != nil {
+				brand = *old.BrandAS
+			}
+			changes = append(changes, planChange{
+				Quarter: old.StartQuarter, Brand: brand, Field: "period_group",
+				Old: fmt.Sprintf("Q%d–Q%d", old.StartQuarter, old.EndQuarter), New: nil,
+			})
+			if _, err := tx.Exec(`DELETE FROM dbo.tbl_NetworkPeriodGroups WHERE id = ?`, old.ID); err != nil {
+				return "", err
+			}
+		}
+
+		for key, group := range incomingByKey {
+			if _, exists := existingByKey[key]; exists {
+				continue
+			}
+			brand := ""
+			if group.BrandAS != nil {
+				brand = *group.BrandAS
+			}
+			changes = append(changes, planChange{
+				Quarter: group.StartQuarter, Brand: brand, Field: "period_group",
+				Old: nil, New: fmt.Sprintf("Q%d–Q%d", group.StartQuarter, group.EndQuarter),
+			})
+			if _, err := tx.Exec(
+				`INSERT INTO dbo.tbl_NetworkPeriodGroups
+					(network_id, [year], start_quarter, end_quarter, brand_as, updated_by)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				in.NetworkID, in.Year, group.StartQuarter, group.EndQuarter, group.BrandAS, in.UserName,
+			); err != nil {
+				return "", err
+			}
 		}
 	}
 

@@ -8,10 +8,13 @@ import {
   formatRubShort,
   formatSignedPct,
   parseNumberInput,
+  periodGroupConflict,
+  periodGroupKey,
   planKey,
   shiftGrossPool,
 } from './networkPlan';
 import type { NetworkPlan } from '../types/network';
+import type { NetworkPeriodGroupInput } from '../types/network';
 
 // Расчёт НДС, инвестиций и итогов проверяется в backend/services:
 // на фронтенде их больше нет, поэтому здесь только разбор ввода и показ.
@@ -140,5 +143,35 @@ describe('shiftGrossPool', () => {
   it('признак валового объёма самой строки пула не трогает', () => {
     const pool = shiftGrossPool(cell({ planRub: '1 000', inGross: false }), cell({ planRub: '100' }), true);
     expect(pool.inGross).toBe(false);
+  });
+});
+
+describe('period groups', () => {
+  const group = (patch: Partial<NetworkPeriodGroupInput>): NetworkPeriodGroupInput => ({
+    start_quarter: 1,
+    end_quarter: 2,
+    brand_as: null,
+    updated_at: '',
+    ...patch,
+  });
+
+  it('строит отдельные ключи для портфеля и бренда', () => {
+    expect(periodGroupKey(group({}))).toBe('1|2|*');
+    expect(periodGroupKey(group({ brand_as: 'Альфа' }))).toBe('1|2|Альфа');
+  });
+
+  it('разрешает пересекающиеся периоды разным брендам', () => {
+    const current = [group({ start_quarter: 1, end_quarter: 3, brand_as: 'Альфа' })];
+    expect(periodGroupConflict(current, group({ start_quarter: 2, end_quarter: 4, brand_as: 'Бета' }))).toBeNull();
+  });
+
+  it('не разрешает пересечение портфеля с брендом', () => {
+    const current = [group({ start_quarter: 1, end_quarter: 2 })];
+    expect(periodGroupConflict(current, group({ start_quarter: 2, end_quarter: 4, brand_as: 'Альфа' }))).toContain('Пересекается');
+  });
+
+  it('не разрешает одному бренду участвовать в двух пересекающихся группах', () => {
+    const current = [group({ start_quarter: 1, end_quarter: 3, brand_as: 'Альфа' })];
+    expect(periodGroupConflict(current, group({ start_quarter: 3, end_quarter: 4, brand_as: 'Альфа' }))).toContain('Пересекается');
   });
 });
