@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"backend/models"
@@ -170,5 +171,69 @@ func TestNormalizeNetworkPeriodGroupsRejectsSingleQuarterAndUnknownBrand(t *test
 	)
 	if !errors.Is(brandErr, ErrNetworkPeriodGroupInvalid) {
 		t.Fatalf("неизвестный бренд: err=%v, ожидалась ErrNetworkPeriodGroupInvalid", brandErr)
+	}
+}
+
+func TestGlobalOlapSSSKUPricesQueryDoesNotDependOnNetwork(t *testing.T) {
+	if !strings.Contains(globalOlapSSSKUPricesQuery, "n.segment = N'OLAP SS'") {
+		t.Fatal("запрос цены должен быть ограничен сегментом OLAP SS")
+	}
+	if strings.Contains(globalOlapSSSKUPricesQuery, "networkName") {
+		t.Fatal("название сети не должно участвовать в расчёте цены SKU")
+	}
+	if !strings.Contains(globalOlapSSSKUPricesQuery, "n.un_rub = N'руб'") ||
+		!strings.Contains(globalOlapSSSKUPricesQuery, "n.un_rub = N'уп'") {
+		t.Fatal("цена должна рассчитываться как отношение рублей к упаковкам")
+	}
+}
+
+func TestMergeNetworkContractPricesAddsSameSKUDefaultForAnyNetwork(t *testing.T) {
+	defaults := []olapSKUPrice{{
+		BrandAS: "Бренд А", SKU: "SKU-1", Price: 123.45, Year: 2026, Month: 7,
+	}}
+
+	got := mergeNetworkContractPrices(42, 2027, nil, defaults, nil)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	row := got[0]
+	if row.NetworkID != 42 || row.ContractPrice != 123.45 || row.ValidFrom != "2027-01-01" || row.ValidTo != "2027-12-31" {
+		t.Fatalf("default row = %#v", row)
+	}
+	if row.SourceType != "olap_seed" || row.SourceYear == nil || *row.SourceYear != 2026 || row.SourceMonth == nil || *row.SourceMonth != 7 {
+		t.Fatalf("source = %#v", row)
+	}
+}
+
+func TestMergeNetworkContractPricesRefreshesOnlyUnconfirmedSeed(t *testing.T) {
+	sourceYear, sourceMonth := 2026, 3
+	persisted := []models.NetworkContractPrice{
+		{
+			ID: 1, NetworkID: 8, BrandAS: "Старый бренд", SKU: "SKU-1", ContractPrice: 90,
+			ValidFrom: "2026-01-01", ValidTo: "2026-12-31", SourceType: "olap_seed",
+			SourceYear: &sourceYear, SourceMonth: &sourceMonth,
+		},
+		{
+			ID: 2, NetworkID: 8, BrandAS: "Бренд Б", SKU: "SKU-2", ContractPrice: 77,
+			ValidFrom: "2026-01-01", ValidTo: "2026-12-31", SourceType: "manual", IsConfirmed: true,
+		},
+	}
+	defaults := []olapSKUPrice{
+		{BrandAS: "Бренд А", SKU: "SKU-1", Price: 120, Year: 2026, Month: 7},
+		{BrandAS: "Бренд Б", SKU: "SKU-2", Price: 130, Year: 2026, Month: 7},
+	}
+
+	got := mergeNetworkContractPrices(8, 2026, persisted, defaults, defaults)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 without duplicate defaults", len(got))
+	}
+	if got[0].SKU != "SKU-1" || got[0].ContractPrice != 120 || got[0].BrandAS != "Бренд А" || got[0].SourceMonth == nil || *got[0].SourceMonth != 7 {
+		t.Fatalf("unconfirmed seed was not refreshed: %#v", got[0])
+	}
+	if got[1].SKU != "SKU-2" || got[1].ContractPrice != 77 {
+		t.Fatalf("manual price was overwritten: %#v", got[1])
+	}
+	if got[1].OlapPrice == nil || *got[1].OlapPrice != 130 {
+		t.Fatalf("OLAP SS comparison missing: %#v", got[1])
 	}
 }

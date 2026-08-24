@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -284,35 +286,163 @@ type SaveNetworkPricesInput struct {
 	UserName  string
 }
 
-// GetNetworkContractPrices возвращает цены, пересекающие выбранный год, и
-// последнюю OLAP-цену того же года по той же сети и SKU.
+type olapSKUPrice struct {
+	BrandAS string
+	SKU     string
+	Price   float64
+	Year    int
+	Month   int
+}
+
+// Цена OLAP SS едина для SKU: название сети намеренно не участвует ни в
+// фильтрации, ни в группировке. Месяц выбирается один для всего среза года,
+// после чего цена считается как SUM(руб) / SUM(уп) по всем сетям.
+const globalOlapSSSKUPricesQuery = `WITH latest_month AS (
+	SELECT TOP 1 n.[month]
+	FROM dbo.tbl_EcomSalesNormalized n
+	WHERE n.[year] = ? AND n.segment = N'OLAP SS'
+	GROUP BY n.[month]
+	HAVING SUM(CASE WHEN n.un_rub = N'руб' THEN n.metric_value ELSE 0 END) > 0
+	   AND SUM(CASE WHEN n.un_rub = N'уп' THEN n.metric_value ELSE 0 END) > 0
+	ORDER BY n.[month] DESC
+)
+SELECT
+	COALESCE(
+		MAX(NULLIF(LTRIM(RTRIM(sm.brand_as)), N'')),
+		MAX(NULLIF(LTRIM(RTRIM(n.brandName)), N'')),
+		N'Без бренда'
+	) AS brand_as,
+	LTRIM(RTRIM(n.productName)) AS sku,
+	SUM(CASE WHEN n.un_rub = N'руб' THEN n.metric_value ELSE 0 END)
+		/ NULLIF(SUM(CASE WHEN n.un_rub = N'уп' THEN n.metric_value ELSE 0 END), 0) AS price,
+	n.[year], n.[month]
+FROM dbo.tbl_EcomSalesNormalized n
+JOIN latest_month lm ON lm.[month] = n.[month]
+LEFT JOIN dbo.tbl_SKUMapping sm ON LTRIM(RTRIM(sm.sku)) = LTRIM(RTRIM(n.productName))
+WHERE n.[year] = ?
+  AND n.segment = N'OLAP SS'
+  AND n.productName IS NOT NULL
+  AND LTRIM(RTRIM(n.productName)) <> N''
+GROUP BY LTRIM(RTRIM(n.productName)), n.[year], n.[month]
+HAVING SUM(CASE WHEN n.un_rub = N'руб' THEN n.metric_value ELSE 0 END) > 0
+   AND SUM(CASE WHEN n.un_rub = N'уп' THEN n.metric_value ELSE 0 END) > 0
+ORDER BY brand_as, sku`
+
+func getGlobalOlapSSSKUPrices(year int) ([]olapSKUPrice, error) {
+	rows, err := config.DB.Query(globalOlapSSSKUPricesQuery, year, year)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []olapSKUPrice{}
+	for rows.Next() {
+		var row olapSKUPrice
+		if err := rows.Scan(&row.BrandAS, &row.SKU, &row.Price, &row.Year, &row.Month); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func contractPriceSKUKey(sku string) string {
+	return strings.ToLower(strings.TrimSpace(sku))
+}
+
+func intPointer(value int) *int {
+	return &value
+}
+
+// mergeNetworkContractPrices добавляет отсутствующие строки из OLAP SS и
+// освежает только неподтверждённые автозаполненные цены. Ручные и
+// подтверждённые значения всегда имеют приоритет.
+func mergeNetworkContractPrices(
+	networkID, year int,
+	persisted []models.NetworkContractPrice,
+	defaults, comparisons []olapSKUPrice,
+) []models.NetworkContractPrice {
+	defaultBySKU := make(map[string]olapSKUPrice, len(defaults))
+	for _, row := range defaults {
+		defaultBySKU[contractPriceSKUKey(row.SKU)] = row
+	}
+	comparisonBySKU := make(map[string]olapSKUPrice, len(comparisons))
+	for _, row := range comparisons {
+		comparisonBySKU[contractPriceSKUKey(row.SKU)] = row
+	}
+
+	result := make([]models.NetworkContractPrice, 0, len(persisted)+len(defaults))
+	persistedSKU := make(map[string]bool, len(persisted))
+	for _, row := range persisted {
+		key := contractPriceSKUKey(row.SKU)
+		persistedSKU[key] = true
+
+		if source, ok := defaultBySKU[key]; ok && row.SourceType == "olap_seed" && !row.IsConfirmed {
+			row.BrandAS = source.BrandAS
+			row.ContractPrice = source.Price
+			row.SourceYear = intPointer(source.Year)
+			row.SourceMonth = intPointer(source.Month)
+		}
+		if comparison, ok := comparisonBySKU[key]; ok {
+			row.OlapPrice = &comparison.Price
+			row.OlapYear = intPointer(comparison.Year)
+			row.OlapMonth = intPointer(comparison.Month)
+		}
+		result = append(result, row)
+	}
+
+	for _, source := range defaults {
+		key := contractPriceSKUKey(source.SKU)
+		if persistedSKU[key] {
+			continue
+		}
+		row := models.NetworkContractPrice{
+			NetworkID:     networkID,
+			BrandAS:       source.BrandAS,
+			SKU:           source.SKU,
+			ContractPrice: source.Price,
+			ValidFrom:     fmt.Sprintf("%04d-01-01", year),
+			ValidTo:       fmt.Sprintf("%04d-12-31", year),
+			SourceType:    "olap_seed",
+			SourceYear:    intPointer(source.Year),
+			SourceMonth:   intPointer(source.Month),
+		}
+		if comparison, ok := comparisonBySKU[key]; ok {
+			row.OlapPrice = &comparison.Price
+			row.OlapYear = intPointer(comparison.Year)
+			row.OlapMonth = intPointer(comparison.Month)
+		}
+		result = append(result, row)
+	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].BrandAS != result[j].BrandAS {
+			return result[i].BrandAS < result[j].BrandAS
+		}
+		if result[i].SKU != result[j].SKU {
+			return result[i].SKU < result[j].SKU
+		}
+		return result[i].ValidFrom < result[j].ValidFrom
+	})
+	return result
+}
+
+// GetNetworkContractPrices возвращает цены, пересекающие выбранный год.
+// Для отсутствующих SKU подставляется общая для всех сетей цена OLAP SS из
+// последнего доступного месяца 2026 года. OLAP-сравнение также не зависит от
+// сети и берётся из последнего доступного месяца выбранного года.
 func GetNetworkContractPrices(networkID, year int) ([]models.NetworkContractPrice, error) {
 	start := fmt.Sprintf("%04d-01-01", year)
 	end := fmt.Sprintf("%04d-12-31", year)
 	rows, err := config.DB.Query(
 		`SELECT p.id, p.network_id, p.brand_as, p.sku, p.contract_price,
 			CONVERT(NVARCHAR(10), p.valid_from, 23), CONVERT(NVARCHAR(10), p.valid_to, 23),
-			p.source_type, p.source_year, p.source_month, p.is_confirmed,
-			olap.price, olap.[year], olap.[month], p.updated_by,
+			p.source_type, p.source_year, p.source_month, p.is_confirmed, p.updated_by,
 			CONVERT(NVARCHAR, p.updated_at, 121)
 		 FROM dbo.tbl_NetworkContractPrices p
-		 JOIN dbo.tbl_Networks n ON n.id = p.network_id
-		 OUTER APPLY (
-			SELECT TOP 1
-				SUM(s.rub) / NULLIF(SUM(s.qty), 0) AS price,
-				s.[year], s.[month]
-			FROM dbo.tbl_EcomSalesConsolidated s
-			WHERE s.[year] = ?
-			  AND LTRIM(RTRIM(s.networkName)) = LTRIM(RTRIM(n.name))
-			  AND LTRIM(RTRIM(s.productName)) = LTRIM(RTRIM(p.sku))
-			  AND s.rub IS NOT NULL AND s.qty IS NOT NULL
-			GROUP BY s.[year], s.[month]
-			HAVING SUM(s.qty) > 0
-			ORDER BY s.[month] DESC
-		 ) olap
 		 WHERE p.network_id = ? AND p.valid_from <= ? AND p.valid_to >= ?
 		 ORDER BY p.brand_as, p.sku, p.valid_from`,
-		year, networkID, end, start,
+		networkID, end, start,
 	)
 	if err != nil {
 		return nil, err
@@ -325,14 +455,31 @@ func GetNetworkContractPrices(networkID, year int) ([]models.NetworkContractPric
 		if err := rows.Scan(
 			&row.ID, &row.NetworkID, &row.BrandAS, &row.SKU, &row.ContractPrice,
 			&row.ValidFrom, &row.ValidTo, &row.SourceType, &row.SourceYear, &row.SourceMonth,
-			&row.IsConfirmed, &row.OlapPrice, &row.OlapYear, &row.OlapMonth,
-			&row.UpdatedBy, &row.UpdatedAt,
+			&row.IsConfirmed, &row.UpdatedBy, &row.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	defaults, err := getGlobalOlapSSSKUPrices(2026)
+	if err != nil {
+		return nil, err
+	}
+	comparisons := defaults
+	if year != 2026 {
+		comparisons, err = getGlobalOlapSSSKUPrices(year)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return mergeNetworkContractPrices(networkID, year, result, defaults, comparisons), nil
 }
 
 func parsePriceDate(value string) (time.Time, error) {
@@ -374,12 +521,15 @@ func SaveNetworkContractPrices(in SaveNetworkPricesInput) error {
 		}
 
 		if row.ID > 0 {
-			var updatedAt string
+			var updatedAt, sourceType string
+			var existingPrice float64
+			var sourceYear, sourceMonth sql.NullInt64
 			if err := tx.QueryRow(
-				`SELECT CONVERT(NVARCHAR, updated_at, 121)
+				`SELECT CONVERT(NVARCHAR, updated_at, 121), contract_price,
+				        source_type, source_year, source_month
 				 FROM dbo.tbl_NetworkContractPrices WHERE id = ? AND network_id = ?`,
 				row.ID, in.NetworkID,
-			).Scan(&updatedAt); err != nil {
+			).Scan(&updatedAt, &existingPrice, &sourceType, &sourceYear, &sourceMonth); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return ErrNetworkNotFound
 				}
@@ -388,13 +538,22 @@ func SaveNetworkContractPrices(in SaveNetworkPricesInput) error {
 			if row.UpdatedAt != "" && row.UpdatedAt != updatedAt {
 				return ErrNetworkConflict
 			}
+			// Явно изменённая КАМ цена больше не является автозначением OLAP:
+			// иначе следующий GET снова подставит поверх неё свежий default.
+			if math.Abs(existingPrice-row.ContractPrice) > 0.00005 {
+				sourceType = "manual"
+				sourceYear = sql.NullInt64{}
+				sourceMonth = sql.NullInt64{}
+			}
 			if _, err := tx.Exec(
 				`UPDATE dbo.tbl_NetworkContractPrices
 				 SET brand_as = ?, sku = ?, contract_price = ?, valid_from = ?, valid_to = ?,
+				     source_type = ?, source_year = ?, source_month = ?,
 				     is_confirmed = ?, updated_by = ?, updated_at = GETDATE()
 				 WHERE id = ? AND network_id = ?`,
 				row.BrandAS, row.SKU, row.ContractPrice, row.ValidFrom, row.ValidTo,
-				row.IsConfirmed, in.UserName, row.ID, in.NetworkID,
+				sourceType, sourceYear, sourceMonth, row.IsConfirmed, in.UserName,
+				row.ID, in.NetworkID,
 			); err != nil {
 				return err
 			}
