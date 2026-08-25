@@ -139,4 +139,35 @@ func TestBuildNetworkForecastConvertsSKUUnitsByEffectiveContractPrice(t *testing
 	if brandRow == nil || brandRow.EACRub == nil || *brandRow.EACRub != 25 {
 		t.Fatalf("брендовый EAC = %#v, ожидалась сумма SKU 25", brandRow)
 	}
+	if brandRow.EACUnits == nil || *brandRow.EACUnits != 10 || response.Totals.EACUnits != 10 {
+		t.Fatalf("EAC в упаковках = %#v, итого %.2f; ожидалось 10", brandRow.EACUnits, response.Totals.EACUnits)
+	}
+}
+
+func TestBuildNetworkForecastCompletesMissingOfficialMetricFromSKU(t *testing.T) {
+	brand, sku := "Альфа", "SKU-1"
+	response := BuildNetworkForecast(
+		models.Network{}, 2026, 1,
+		[]models.NetworkPlan{{
+			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(100),
+			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
+		}}, nil, nil,
+		[]models.NetworkForecastLine{
+			{Year: 2026, Month: 1, BrandAS: brand, ForecastUnits: models.PtrFloat(10)},
+			{Year: 2026, Month: 1, BrandAS: brand, SKU: &sku, ForecastUnits: models.PtrFloat(10)},
+		}, nil,
+		[]models.NetworkContractPrice{{
+			BrandAS: brand, SKU: sku, ContractPrice: 2.5,
+			ValidFrom: "2026-01-01", ValidTo: "2026-12-31",
+		}},
+		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+	)
+
+	brandRow := forecastRow(response, brand, 1, nil)
+	if brandRow == nil || brandRow.ForecastRub == nil || *brandRow.ForecastRub != 25 {
+		t.Fatalf("рублёвый прогноз бренда = %#v, ожидалось дополнение из SKU до 25", brandRow)
+	}
+	if brandRow.EACUnits == nil || *brandRow.EACUnits != 10 {
+		t.Fatalf("EAC бренда в упаковках = %#v, ожидалось 10", brandRow.EACUnits)
+	}
 }

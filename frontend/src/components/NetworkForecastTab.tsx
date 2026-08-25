@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type ChangeEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -6,9 +6,17 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Drawer,
+  FormControl,
+  FormControlLabel,
   IconButton,
   Paper,
+  Radio,
+  RadioGroup,
   Table,
   TableBody,
   TableCell,
@@ -22,13 +30,18 @@ import {
 } from '@mui/material';
 import {
   Close as CloseIcon,
+  DeleteSweepOutlined as ClearIcon,
   Inventory2Outlined as SKUIcon,
   Save as SaveIcon,
+  UploadFileOutlined as ImportIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
 import type {
   NetworkForecastInput,
+  NetworkForecastClearScope,
+  NetworkForecastImportPreview,
   NetworkForecastMonth,
+  NetworkForecastResponse,
   NetworkForecastSaveRequest,
 } from '../types/network';
 import {
@@ -108,6 +121,11 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   const [unit, setUnit] = useState<Unit>('rub');
   const [draftEdits, setDraftEdits] = useState<Record<string, ForecastDraft> | null>(null);
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<NetworkForecastImportPreview | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [clearMonth, setClearMonth] = useState<number | null>(null);
+  const [clearScope, setClearScope] = useState<NetworkForecastClearScope>('all');
   const queryClient = useQueryClient();
 
   const query = useQuery({
@@ -120,13 +138,45 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   const dirty = draftEdits != null
     && Object.keys(draftEdits).some((key) => !sameDraft(draftEdits[key], baseDraft[key]));
 
+  const applyForecastData = (data: NetworkForecastResponse) => {
+    queryClient.setQueryData(['network-forecast', networkId, year, quarter], data);
+    void queryClient.invalidateQueries({ queryKey: ['networkPlan', networkId, year] });
+    void queryClient.invalidateQueries({ queryKey: ['networkAudit', networkId] });
+    setDraftEdits(null);
+  };
+
   const saveMutation = useMutation({
     mutationFn: (request: NetworkForecastSaveRequest) => networkAPI.saveForecast(networkId, request),
     onSuccess: (response) => {
-      queryClient.setQueryData(['network-forecast', networkId, year, quarter], response.data);
-      void queryClient.invalidateQueries({ queryKey: ['networkPlan', networkId, year] });
-      void queryClient.invalidateQueries({ queryKey: ['networkAudit', networkId] });
-      setDraftEdits(null);
+      applyForecastData(response.data);
+    },
+  });
+
+  const importPreviewMutation = useMutation({
+    mutationFn: (file: File) => networkAPI.previewForecastImport(networkId, year, quarter, file),
+    onSuccess: (preview, file) => {
+      setImportFile(file);
+      setImportPreview(preview);
+      setImportDialogOpen(true);
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: (file: File) => networkAPI.importForecast(networkId, year, quarter, file),
+    onSuccess: (response) => {
+      applyForecastData(response.data);
+      setImportDialogOpen(false);
+      setImportFile(null);
+      setImportPreview(null);
+    },
+  });
+
+  const clearMutation = useMutation({
+    mutationFn: (request: { month: number; scope: NetworkForecastClearScope }) =>
+      networkAPI.clearForecastMonth(networkId, { year, ...request }),
+    onSuccess: (response) => {
+      applyForecastData(response.data);
+      setClearMonth(null);
     },
   });
 
@@ -170,6 +220,15 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
     saveMutation.mutate({ year, quarter, lines });
   };
 
+  const selectImportFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImportFile(file);
+    setImportPreview(null);
+    importPreviewMutation.mutate(file);
+  };
+
   if (query.isLoading) return <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box>;
   if (query.isError || !query.data) return <Alert severity="error">Не удалось загрузить прогноз.</Alert>;
 
@@ -178,6 +237,12 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   const investPct = totals.plan_investments_rub > 0
     ? (totals.investment_variance_rub / totals.plan_investments_rub) * 100
     : null;
+  const clearAffectedRows = clearMonth == null ? 0 : query.data.months.filter((row) => {
+    if (row.month !== clearMonth) return false;
+    if (clearScope === 'rub') return row.forecast_rub != null;
+    if (clearScope === 'units') return row.forecast_units != null;
+    return row.forecast_rub != null || row.forecast_units != null;
+  }).length;
 
   const renderMonthCell = (row: NetworkForecastMonth | undefined) => {
     if (!row) return <Typography color="text.disabled">—</Typography>;
@@ -297,6 +362,18 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
         <Box sx={{ flex: 1 }} />
         {dirty && <Typography variant="caption" color="warning.main">Есть несохранённые изменения</Typography>}
         {canEdit && (
+          <Button
+            component="label"
+            variant="outlined"
+            size="small"
+            startIcon={<ImportIcon />}
+            disabled={dirty || importPreviewMutation.isPending || importMutation.isPending}
+          >
+            {importPreviewMutation.isPending ? 'Проверка…' : 'Импорт из Excel'}
+            <input hidden type="file" accept=".xlsx,.xlsm" onChange={selectImportFile} />
+          </Button>
+        )}
+        {canEdit && (
           <Button variant="contained" size="small" startIcon={<SaveIcon />} disabled={!dirty || saveMutation.isPending} onClick={save}>
             Сохранить прогноз
           </Button>
@@ -304,23 +381,31 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
       </Box>
 
       {saveMutation.isError && <Alert severity="error">{(saveMutation.error as Error).message}</Alert>}
+      {importPreviewMutation.isError && <Alert severity="error">{(importPreviewMutation.error as Error).message}</Alert>}
 
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 1 }}>
-        <SummaryTile label="План квартала" value={`${formatRubShort(totals.plan_rub)} ₽`} hint="утверждённое обязательство" />
-        <SummaryTile label="Факт на дату" value={`${formatRubShort(totals.fact_rub)} ₽`} hint="загруженные месяцы и MTD" />
-        <SummaryTile
-          label="Прогноз EAC"
-          value={`${formatRubShort(totals.eac_rub)} ₽`}
-          hint={`${completion} плана · ${formatRubShort(totals.gap_rub)} ₽`}
-          warning={totals.gap_rub < 0}
-        />
-        <SummaryTile
-          label="Инвестиции EAC"
-          value={`${formatRubShort(totals.eac_investments_rub)} ₽`}
-          hint={investPct == null ? 'нет бюджета' : `${investPct >= 0 ? '+' : ''}${investPct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% к бюджету · промо ${totals.promo_count}`}
-          warning={totals.investment_variance_rub > 0}
-        />
-      </Box>
+      {measure === 'volume' && unit === 'units' ? (
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 1 }}>
+          <SummaryTile label="Факт на дату" value={`${formatRub(totals.fact_units)} уп.`} hint="загруженные месяцы и MTD" />
+          <SummaryTile label="Прогноз EAC" value={`${formatRub(totals.eac_units)} уп.`} hint="внесённый прогноз или системная рекомендация" />
+        </Box>
+      ) : (
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 1 }}>
+          <SummaryTile label="План квартала" value={`${formatRubShort(totals.plan_rub)} ₽`} hint="утверждённое обязательство" />
+          <SummaryTile label="Факт на дату" value={`${formatRubShort(totals.fact_rub)} ₽`} hint="загруженные месяцы и MTD" />
+          <SummaryTile
+            label="Прогноз EAC"
+            value={`${formatRubShort(totals.eac_rub)} ₽`}
+            hint={`${completion} плана · ${formatRubShort(totals.gap_rub)} ₽`}
+            warning={totals.gap_rub < 0}
+          />
+          <SummaryTile
+            label="Инвестиции EAC"
+            value={`${formatRubShort(totals.eac_investments_rub)} ₽`}
+            hint={investPct == null ? 'нет бюджета' : `${investPct >= 0 ? '+' : ''}${investPct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% к бюджету · промо ${totals.promo_count}`}
+            warning={totals.investment_variance_rub > 0}
+          />
+        </Box>
+      )}
 
       <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
         <Table size="small" sx={{ minWidth: 850 }}>
@@ -329,7 +414,30 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
               <TableCell>Бренд</TableCell>
               {monthNumbers.map((month) => {
                 const sample = brandRows.find((row) => row.month === month);
-                return <TableCell key={month}>{monthLabel(month, sample)}</TableCell>;
+                return (
+                  <TableCell key={month}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{monthLabel(month, sample)}</Typography>
+                      {canEdit && measure === 'volume' && !sample?.is_closed && (
+                        <Tooltip title={dirty ? 'Сначала сохраните ручные изменения' : `Очистить прогноз за ${MONTHS[month - 1].toLowerCase()}`}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={dirty}
+                              aria-label={`Очистить прогноз за ${MONTHS[month - 1]}`}
+                              onClick={() => {
+                                setClearScope('all');
+                                setClearMonth(month);
+                              }}
+                            >
+                              <ClearIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </TableCell>
+                );
               })}
               <TableCell align="right">EAC Q{quarter}</TableCell>
               <TableCell align="right">К плану</TableCell>
@@ -348,19 +456,25 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                 <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
                   {measure === 'investments'
                     ? `${formatRubShort(brandTotal.eac_investments_rub)} ₽`
-                    : `${formatRubShort(brandTotal.eac_rub)} ₽`}
+                    : unit === 'rub'
+                      ? `${formatRubShort(brandTotal.eac_rub)} ₽`
+                      : `${formatRub(brandTotal.eac_units)} уп.`}
                 </TableCell>
                 <TableCell align="right">
-                  <Typography
-                    variant="body2"
-                    color={(brandTotal.completion_pct ?? 0) < 100 ? 'warning.main' : 'success.main'}
-                    sx={{ fontWeight: 600 }}
-                  >
-                    {brandTotal.completion_pct == null ? '—' : `${brandTotal.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`}
-                  </Typography>
+                  {measure === 'volume' && unit === 'units' ? (
+                    <Typography variant="caption" color="text.secondary">план ведётся в ₽</Typography>
+                  ) : (
+                    <Typography
+                      variant="body2"
+                      color={(brandTotal.completion_pct ?? 0) < 100 ? 'warning.main' : 'success.main'}
+                      sx={{ fontWeight: 600 }}
+                    >
+                      {brandTotal.completion_pct == null ? '—' : `${brandTotal.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>
-                  <Tooltip title="Прогноз по SKU и упаковкам">
+                  <Tooltip title={`Прогноз по SKU в ${unit === 'rub' ? 'рублях' : 'упаковках'}`}>
                     <Button size="small" startIcon={<SKUIcon />} onClick={() => setSelectedBrand(brandTotal.brand_as)}>SKU</Button>
                   </Tooltip>
                 </TableCell>
@@ -383,7 +497,9 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
             <SKUIcon color="primary" />
             <Box>
               <Typography variant="h6">{selectedBrand}</Typography>
-              <Typography variant="caption" color="text.secondary">SKU-прогноз в упаковках · Q{quarter} {year}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                SKU-прогноз в {unit === 'rub' ? 'рублях' : 'упаковках'} · Q{quarter} {year}
+              </Typography>
             </Box>
             <Box sx={{ flex: 1 }} />
             <IconButton onClick={() => setSelectedBrand(null)}><CloseIcon /></IconButton>
@@ -407,15 +523,24 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                         const row = skuRows.find((item) => item.brand_as === selectedBrand && item.sku === sku && item.month === month);
                         if (!row) return <TableCell key={month}>—</TableCell>;
                         const value = draft[forecastKey(month, row.brand_as, sku)] ?? { rub: '', units: '', investments: '', reason: '' };
-                        const units = parseNumberInput(value.units);
-                        const effectiveUnits = units ?? row.system_forecast_units;
-                        const estimatedRub = effectiveUnits != null && row.contract_price != null
-                          ? effectiveUnits * row.contract_price
-                          : row.forecast_rub;
-                        const helper = [
-                          row.system_forecast_units == null ? null : `рек. ${formatRub(row.system_forecast_units)} уп.`,
-                          estimatedRub == null ? null : `≈ ${formatRubShort(estimatedRub)} ₽`,
-                        ].filter(Boolean).join(' · ') || '—';
+                        const isRub = unit === 'rub';
+                        const forecastValue = isRub ? value.rub : value.units;
+                        const units = parseNumberInput(value.units) ?? row.system_forecast_units;
+                        const rub = parseNumberInput(value.rub)
+                          ?? (units != null && row.contract_price != null ? units * row.contract_price : null);
+                        const systemRub = row.system_forecast_rub
+                          ?? (row.system_forecast_units != null && row.contract_price != null
+                            ? row.system_forecast_units * row.contract_price
+                            : null);
+                        const helper = isRub
+                          ? [
+                            systemRub == null ? null : `рек. ${formatRubShort(systemRub)} ₽`,
+                            units == null ? null : `${formatRub(units)} уп.`,
+                          ].filter(Boolean).join(' · ') || '—'
+                          : [
+                            row.system_forecast_units == null ? null : `рек. ${formatRub(row.system_forecast_units)} уп.`,
+                            rub == null ? null : `≈ ${formatRubShort(rub)} ₽`,
+                          ].filter(Boolean).join(' · ') || '—';
                         return (
                           <TableCell key={month} sx={{ minWidth: 135 }}>
                             <Typography variant="caption" color="text.secondary">
@@ -423,11 +548,15 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                             </Typography>
                             <TextField
                               size="small"
-                              value={value.units}
+                              value={forecastValue}
                               disabled={!canEdit || row.is_closed}
-                              label="Прогноз, уп."
-                              placeholder={row.system_forecast_units == null ? '' : formatRub(row.system_forecast_units)}
-                              onChange={(event) => updateDraft(row, { units: event.target.value })}
+                              label={isRub ? 'Прогноз, ₽' : 'Прогноз, уп.'}
+                              placeholder={isRub
+                                ? (systemRub == null ? '' : formatRub(systemRub))
+                                : (row.system_forecast_units == null ? '' : formatRub(row.system_forecast_units))}
+                              onChange={(event) => updateDraft(row, isRub
+                                ? { rub: event.target.value }
+                                : { units: event.target.value })}
                               helperText={helper}
                               sx={{ mt: 0.5, width: 125 }}
                               slotProps={{ htmlInput: { inputMode: 'decimal' } }}
@@ -443,6 +572,113 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
           )}
         </Box>
       </Drawer>
+
+      <Dialog
+        open={importDialogOpen}
+        onClose={() => {
+          if (importMutation.isPending) return;
+          setImportDialogOpen(false);
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Импорт прогноза из Excel</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+          {importPreview && (
+            <>
+              <Typography variant="body2">
+                Файл: <strong>{importPreview.file_name}</strong>
+              </Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1 }}>
+                <Paper variant="outlined" sx={{ p: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Готово к загрузке</Typography>
+                  <Typography variant="h6">{importPreview.valid_rows}</Typography>
+                </Paper>
+                <Paper variant="outlined" sx={{ p: 1 }}>
+                  <Typography variant="caption" color="text.secondary">Брендов затронуто</Typography>
+                  <Typography variant="h6">{importPreview.affected_brands}</Typography>
+                </Paper>
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Новых: {importPreview.added_rows} · изменится: {importPreview.updated_rows} · без изменений: {importPreview.unchanged_rows}
+              </Typography>
+              {importPreview.errors.length > 0 && (
+                <Alert severity="error">
+                  Файл не будет загружен, пока не исправлены ошибки:
+                  <Box component="ul" sx={{ my: 0.5, pl: 2.5 }}>
+                    {importPreview.errors.slice(0, 12).map((issue, index) => (
+                      <li key={`${issue.row}-${index}`}>Строка {issue.row}: {issue.message}</li>
+                    ))}
+                  </Box>
+                  {importPreview.errors.length > 12 && `Ещё ошибок: ${importPreview.errors.length - 12}`}
+                </Alert>
+              )}
+              {importPreview.warnings.length > 0 && (
+                <Alert severity="warning">
+                  <Box component="ul" sx={{ my: 0, pl: 2.5 }}>
+                    {importPreview.warnings.slice(0, 8).map((issue, index) => (
+                      <li key={`${issue.row}-${index}`}>Строка {issue.row}: {issue.message}</li>
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+              {importPreview.errors.length === 0 && (
+                <Alert severity="info">
+                  Указанные SKU будут обновлены, остальные строки прогноза сохранятся. Итоги брендов пересчитаются автоматически.
+                </Alert>
+              )}
+            </>
+          )}
+          {importMutation.isError && <Alert severity="error">{(importMutation.error as Error).message}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setImportDialogOpen(false)} disabled={importMutation.isPending}>Отмена</Button>
+          <Button
+            variant="contained"
+            startIcon={<ImportIcon />}
+            disabled={!importFile || !importPreview || importPreview.errors.length > 0 || importMutation.isPending}
+            onClick={() => importFile && importMutation.mutate(importFile)}
+          >
+            {importMutation.isPending ? 'Импорт…' : 'Импортировать'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={clearMonth != null} onClose={() => !clearMutation.isPending && setClearMonth(null)} fullWidth maxWidth="xs">
+        <DialogTitle>Очистить прогноз за месяц?</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+          <Alert severity="warning">
+            {clearMonth == null ? '' : `${MONTHS[clearMonth - 1]} ${year}`}: внесённые значения КАМ будут очищены.
+            После полной очистки EAC снова будет использовать системную рекомендацию. Чтобы зафиксировать нулевой прогноз, введите 0 вручную.
+          </Alert>
+          <FormControl>
+            <RadioGroup
+              value={clearScope}
+              onChange={(event) => setClearScope(event.target.value as NetworkForecastClearScope)}
+            >
+              <FormControlLabel value="rub" control={<Radio />} label="Только прогноз в рублях" />
+              <FormControlLabel value="units" control={<Radio />} label="Только прогноз в упаковках" />
+              <FormControlLabel value="all" control={<Radio />} label="Весь прогноз ТО месяца" />
+            </RadioGroup>
+          </FormControl>
+          <Typography variant="body2" color="text.secondary">
+            Будет очищено строк: {clearAffectedRows}. Факт, системная рекомендация и прогноз инвестиций не изменятся.
+          </Typography>
+          {clearMutation.isError && <Alert severity="error">{(clearMutation.error as Error).message}</Alert>}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setClearMonth(null)} disabled={clearMutation.isPending}>Отмена</Button>
+          <Button
+            color="error"
+            variant="contained"
+            startIcon={<ClearIcon />}
+            disabled={clearMonth == null || clearAffectedRows === 0 || clearMutation.isPending}
+            onClick={() => clearMonth != null && clearMutation.mutate({ month: clearMonth, scope: clearScope })}
+          >
+            {clearMutation.isPending ? 'Очистка…' : 'Очистить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

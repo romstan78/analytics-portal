@@ -463,6 +463,7 @@ export interface NetworkForecastMonth {
   system_forecast_rub: number | null;
   system_forecast_units: number | null;
   eac_rub: number | null;
+  eac_units: number | null;
   eac_investments_rub: number | null;
   confidence: string | null;
   adjustment_reason: string | null;
@@ -482,7 +483,9 @@ export interface NetworkForecastBrandTotals {
   brand_as: string;
   plan_rub: number;
   fact_rub: number;
+  fact_units: number;
   eac_rub: number;
+  eac_units: number;
   completion_pct: number | null;
   gap_rub: number;
   plan_investments_rub: number;
@@ -495,7 +498,9 @@ export interface NetworkForecastBrandTotals {
 export interface NetworkForecastTotals {
   plan_rub: number;
   fact_rub: number;
+  fact_units: number;
   eac_rub: number;
+  eac_units: number;
   completion_pct: number | null;
   gap_rub: number;
   plan_investments_rub: number;

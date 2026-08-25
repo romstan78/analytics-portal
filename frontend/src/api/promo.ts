@@ -56,9 +56,13 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
   const doFetch = (): Promise<Response> => {
     const token = localStorage.getItem('token');
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> || {}),
     };
+    // Для FormData браузер сам добавляет multipart boundary. Ручной
+    // Content-Type сделал бы загруженный Excel нечитаемым на backend.
+    if (!(options.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }

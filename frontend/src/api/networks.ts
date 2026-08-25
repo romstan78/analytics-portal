@@ -8,6 +8,10 @@ import type {
   NetworkBrandsResponse,
   NetworkCommentsResponse,
   NetworkForecastResponse,
+  NetworkForecastClearResponse,
+  NetworkForecastClearScope,
+  NetworkForecastImportPreview,
+  NetworkForecastImportResponse,
   NetworkForecastSaveRequest,
   NetworkForecastSaveResponse,
   NetworkListResponse,
@@ -80,6 +84,31 @@ export const networkAPI = {
   saveForecast: (id: number, data: NetworkForecastSaveRequest): Promise<NetworkForecastSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkForecastSaveResponse>(r, 'Ошибка сохранения прогноза')),
+
+  previewForecastImport: (id: number, year: number, quarter: number, file: File): Promise<NetworkForecastImportPreview> => {
+    const form = new FormData();
+    form.append('file', file);
+    return fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast/import/preview?year=${year}&quarter=${quarter}`, {
+      method: 'POST', body: form,
+    }, 60000).then(r => parseJSONResponse<NetworkForecastImportPreview>(r, 'Ошибка проверки Excel-файла'));
+  },
+
+  importForecast: (id: number, year: number, quarter: number, file: File): Promise<NetworkForecastImportResponse> => {
+    const form = new FormData();
+    form.append('file', file);
+    return fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast/import?year=${year}&quarter=${quarter}`, {
+      method: 'POST', body: form,
+    }, 60000).then(r => parseJSONResponse<NetworkForecastImportResponse>(r, 'Ошибка импорта прогноза'));
+  },
+
+  clearForecastMonth: (id: number, data: {
+    year: number;
+    month: number;
+    scope: NetworkForecastClearScope;
+  }): Promise<NetworkForecastClearResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast/clear`, {
+      method: 'POST', body: JSON.stringify(data),
+    }).then(r => parseJSONResponse<NetworkForecastClearResponse>(r, 'Ошибка очистки прогноза')),
 
   getPrices: (id: number, year: number): Promise<NetworkPricesResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/prices?year=${year}`)

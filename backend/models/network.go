@@ -319,6 +319,7 @@ type NetworkForecastMonth struct {
 	SystemForecastRub      *float64 `json:"system_forecast_rub"`
 	SystemForecastUnits    *float64 `json:"system_forecast_units"`
 	EACRub                 *float64 `json:"eac_rub"`
+	EACUnits               *float64 `json:"eac_units"`
 	EACInvestmentsRub      *float64 `json:"eac_investments_rub"`
 	Confidence             *string  `json:"confidence"`
 	AdjustmentReason       *string  `json:"adjustment_reason"`
@@ -339,7 +340,9 @@ type NetworkForecastBrandTotals struct {
 	BrandAS               string   `json:"brand_as"`
 	PlanRub               float64  `json:"plan_rub"`
 	FactRub               float64  `json:"fact_rub"`
+	FactUnits             float64  `json:"fact_units"`
 	EACRub                float64  `json:"eac_rub"`
+	EACUnits              float64  `json:"eac_units"`
 	CompletionPct         *float64 `json:"completion_pct"`
 	GapRub                float64  `json:"gap_rub"`
 	PlanInvestmentsRub    float64  `json:"plan_investments_rub"`
@@ -353,7 +356,9 @@ type NetworkForecastBrandTotals struct {
 type NetworkForecastTotals struct {
 	PlanRub               float64  `json:"plan_rub"`
 	FactRub               float64  `json:"fact_rub"`
+	FactUnits             float64  `json:"fact_units"`
 	EACRub                float64  `json:"eac_rub"`
+	EACUnits              float64  `json:"eac_units"`
 	CompletionPct         *float64 `json:"completion_pct"`
 	GapRub                float64  `json:"gap_rub"`
 	PlanInvestmentsRub    float64  `json:"plan_investments_rub"`

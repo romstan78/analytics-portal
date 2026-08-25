@@ -150,6 +150,14 @@ type SaveNetworkForecastInput struct {
 	UserName  string
 }
 
+type ClearNetworkForecastInput struct {
+	NetworkID int
+	Year      int
+	Month     int
+	Scope     string
+	UserName  string
+}
+
 func validateForecastValue(name string, value *float64) error {
 	if value != nil && *value < 0 {
 		return fmt.Errorf("%s не может быть отрицательным", name)
@@ -245,6 +253,49 @@ func SaveNetworkForecastLines(in SaveNetworkForecastInput) error {
 	}
 
 	return tx.Commit()
+}
+
+// ClearNetworkForecastMonth очищает только внесённый прогноз объёма. Строки
+// сохраняются для аудита и для независимого прогноза инвестиций; системная
+// рекомендация после очистки снова становится fallback для EAC.
+func ClearNetworkForecastMonth(in ClearNetworkForecastInput) (int64, error) {
+	now := time.Now()
+	if in.Year < now.Year() || (in.Year == now.Year() && in.Month < int(now.Month())) {
+		return 0, fmt.Errorf("%w: %02d.%d", ErrNetworkClosedMonth, in.Month, in.Year)
+	}
+	if in.Month < 1 || in.Month > 12 {
+		return 0, errors.New("некорректный месяц прогноза")
+	}
+
+	var query string
+	switch in.Scope {
+	case "rub":
+		query = `UPDATE dbo.tbl_NetworkForecasts
+			SET forecast_rub = NULL, adjustment_reason = NULL,
+				updated_by = ?, updated_at = GETDATE()
+			WHERE network_id = ? AND [year] = ? AND [month] = ?
+			  AND forecast_rub IS NOT NULL`
+	case "units":
+		query = `UPDATE dbo.tbl_NetworkForecasts
+			SET forecast_units = NULL, adjustment_reason = NULL,
+				updated_by = ?, updated_at = GETDATE()
+			WHERE network_id = ? AND [year] = ? AND [month] = ?
+			  AND forecast_units IS NOT NULL`
+	case "all":
+		query = `UPDATE dbo.tbl_NetworkForecasts
+			SET forecast_rub = NULL, forecast_units = NULL, adjustment_reason = NULL,
+				updated_by = ?, updated_at = GETDATE()
+			WHERE network_id = ? AND [year] = ? AND [month] = ?
+			  AND (forecast_rub IS NOT NULL OR forecast_units IS NOT NULL)`
+	default:
+		return 0, errors.New("область очистки: rub, units или all")
+	}
+
+	result, err := config.DB.Exec(query, in.UserName, in.NetworkID, in.Year, in.Month)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpdateNetworkPlanForecastRollup поддерживает квартальную форму совместимой с

@@ -304,28 +304,33 @@ func BuildNetworkForecast(
 			promo := promoByKey[key]
 			line, hasLine := forecastByBrand[key]
 
-			// Если официальный итог бренда ещё не внесён, собранная SKU-детализация
-			// становится его нижнеуровневым предложением.
-			if !hasLine {
-				var skuRub, skuUnits, skuInvest *float64
-				for sku := range skusByBrand[brand] {
-					skuLine, ok := forecastBySKU[forecastSKUKey(year, month, brand, sku)]
-					if !ok {
-						continue
-					}
-					rub := skuLine.ForecastRub
-					if rub == nil && skuLine.ForecastUnits != nil {
-						if price := effectiveContractPrice(prices, sku, year, month); price != nil {
-							value := round2(*skuLine.ForecastUnits * *price)
-							rub = &value
-						}
-					}
-					addPtrValue(&skuRub, rub)
-					addPtrValue(&skuUnits, skuLine.ForecastUnits)
-					addPtrValue(&skuInvest, skuLine.ForecastInvestmentsRub)
+			// SKU-детализация дополняет отсутствующую официальную метрику бренда.
+			// Это важно после очистки только рублей или только упаковок: сохранённая
+			// вторая метрика продолжает участвовать в прогнозе и пересчёте по цене.
+			var skuRub, skuUnits, skuInvest *float64
+			for sku := range skusByBrand[brand] {
+				skuLine, ok := forecastBySKU[forecastSKUKey(year, month, brand, sku)]
+				if !ok {
+					continue
 				}
+				rub := skuLine.ForecastRub
+				if rub == nil && skuLine.ForecastUnits != nil {
+					if price := effectiveContractPrice(prices, sku, year, month); price != nil {
+						value := round2(*skuLine.ForecastUnits * *price)
+						rub = &value
+					}
+				}
+				addPtrValue(&skuRub, rub)
+				addPtrValue(&skuUnits, skuLine.ForecastUnits)
+				addPtrValue(&skuInvest, skuLine.ForecastInvestmentsRub)
+			}
+			if !hasLine || line.ForecastRub == nil {
 				line.ForecastRub = skuRub
+			}
+			if !hasLine || line.ForecastUnits == nil {
 				line.ForecastUnits = skuUnits
+			}
+			if !hasLine || line.ForecastInvestmentsRub == nil {
 				line.ForecastInvestmentsRub = skuInvest
 			}
 
@@ -339,6 +344,7 @@ func BuildNetworkForecast(
 			}
 			closed := isClosedForecastMonth(year, month, now)
 			eacRub := valueForEAC(closed, fact.rub, line.ForecastRub, systemRub)
+			eacUnits := valueForEAC(closed, fact.units, line.ForecastUnits, systemUnits)
 			eacInvestments := valueForEAC(closed, fact.investments, line.ForecastInvestmentsRub, nil)
 			if eacInvestments == nil && investmentMonths[index] != 0 {
 				value := investmentMonths[index]
@@ -354,7 +360,7 @@ func BuildNetworkForecast(
 				ForecastRub: line.ForecastRub, ForecastUnits: line.ForecastUnits,
 				ForecastInvestmentsRub: line.ForecastInvestmentsRub,
 				SystemForecastRub:      systemRub, SystemForecastUnits: systemUnits,
-				EACRub: eacRub, EACInvestmentsRub: eacInvestments,
+				EACRub: eacRub, EACUnits: eacUnits, EACInvestmentsRub: eacInvestments,
 				Confidence: confidence, AdjustmentReason: line.AdjustmentReason,
 				PromoCount: promo.PromoCount, ApprovedPromoCount: promo.ApprovedCount,
 				DraftPromoCount: promo.DraftCount, PromoPlanUnits: promo.PlanPromoUnits,
@@ -370,11 +376,17 @@ func BuildNetworkForecast(
 			if fact.rub != nil {
 				brandTotal.FactRub = round2(brandTotal.FactRub + *fact.rub)
 			}
+			if fact.units != nil {
+				brandTotal.FactUnits = round2(brandTotal.FactUnits + *fact.units)
+			}
 			if fact.investments != nil {
 				brandTotal.FactInvestmentsRub = round2(brandTotal.FactInvestmentsRub + *fact.investments)
 			}
 			if eacRub != nil {
 				brandTotal.EACRub = round2(brandTotal.EACRub + *eacRub)
+			}
+			if eacUnits != nil {
+				brandTotal.EACUnits = round2(brandTotal.EACUnits + *eacUnits)
 			}
 			if eacInvestments != nil {
 				brandTotal.EACInvestmentsRub = round2(brandTotal.EACInvestmentsRub + *eacInvestments)
@@ -417,6 +429,7 @@ func BuildNetworkForecast(
 					ForecastInvestmentsRub: line.ForecastInvestmentsRub,
 					SystemForecastUnits:    systemUnits,
 					EACRub:                 valueForEAC(closed, fact.rub, rub, nil),
+					EACUnits:               valueForEAC(closed, fact.units, line.ForecastUnits, systemUnits),
 					EACInvestmentsRub:      valueForEAC(closed, fact.investments, line.ForecastInvestmentsRub, nil),
 					Confidence:             systemConfidence, AdjustmentReason: line.AdjustmentReason,
 					IsClosed: closed, IsCurrent: isCurrentForecastMonth(year, month, now),
@@ -433,7 +446,9 @@ func BuildNetworkForecast(
 	}
 	for _, brand := range brandTotals {
 		totals.FactRub = round2(totals.FactRub + brand.FactRub)
+		totals.FactUnits = round2(totals.FactUnits + brand.FactUnits)
 		totals.EACRub = round2(totals.EACRub + brand.EACRub)
+		totals.EACUnits = round2(totals.EACUnits + brand.EACUnits)
 		totals.FactInvestmentsRub = round2(totals.FactInvestmentsRub + brand.FactInvestmentsRub)
 		totals.EACInvestmentsRub = round2(totals.EACInvestmentsRub + brand.EACInvestmentsRub)
 		totals.PromoCount += brand.PromoCount

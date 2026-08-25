@@ -82,6 +82,37 @@ export interface NetworkForecastSaveRequest {
   lines: NetworkForecastInput[];
 }
 
+export interface NetworkForecastImportIssue {
+  row: number;
+  message: string;
+}
+
+export interface NetworkForecastImportPreview {
+  file_name: string;
+  rows: number;
+  valid_rows: number;
+  added_rows: number;
+  updated_rows: number;
+  unchanged_rows: number;
+  affected_brands: number;
+  errors: NetworkForecastImportIssue[];
+  warnings: NetworkForecastImportIssue[];
+}
+
+export interface NetworkForecastImportResponse {
+  message: string;
+  imported_rows: number;
+  data: import('./api.generated').NetworkForecastResponse;
+}
+
+export type NetworkForecastClearScope = 'rub' | 'units' | 'all';
+
+export interface NetworkForecastClearResponse {
+  message: string;
+  cleared_rows: number;
+  data: import('./api.generated').NetworkForecastResponse;
+}
+
 export interface NetworkPricesSaveRequest {
   year: number;
   rows: NetworkContractPriceInput[];
