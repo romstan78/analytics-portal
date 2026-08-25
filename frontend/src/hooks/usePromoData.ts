@@ -16,12 +16,14 @@ export interface PromoDataResult {
  */
 export function usePromoData(
   filters: Record<string, unknown>,
+  enabled = true,
 ): PromoDataResult {
   // Стабильный queryKey — без refreshTrigger. Инвалидация через invalidateQueries.
   const queryKey = ['promoData', filters] as const;
 
   const { data: rows = [], isLoading, error, refetch } = useQuery({
     queryKey,
+    enabled,
     queryFn: async ({ signal }) => {
       // filters берём из замыкания: queryKey уже содержит их, поэтому запрос
       // пересоздаётся при любом изменении фильтров.

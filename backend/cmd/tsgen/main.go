@@ -92,6 +92,11 @@ var exported = []entry{
 
 	// ─── Промо ──────────────────────────────────────────────────────────
 	{models.PromoRow{}, ""},
+	{models.PromoDashboardMetrics{}, ""},
+	{models.PromoDashboardTrendPoint{}, ""},
+	{models.PromoDashboardBreakdown{}, ""},
+	{models.PromoDashboardCalendarPoint{}, ""},
+	{models.PromoDashboardResponse{}, ""},
 	{models.HistoryRow{}, ""},
 	{models.CommentRow{}, ""},
 	{models.ApprovalRow{}, ""},

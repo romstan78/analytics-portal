@@ -15,7 +15,7 @@ import {
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
 import { DataGrid, type GridColDef, type GridRenderCellParams, type GridRowParams } from '@mui/x-data-grid';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import FilterPanel, { type ExtraFilter } from '../components/FilterPanel';
 import type { PromoRow } from '../types/promo';
 import PromoEditDialog from '../components/PromoEditDialog';
@@ -27,6 +27,7 @@ import { usePromoCalculations } from '../hooks/usePromoCalculations';
 
 const PromoForm = lazy(() => import('./PromoForm'));
 const PromoApproval = lazy(() => import('./PromoApproval'));
+const PromoDashboard = lazy(() => import('../components/PromoDashboard'));
 
 const FILTERS_STORAGE_KEY = 'promo_filters_v20';
 const PERSIST_FLAG_KEY = 'promo_persist_v20';
@@ -148,14 +149,22 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const apiRef = useRef(null);
 
   // ─── Фильтры и данные ─────────────────────────────────────────────────
-  const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta } = 
+  const { meta, filters, setFilters, appliedFilters, persistFilters, handleSearch, handleReset, handlePersistChange, fetchMeta, applyFilters } =
     usePromoFilters(EMPTY_FILTERS, FILTERS_STORAGE_KEY, PERSIST_FLAG_KEY);
   const appliedWithDeleted = useMemo(() => ({
     ...appliedFilters,
     ...(deletedFilter ? { deletedFilter } : {}),
   }), [appliedFilters, deletedFilter]);
 
-  const { rows, loading: dataLoading, refetch } = usePromoData(appliedWithDeleted);
+  const { rows, loading: dataLoading, refetch } = usePromoData(appliedWithDeleted, tab === 1);
+  const { data: dashboardData, isFetching: dashboardLoading, error: dashboardQueryError } = useQuery({
+    queryKey: ['promoDashboard', appliedWithDeleted] as const,
+    enabled: tab === 0,
+    queryFn: () => promoAPI.getDashboard(appliedWithDeleted),
+  });
+  const dashboardError = dashboardQueryError
+    ? (dashboardQueryError instanceof Error ? dashboardQueryError.message : String(dashboardQueryError))
+    : null;
 
   // После редактирования/удаления/создания — сбрасываем кеш и перезапрашиваем
   const handleDataChanged = useCallback(() => {
@@ -163,6 +172,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
     queryClient.removeQueries({ queryKey: ['promoData'] });
     // Принудительный refetch всех запросов промо-данных
     queryClient.refetchQueries({ queryKey: ['promoData'] });
+    queryClient.invalidateQueries({ queryKey: ['promoDashboard'] });
   }, [queryClient]);
 
   // ─── Форма редактирования ─────────────────────────────────────────────
@@ -172,7 +182,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
 
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
   useEffect(() => {
-    if (tab === 0) refetch();
+    if (tab === 1) refetch();
   }, [tab, refetch]);
 
   // ─── Загрузка справочников ────────────────────────────────────────────
@@ -206,7 +216,13 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
 
   const handlePromoFormSave = () => {
     queryClient.invalidateQueries({ queryKey: ['promoData'] });
+    queryClient.invalidateQueries({ queryKey: ['promoDashboard'] });
   };
+
+  const handleDashboardDrilldown = useCallback((nextFilters: Record<string, unknown>) => {
+    applyFilters({ ...appliedFilters, ...nextFilters });
+    setTab(1);
+  }, [appliedFilters, applyFilters]);
 
   const handleHistoryPromoOpen = async (id: number) => {
     try {
@@ -314,12 +330,13 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Анализ промо</Typography>
         {meta.loading && <CircularProgress size={20} />}
-        {rows.length > 0 && tab === 0 && 
+        {rows.length > 0 && tab === 1 &&
           <Typography variant="body2" color="text.secondary">Загружено: {rows.length} записей</Typography>}
       </Stack>
 
       {/* ─── Вкладки ─────────────────────────────────────────────────── */}
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+        <Tab label="Дашборд" />
         <Tab label="Просмотр данных" />
         <Tab label="Новое промо" />
         {(role === 'admin' || role === 'agreement1' || role === 'agreement2') && (
@@ -327,14 +344,28 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
         )}
       </Tabs>
 
-      {/* ─── Tab 0: Просмотр данных ──────────────────────────────────── */}
-      {tab === 0 && (<>
+      {(tab === 0 || tab === 1) && (
         <Box sx={{ mb: 2 }}>
           <FilterPanel filters={filters} filterOptions={filterOptions} onFiltersChange={setFilters}
             onSearch={handleSearch} onReset={handleReset} extraFilters={EXTRA_FILTERS}
-            persistFilters={persistFilters} onPersistChange={handlePersistChange} 
+            persistFilters={persistFilters} onPersistChange={handlePersistChange}
             visibleFilters={PROMO_VISIBLE_FILTERS} />
         </Box>
+      )}
+
+      {tab === 0 && (
+        <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
+          <PromoDashboard
+            data={dashboardData || null}
+            loading={dashboardLoading}
+            error={dashboardError}
+            onDrilldown={handleDashboardDrilldown}
+          />
+        </Suspense>
+      )}
+
+      {/* ─── Tab 1: Просмотр данных ──────────────────────────────────── */}
+      {tab === 1 && (<>
         {meta.error && 
           <Button variant="outlined" color="warning" onClick={() => fetchMeta()} sx={{ mb: 2 }}>
             Ошибка загрузки справочников. Повторить
@@ -424,17 +455,20 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
 
       </>)}
 
-      {/* ─── Tab 1: Новое промо ────────────────────────────────────────── */}
-      {tab === 1 && (
+      {/* ─── Tab 2: Новое промо ────────────────────────────────────────── */}
+      {tab === 2 && (
         <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
           <PromoForm onSave={handlePromoFormSave} onOpenPromo={handleHistoryPromoOpen} />
         </Suspense>
       )}
 
-      {/* ─── Tab 2: Согласование ──────────────────────────────────────── */}
-      {tab === 2 && (
+      {/* ─── Tab 3: Согласование ──────────────────────────────────────── */}
+      {tab === 3 && (
         <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
-          <PromoApproval role={role} onDataChanged={() => queryClient.invalidateQueries({ queryKey: ['promoData'] })} />
+          <PromoApproval role={role} onDataChanged={() => {
+            queryClient.invalidateQueries({ queryKey: ['promoData'] });
+            queryClient.invalidateQueries({ queryKey: ['promoDashboard'] });
+          }} />
         </Suspense>
       )}
 

@@ -12,6 +12,11 @@ export type {
   ApprovalRow,
   NetworkGeo,
   LastSKUData,
+  PromoDashboardMetrics,
+  PromoDashboardTrendPoint,
+  PromoDashboardBreakdown,
+  PromoDashboardCalendarPoint,
+  PromoDashboardResponse,
 } from './api.generated';
 
 export interface FilterOptions {

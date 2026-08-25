@@ -165,6 +165,39 @@ func GetPromoData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": results})
 }
 
+// GetPromoDashboard возвращает агрегированную витрину промо. Сырые строки
+// используются только внутри backend; ROI и проценты план-факт пересчитываются
+// на сопоставимом срезе, а не усредняются из готовых процентов строк.
+func GetPromoDashboard(c *gin.Context) {
+	deletedFilter := c.DefaultQuery("deletedFilter", "")
+	if deletedFilter != "" {
+		role, _ := c.Get("role")
+		if fmt.Sprint(role) != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "просмотр удалённых записей доступен только администратору"})
+			return
+		}
+	}
+
+	dashboard, err := services.BuildPromoDashboard(repository.PromoFilterParams{
+		YearFromStr:   c.Query("yearFrom"),
+		YearToStr:     c.Query("yearTo"),
+		Months:        c.QueryArray("months"),
+		Kams:          c.QueryArray("kam"),
+		Brands:        c.QueryArray("brand"),
+		SKUs:          c.QueryArray("sku"),
+		Networks:      c.QueryArray("network_name"),
+		Mechanics:     c.QueryArray("mechanics"),
+		Statuses:      c.QueryArray("status"),
+		DeletedFilter: deletedFilter,
+	}, c.QueryArray("channel"))
+	if err != nil {
+		config.Logger.Error("promo_dashboard_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось загрузить промо-дашборд"})
+		return
+	}
+	c.JSON(http.StatusOK, dashboard)
+}
+
 func GetPromoByID(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id < 1 {

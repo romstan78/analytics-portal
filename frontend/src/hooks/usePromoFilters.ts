@@ -61,13 +61,19 @@ export function usePromoFilters(
   // Ручное обновление справочников (кнопка «Повторить» при ошибке).
   const fetchMeta = useCallback(() => { void refetch(); }, [refetch]);
 
-  const handleSearch = useCallback(() => {
-    setAppliedFilters({ ...filters });
+  const applyFilters = useCallback((nextFilters: Record<string, unknown>) => {
+    const next = { ...nextFilters };
+    setFilters(next);
+    setAppliedFilters(next);
     // Если галочка включена — сохраняем фильтры в sessionStorage
     if (localStorage.getItem(persistFlagKey) === 'true') {
-      sessionStorage.setItem(storageKey, JSON.stringify(filters));
+      sessionStorage.setItem(storageKey, JSON.stringify(next));
     }
-  }, [filters, persistFlagKey, storageKey]);
+  }, [persistFlagKey, storageKey]);
+
+  const handleSearch = useCallback(() => {
+    applyFilters(filters);
+  }, [applyFilters, filters]);
 
   const handleReset = useCallback(() => {
     const empty = { ...initialFilters };
@@ -90,6 +96,6 @@ export function usePromoFilters(
   return {
     meta, filters, setFilters, appliedFilters,
     persistFilters, handleSearch, handleReset, handlePersistChange,
-    fetchMeta,
+    fetchMeta, applyFilters,
   };
 }

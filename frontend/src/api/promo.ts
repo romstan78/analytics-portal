@@ -10,6 +10,7 @@ import type {
   MessageResponse,
   NetworkGeoResponse,
   PromoCommentsResponse,
+  PromoDashboardResponse,
   PromoDataResponse,
   PromoHistoryResponse,
   PromoRow,
@@ -159,6 +160,11 @@ export const promoAPI = {
   // Данные промо
   getData: (filters: Record<string, unknown> = {}): Promise<PromoDataResponse> =>
     fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`).then(readJSON<PromoDataResponse>),
+
+  // Агрегированная витрина план-факт, эффективности и календаря.
+  getDashboard: (filters: Record<string, unknown> = {}): Promise<PromoDashboardResponse> =>
+    fetchWithAuth(`${API_BASE}/api/promo/dashboard?${buildParams(filters)}`)
+      .then(r => parseJSONResponse<PromoDashboardResponse>(r, 'Ошибка загрузки промо-дашборда')),
 
   getById: (id: number): Promise<PromoRow> =>
     fetchWithAuth(`${API_BASE}/api/promo/${id}`).then(async r => {

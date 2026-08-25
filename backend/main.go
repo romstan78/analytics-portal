@@ -147,6 +147,7 @@ func main() {
 		// Промо — чтение
 		api.GET("/promo/filters", handlers.GetPromoFilters)
 		api.GET("/promo/data", handlers.GetPromoData)
+		api.GET("/promo/dashboard", handlers.GetPromoDashboard)
 		api.GET("/promo/:id", handlers.GetPromoByID)
 		api.GET("/promo/sku-by-brand", handlers.GetSKUByBrand)
 		api.GET("/promo/last-contract-price", handlers.GetLastContractPrice)

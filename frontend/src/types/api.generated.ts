@@ -648,6 +648,58 @@ export interface PromoRow {
   deleted_at: string | null;
 }
 
+export interface PromoDashboardMetrics {
+  promoCount: number;
+  factReadyCount: number;
+  factCoveragePct: number | null;
+  planUnits: number;
+  comparablePlanUnits: number;
+  actualUnits: number | null;
+  planInvestmentsRub: number;
+  comparablePlanInvestmentsRub: number;
+  actualInvestmentsRub: number | null;
+  planUpliftUnits: number;
+  comparablePlanUpliftUnits: number;
+  actualUpliftUnits: number | null;
+  planRoi: number | null;
+  comparablePlanRoi: number | null;
+  actualRoi: number | null;
+  salesCompletionPct: number | null;
+  investmentCompletionPct: number | null;
+  salesVarianceUnits: number | null;
+  investmentVarianceRub: number | null;
+}
+
+export interface PromoDashboardTrendPoint {
+  year: number;
+  month: number;
+  metrics: PromoDashboardMetrics;
+}
+
+export interface PromoDashboardBreakdown {
+  name: string;
+  metrics: PromoDashboardMetrics;
+}
+
+export interface PromoDashboardCalendarPoint {
+  name: string;
+  year: number;
+  month: number;
+  metrics: PromoDashboardMetrics;
+}
+
+export interface PromoDashboardResponse {
+  availableYears: number[];
+  summary: PromoDashboardMetrics;
+  trend: PromoDashboardTrendPoint[];
+  networks: PromoDashboardBreakdown[];
+  brands: PromoDashboardBreakdown[];
+  skus: PromoDashboardBreakdown[];
+  mechanics: PromoDashboardBreakdown[];
+  networkCalendar: PromoDashboardCalendarPoint[];
+  brandCalendar: PromoDashboardCalendarPoint[];
+}
+
 export interface HistoryRow {
   id: number;
   network_name: string | null;
