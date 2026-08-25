@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrNetworkPriceOverlap = errors.New("network contract price periods overlap")
-	ErrNetworkClosedMonth  = errors.New("network forecast month is closed")
+	ErrNetworkPriceOverlap         = errors.New("network contract price periods overlap")
+	ErrNetworkPriceDeleteForbidden = errors.New("only manual network contract prices can be deleted")
+	ErrNetworkClosedMonth          = errors.New("network forecast month is closed")
 )
 
 // GetNetworkMonthlyFacts возвращает атомарные месячные факты за диапазон лет.
@@ -331,10 +332,16 @@ type NetworkContractPriceInput struct {
 	UpdatedAt     string  `json:"updated_at"`
 }
 
+type NetworkContractPriceDeleteInput struct {
+	ID        int64  `json:"id"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type SaveNetworkPricesInput struct {
-	NetworkID int
-	Rows      []NetworkContractPriceInput
-	UserName  string
+	NetworkID   int
+	Rows        []NetworkContractPriceInput
+	DeletedRows []NetworkContractPriceDeleteInput
+	UserName    string
 }
 
 type olapSKUPrice struct {
@@ -545,6 +552,38 @@ func SaveNetworkContractPrices(in SaveNetworkPricesInput) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	deletedIDs := make(map[int64]bool, len(in.DeletedRows))
+	for _, row := range in.DeletedRows {
+		if row.ID <= 0 || deletedIDs[row.ID] {
+			continue
+		}
+		deletedIDs[row.ID] = true
+
+		var updatedAt, sourceType string
+		if err := tx.QueryRow(
+			`SELECT CONVERT(NVARCHAR, updated_at, 121), source_type
+			 FROM dbo.tbl_NetworkContractPrices WHERE id = ? AND network_id = ?`,
+			row.ID, in.NetworkID,
+		).Scan(&updatedAt, &sourceType); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNetworkNotFound
+			}
+			return err
+		}
+		if row.UpdatedAt != "" && row.UpdatedAt != updatedAt {
+			return ErrNetworkConflict
+		}
+		if sourceType != "manual" {
+			return ErrNetworkPriceDeleteForbidden
+		}
+		if _, err := tx.Exec(
+			`DELETE FROM dbo.tbl_NetworkContractPrices WHERE id = ? AND network_id = ?`,
+			row.ID, in.NetworkID,
+		); err != nil {
+			return err
+		}
+	}
 
 	for _, row := range in.Rows {
 		row.BrandAS = strings.TrimSpace(row.BrandAS)

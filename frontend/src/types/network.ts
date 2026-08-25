@@ -116,4 +116,10 @@ export interface NetworkForecastClearResponse {
 export interface NetworkPricesSaveRequest {
   year: number;
   rows: NetworkContractPriceInput[];
+  deleted_rows: NetworkContractPriceDeleteInput[];
+}
+
+export interface NetworkContractPriceDeleteInput {
+  id: number;
+  updated_at: string;
 }

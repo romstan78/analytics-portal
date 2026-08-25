@@ -30,6 +30,7 @@ describe('quarterly network prices', () => {
     expect(draft.prices).toEqual(['125,5', '125,5', '125,5', '125,5']);
     expect(draft.periodIds).toEqual([11, 11, 11, 11]);
     expect(draft.confirmed).toBe(false);
+    expect(draft.canDelete).toBe(false);
   });
 
   it('serializes the matrix into four non-overlapping quarter periods', () => {
@@ -63,5 +64,19 @@ describe('quarterly network prices', () => {
 
     expect(draft.prices).toEqual(['101', '102', '103', '104']);
     expect(inputs.map((row) => row.id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('allows deletion only for persisted manually created SKU rows', () => {
+    const [manual] = buildQuarterlyPriceDrafts([
+      priceRow({
+        source_type: 'manual', source_year: null, source_month: null,
+        olap_price: null, olap_year: null, olap_month: null,
+      }),
+    ], 2026);
+    const [olap] = buildQuarterlyPriceDrafts([priceRow()], 2026);
+
+    expect(manual.canDelete).toBe(true);
+    expect(manual.deleteRows).toEqual([{ id: 11, updated_at: '2026-08-24 10:00:00.000' }]);
+    expect(olap.canDelete).toBe(false);
   });
 });

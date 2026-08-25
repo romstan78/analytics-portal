@@ -6,6 +6,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  IconButton,
   Paper,
   Switch,
   Table,
@@ -17,9 +18,9 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Add as AddIcon, Save as SaveIcon } from '@mui/icons-material';
+import { Add as AddIcon, DeleteOutlined as DeleteIcon, Save as SaveIcon } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
-import type { NetworkPricesSaveRequest } from '../types/network';
+import type { NetworkContractPriceDeleteInput, NetworkPricesSaveRequest } from '../types/network';
 import { formatRub, parseNumberInput } from '../utils/networkPlan';
 import {
   buildQuarterlyPriceDrafts,
@@ -42,6 +43,7 @@ const MONTHS = [
 
 export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
   const [draftEdits, setDraftEdits] = useState<QuarterlyPriceDraft[] | null>(null);
+  const [deletedRows, setDeletedRows] = useState<NetworkContractPriceDeleteInput[]>([]);
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ['network-prices', networkId, year],
@@ -53,7 +55,7 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
     [query.data, year],
   );
   const draft = draftEdits ?? baseDraft;
-  const dirty = draftEdits != null;
+  const dirty = draftEdits != null || deletedRows.length > 0;
 
   const mutation = useMutation({
     mutationFn: (request: NetworkPricesSaveRequest) => networkAPI.savePrices(networkId, request),
@@ -62,6 +64,7 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
       void queryClient.invalidateQueries({ queryKey: ['network-forecast', networkId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', networkId] });
       setDraftEdits(null);
+      setDeletedRows([]);
     },
   });
 
@@ -85,6 +88,15 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
     ]);
   };
 
+  const removeRow = (row: QuarterlyPriceDraft) => {
+    setDraftEdits((current) => (current ?? baseDraft).filter((item) => item.key !== row.key));
+    if (row.deleteRows.length > 0) {
+      setDeletedRows((current) => [...new Map(
+        [...current, ...row.deleteRows].map((item) => [item.id, item]),
+      ).values()]);
+    }
+  };
+
   const invalidRows = useMemo(() => draft.filter((row) => {
     const invalidPrice = row.prices.some((value) => {
       const price = parseNumberInput(value);
@@ -94,7 +106,7 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
   }), [draft]);
 
   const save = () => {
-    mutation.mutate({ year, rows: quarterlyPriceInputs(draft, year) });
+    mutation.mutate({ year, rows: quarterlyPriceInputs(draft, year), deleted_rows: deletedRows });
   };
 
   if (query.isLoading) return <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box>;
@@ -161,24 +173,39 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
                     )}
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    {row.manualNew ? (
-                      <TextField
-                        size="small"
-                        fullWidth
-                        multiline
-                        minRows={2}
-                        value={row.sku}
-                        disabled={!canEdit}
-                        onChange={(event) => updateRow(row.key, { sku: event.target.value })}
-                      />
-                    ) : (
-                      <Typography
-                        variant="body2"
-                        sx={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 }}
-                      >
-                        {row.sku}
-                      </Typography>
-                    )}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+                      {row.manualNew ? (
+                        <TextField
+                          size="small"
+                          fullWidth
+                          multiline
+                          minRows={2}
+                          value={row.sku}
+                          disabled={!canEdit}
+                          onChange={(event) => updateRow(row.key, { sku: event.target.value })}
+                        />
+                      ) : (
+                        <Typography
+                          variant="body2"
+                          sx={{ flex: 1, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 }}
+                        >
+                          {row.sku}
+                        </Typography>
+                      )}
+                      {canEdit && row.canDelete && (
+                        <Tooltip title={row.manualNew ? 'Убрать строку' : 'Удалить созданный вручную SKU'}>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            disabled={mutation.isPending}
+                            aria-label={`Удалить SKU ${row.sku || 'без названия'}`}
+                            onClick={() => removeRow(row)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
                   </TableCell>
                   {row.prices.map((price, quarterIndex) => (
                     <TableCell key={quarterIndex} align="right" sx={{ verticalAlign: 'top' }}>

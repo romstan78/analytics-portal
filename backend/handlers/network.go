@@ -92,6 +92,8 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Данные изменены другим пользователем. Обновите страницу и повторите."})
 	case errors.Is(err, repository.ErrNetworkPriceOverlap):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Периоды цены одного SKU не должны пересекаться"})
+	case errors.Is(err, repository.ErrNetworkPriceDeleteForbidden):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Удалять можно только SKU, созданные вручную"})
 	case errors.Is(err, repository.ErrNetworkClosedMonth):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Закрытый месяц нельзя изменять"})
 	case errors.Is(err, repository.ErrNetworkPeriodGroupInvalid):
@@ -626,8 +628,9 @@ func GetNetworkPrices(c *gin.Context) {
 }
 
 type savePricesInput struct {
-	Year int                                    `json:"year"`
-	Rows []repository.NetworkContractPriceInput `json:"rows"`
+	Year        int                                          `json:"year"`
+	Rows        []repository.NetworkContractPriceInput       `json:"rows"`
+	DeletedRows []repository.NetworkContractPriceDeleteInput `json:"deleted_rows"`
 }
 
 func SaveNetworkPrices(c *gin.Context) {
@@ -651,7 +654,7 @@ func SaveNetworkPrices(c *gin.Context) {
 	}
 	username, _ := currentUser(c)
 	if err := repository.SaveNetworkContractPrices(repository.SaveNetworkPricesInput{
-		NetworkID: id, Rows: input.Rows, UserName: username,
+		NetworkID: id, Rows: input.Rows, DeletedRows: input.DeletedRows, UserName: username,
 	}); err != nil {
 		respondNetworkError(c, err, "network_prices_save_failed")
 		return
@@ -663,7 +666,9 @@ func SaveNetworkPrices(c *gin.Context) {
 	}
 	_ = repository.InsertEntityAuditLog(
 		"network_price", id, username, "UPDATE",
-		jsonString(map[string]interface{}{"year": input.Year, "rows": len(input.Rows)}),
+		jsonString(map[string]interface{}{
+			"year": input.Year, "rows": len(input.Rows), "deleted_rows": len(input.DeletedRows),
+		}),
 	)
 	c.JSON(http.StatusOK, models.NetworkPricesSaveResponse{
 		Message: "Saved",

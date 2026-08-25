@@ -1,4 +1,8 @@
-import type { NetworkContractPrice, NetworkContractPriceInput } from '../types/network';
+import type {
+  NetworkContractPrice,
+  NetworkContractPriceDeleteInput,
+  NetworkContractPriceInput,
+} from '../types/network';
 import { formatNumberInput, parseNumberInput } from './networkPlan';
 
 export type PriceQuarterValues<T> = [T, T, T, T];
@@ -15,6 +19,8 @@ export interface QuarterlyPriceDraft {
   olapYear: number | null;
   olapMonth: number | null;
   manualNew: boolean;
+  canDelete: boolean;
+  deleteRows: NetworkContractPriceDeleteInput[];
 }
 
 const quarterBounds = (year: number, quarter: number): { from: string; to: string } => {
@@ -61,6 +67,11 @@ export const buildQuarterlyPriceDrafts = (
     });
     const representative = selected.find((row) => row != null) ?? sorted[0];
     const olap = sorted.find((row) => row.olap_price != null) ?? representative;
+    const deleteRows = [...new Map(
+      sorted
+        .filter((row) => row.id > 0)
+        .map((row) => [row.id, { id: row.id, updated_at: row.updated_at }]),
+    ).values()];
 
     result.push({
       key: `sku-${key}`,
@@ -74,6 +85,10 @@ export const buildQuarterlyPriceDrafts = (
       olapYear: olap.olap_year,
       olapMonth: olap.olap_month,
       manualNew: false,
+      canDelete: deleteRows.length > 0
+        && olap.olap_price == null
+        && sorted.every((row) => row.source_type === 'manual'),
+      deleteRows,
     });
   }
 
@@ -92,6 +107,8 @@ export const createEmptyQuarterlyPriceDraft = (key: string): QuarterlyPriceDraft
   olapYear: null,
   olapMonth: null,
   manualNew: true,
+  canDelete: true,
+  deleteRows: [],
 });
 
 // Один физический период может заполнить сразу четыре ячейки (годовая цена),
