@@ -211,6 +211,8 @@ export interface Network {
   month2_pct: number;
   month3_pct: number;
   has_annual_investment_cumulative: boolean;
+  default_entry_level: string;
+  default_entry_unit: string;
   created_at: string | null;
   updated_at: string;
 }
@@ -234,6 +236,8 @@ export interface NetworkPlan {
   in_gross: boolean;
   plan_rub: number | null;
   plan_units: number | null;
+  entry_level: string;
+  entry_unit: string;
   month1_pct: number;
   month2_pct: number;
   month3_pct: number;
@@ -460,6 +464,11 @@ export interface NetworkForecastMonth {
   contract_price: number | null;
   plan_rub: number | null;
   plan_investments_rub: number | null;
+  investments_pct: number | null;
+  investments_source: string;
+  entry_level: string;
+  entry_unit: string;
+  is_derived: boolean;
   fact_rub: number | null;
   fact_units: number | null;
   fact_investments_rub: number | null;
@@ -576,6 +585,8 @@ export interface NetworkPlanInput {
   plan_rub: number | null;
   forecast_rub: number | null;
   investments_pct: number | null;
+  entry_level: string;
+  entry_unit: string;
   updated_at: string;
 }
 

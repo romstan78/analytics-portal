@@ -69,7 +69,8 @@ describe('deltaPct / formatSignedPct', () => {
 describe('amountsOfPlan', () => {
   const plan = (patch: Partial<NetworkPlan>): NetworkPlan => ({
     id: 1, network_id: 1, year: 2026, quarter: 1, brand_as: 'Альфа', in_gross: true,
-    plan_rub: null, plan_units: null, month1_pct: 30, month2_pct: 30, month3_pct: 40,
+    plan_rub: null, plan_units: null, entry_level: 'brand', entry_unit: 'rub',
+    month1_pct: 30, month2_pct: 30, month3_pct: 40,
     fact_rub: null, forecast_rub: null,
     fact_investments_rub: null, fact_investments_rub_net: null,
     investments_pct: null, investments_rub: null, investments_rub_net: null,

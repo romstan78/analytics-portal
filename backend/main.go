@@ -188,6 +188,7 @@ func main() {
 		api.POST("/networks/:id/forecast/import/preview", middleware.RoleRequired("admin", "kam"), handlers.PreviewNetworkForecastImport)
 		api.POST("/networks/:id/forecast/import", middleware.RoleRequired("admin", "kam"), handlers.ImportNetworkForecast)
 		api.POST("/networks/:id/forecast/clear", middleware.RoleRequired("admin", "kam"), handlers.ClearNetworkForecast)
+		api.POST("/networks/:id/entry-mode", middleware.RoleRequired("admin", "kam"), handlers.UpdateNetworkEntryMode)
 		api.POST("/networks/:id/prices", middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPrices)
 		// Пересчёт черновика: расчёт живёт только на бэкенде, в БД не пишет.
 		api.POST("/networks/:id/plan/preview", middleware.RoleRequired("admin", "kam"), handlers.PreviewNetworkPlan)

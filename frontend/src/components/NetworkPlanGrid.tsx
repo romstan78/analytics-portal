@@ -139,6 +139,10 @@ export default function NetworkPlanGrid({
           plan_rub: parseNumberInput(cell.planRub),
           forecast_rub: parseNumberInput(cell.forecastRub),
           investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
+          // Режим ведения бренда эта форма пока не редактирует: пустые значения
+          // означают «оставить сохранённый», и бренд не переключается вслепую.
+          entry_level: '',
+          entry_unit: '',
           updated_at: versions.get(planKey(quarter, brand)) ?? '',
         });
       });

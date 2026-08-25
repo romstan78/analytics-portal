@@ -52,6 +52,15 @@ export type {
 // из двух значений, поэтому сужение живёт здесь.
 export type NetworkType = 'regular' | 'warehouse';
 
+// Откуда взялась сумма инвестиций в строке прогноза. В Go это строка с
+// проверкой на стороне сервера; форме нужен закрытый список.
+export type NetworkInvestmentsSource = 'fact' | 'pct' | 'override' | 'none';
+
+// Режим ведения бренда: на каком уровне вводят значения и в какой единице.
+// Один и тот же для вкладок «Планы» и «Прогноз».
+export type NetworkEntryLevel = 'brand' | 'sku';
+export type NetworkEntryUnit = 'rub' | 'units';
+
 // Запись аудита для entity_type network / network_plan.
 export type NetworkAuditRow = AuditLogRow;
 
