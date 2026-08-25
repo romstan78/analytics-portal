@@ -24,6 +24,12 @@ import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
 import { usePromoCalculations } from '../hooks/usePromoCalculations';
+import {
+  buildPromoDrilldownFilters,
+  clonePromoFilters,
+  selectPromoDashboardFilters,
+  type DashboardReturnMode,
+} from '../utils/promoDashboardNavigation';
 
 const PromoForm = lazy(() => import('./PromoForm'));
 const PromoApproval = lazy(() => import('./PromoApproval'));
@@ -124,6 +130,11 @@ interface PromoAnalysisProps {
   role: string | null;
 }
 
+interface DashboardFilterSnapshot {
+  filters: Record<string, unknown>;
+  deletedFilter: string;
+}
+
 export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -134,6 +145,8 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [promoViewOnly, setPromoViewOnly] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [dashboardReturnDialogOpen, setDashboardReturnDialogOpen] = useState(false);
+  const [dashboardOrigin, setDashboardOrigin] = useState<DashboardFilterSnapshot | null>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' });
   const [deletedFilter, setDeletedFilter] = useState(''); // "" = active, "deleted" = only deleted, "all" = both
 
@@ -220,9 +233,30 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   };
 
   const handleDashboardDrilldown = useCallback((nextFilters: Record<string, unknown>) => {
-    applyFilters({ ...appliedFilters, ...nextFilters });
+    setDashboardOrigin({
+      filters: clonePromoFilters(appliedFilters),
+      deletedFilter,
+    });
+    applyFilters(buildPromoDrilldownFilters(appliedFilters, nextFilters));
     setTab(1);
-  }, [appliedFilters, applyFilters]);
+  }, [appliedFilters, applyFilters, deletedFilter]);
+
+  const handleTabChange = useCallback((nextTab: number) => {
+    if (nextTab === 0 && tab !== 0 && dashboardOrigin) {
+      setDashboardReturnDialogOpen(true);
+      return;
+    }
+    setTab(nextTab);
+  }, [dashboardOrigin, tab]);
+
+  const handleDashboardReturn = useCallback((mode: DashboardReturnMode) => {
+    if (!dashboardOrigin) return;
+    applyFilters(selectPromoDashboardFilters(mode, dashboardOrigin.filters, appliedFilters));
+    if (mode === 'original') setDeletedFilter(dashboardOrigin.deletedFilter);
+    setDashboardReturnDialogOpen(false);
+    setDashboardOrigin(null);
+    setTab(0);
+  }, [appliedFilters, applyFilters, dashboardOrigin]);
 
   const handleHistoryPromoOpen = async (id: number) => {
     try {
@@ -335,7 +369,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       </Stack>
 
       {/* ─── Вкладки ─────────────────────────────────────────────────── */}
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+      <Tabs value={tab} onChange={(_, v: number) => handleTabChange(v)} sx={{ mb: 2 }}>
         <Tab label="Дашборд" />
         <Tab label="Просмотр данных" />
         <Tab label="Новое промо" />
@@ -491,6 +525,25 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
           <Button onClick={() => setDeleteDialogOpen(false)}>Отмена</Button>
           <Button color="error" variant="contained" onClick={handleDelete} disabled={deleting}>
             {deleting ? 'Удаление...' : 'Удалить'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={dashboardReturnDialogOpen} onClose={() => setDashboardReturnDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>С какими фильтрами открыть дашборд?</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            Вы перешли в детализацию из дашборда. Можно восстановить исходный срез
+            или построить дашборд по фильтрам, применённым в детализации.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, flexWrap: 'wrap' }}>
+          <Button onClick={() => setDashboardReturnDialogOpen(false)}>Отмена</Button>
+          <Button variant="outlined" onClick={() => handleDashboardReturn('detail')}>
+            Фильтры детализации
+          </Button>
+          <Button variant="contained" onClick={() => handleDashboardReturn('original')}>
+            Исходные фильтры дашборда
           </Button>
         </DialogActions>
       </Dialog>
