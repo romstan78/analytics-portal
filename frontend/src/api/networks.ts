@@ -34,7 +34,7 @@ export const networkAPI = {
     fetchWithAuth(`${API_BASE}/api/networks?${buildParams(params)}`)
       .then(r => parseJSONResponse<NetworkListResponse>(r, 'Ошибка загрузки списка сетей')),
 
-  // Бренды для строк плана (планы ведутся по брендам, не по СКЮ)
+  // Бренды для строк плана (планы ведутся по брендам, не по SKU)
   getBrands: (): Promise<NetworkBrandsResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/brands`)
       .then(r => parseJSONResponse<NetworkBrandsResponse>(r, 'Ошибка загрузки брендов')),
@@ -57,6 +57,18 @@ export const networkAPI = {
     kam?: string;
     network_type?: string;
     is_active?: boolean;
+    vat_included?: boolean;
+    vat_rate?: number;
+    month1_pct?: number;
+    month2_pct?: number;
+    month3_pct?: number;
+    has_annual_investment_cumulative?: boolean;
+    year?: number;
+    periods?: Array<{
+      quarter: number;
+      vat_included: boolean;
+      vat_rate: number;
+    }>;
     updated_at: string;
   }): Promise<NetworkSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}`, { method: 'PATCH', body: JSON.stringify(data) })

@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -67,12 +68,21 @@ func aggregateFacts(facts []models.NetworkMonthlyFact) (map[string]monthlyFactAg
 	return brandRows, skuRows
 }
 
-func allocationForPlan(plan models.NetworkPlan) [3]float64 {
+func networkMonthlyDistribution(network models.Network) [3]float64 {
+	distribution := [3]float64{network.Month1Pct, network.Month2Pct, network.Month3Pct}
+	if distribution[0] < 0 || distribution[1] < 0 || distribution[2] < 0 ||
+		math.Abs(distribution[0]+distribution[1]+distribution[2]-100) > 0.001 {
+		return [3]float64{30, 30, 40}
+	}
+	return distribution
+}
+
+func allocationForPlan(plan models.NetworkPlan, distribution [3]float64) [3]float64 {
 	if plan.PlanRub == nil {
 		return [3]float64{}
 	}
-	first := round2(*plan.PlanRub * plan.Month1Pct / 100)
-	second := round2(*plan.PlanRub * plan.Month2Pct / 100)
+	first := round2(*plan.PlanRub * distribution[0] / 100)
+	second := round2(*plan.PlanRub * distribution[1] / 100)
 	third := round2(*plan.PlanRub - first - second)
 	return [3]float64{first, second, third}
 }
@@ -234,6 +244,7 @@ func BuildNetworkForecast(
 ) models.NetworkForecastResponse {
 	monthFrom := (quarter-1)*3 + 1
 	monthTo := monthFrom + 2
+	monthDistribution := networkMonthlyDistribution(network)
 	brandFacts, skuFacts := aggregateFacts(facts)
 
 	planByBrand := map[string]models.NetworkPlan{}
@@ -293,7 +304,7 @@ func BuildNetworkForecast(
 	brandTotals := make([]models.NetworkForecastBrandTotals, 0, len(brandNames))
 	for _, brand := range brandNames {
 		plan := planByBrand[brand]
-		planMonths := allocationForPlan(plan)
+		planMonths := allocationForPlan(plan, monthDistribution)
 		investmentMonths := investmentAllocationForPlan(plan, planMonths)
 		brandTotal := models.NetworkForecastBrandTotals{BrandAS: brand}
 

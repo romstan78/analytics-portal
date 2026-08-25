@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -122,18 +123,121 @@ func GetNetworks(c *gin.Context) {
 }
 
 type networkInput struct {
-	Name        string  `json:"name"`
-	KAM         string  `json:"kam"`
-	NetworkType string  `json:"network_type"`
-	IsActive    *bool   `json:"is_active"`
-	UpdatedAt   string  `json:"updated_at"`
-	VATIncluded *bool   `json:"vat_included"` // настройки первого периода
+	Name                          string               `json:"name"`
+	KAM                           string               `json:"kam"`
+	NetworkType                   string               `json:"network_type"`
+	IsActive                      *bool                `json:"is_active"`
+	Month1Pct                     *float64             `json:"month1_pct"`
+	Month2Pct                     *float64             `json:"month2_pct"`
+	Month3Pct                     *float64             `json:"month3_pct"`
+	HasAnnualInvestmentCumulative *bool                `json:"has_annual_investment_cumulative"`
+	UpdatedAt                     string               `json:"updated_at"`
+	VATIncluded                   *bool                `json:"vat_included"`
+	VATRate                       *float64             `json:"vat_rate"`
+	Year                          int                  `json:"year"`
+	Periods                       []networkPeriodInput `json:"periods"`
+}
+
+func networkProfileSettings(input networkInput, fallback models.Network) (float64, float64, float64, bool, error) {
+	month1Pct, month2Pct, month3Pct := fallback.Month1Pct, fallback.Month2Pct, fallback.Month3Pct
+	if input.Month1Pct != nil {
+		month1Pct = *input.Month1Pct
+	}
+	if input.Month2Pct != nil {
+		month2Pct = *input.Month2Pct
+	}
+	if input.Month3Pct != nil {
+		month3Pct = *input.Month3Pct
+	}
+	hasAnnualInvestmentCumulative := fallback.HasAnnualInvestmentCumulative
+	if input.HasAnnualInvestmentCumulative != nil {
+		hasAnnualInvestmentCumulative = *input.HasAnnualInvestmentCumulative
+	}
+
+	if month1Pct < 0 || month1Pct > 100 ||
+		month2Pct < 0 || month2Pct > 100 ||
+		month3Pct < 0 || month3Pct > 100 ||
+		math.Abs(month1Pct+month2Pct+month3Pct-100) > 0.001 {
+		return 0, 0, 0, false, fmt.Errorf(
+			"распределение месяцев должно давать 100%%: %.2f + %.2f + %.2f",
+			month1Pct, month2Pct, month3Pct,
+		)
+	}
+	return month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, nil
+}
+
+func networkVATSettings(input networkInput, fallback models.Network) (bool, float64, error) {
+	vatIncluded, vatRate := fallback.VATIncluded, fallback.VATRate
+	if input.VATIncluded != nil {
+		vatIncluded = *input.VATIncluded
+	}
+	if input.VATRate != nil {
+		vatRate = *input.VATRate
+	}
+	if vatRate < 0 || vatRate >= 100 {
+		return false, 0, errors.New("ставка НДС вне диапазона")
+	}
+	return vatIncluded, vatRate, nil
+}
+
+// networkPeriodsWithDefaults возвращает все четыре квартала. Сохранённые
+// настройки не меняются, а ещё не открытые кварталы получают значения по
+// умолчанию из карточки сети.
+func networkPeriodsWithDefaults(
+	network models.Network,
+	year int,
+	persisted []models.NetworkPeriod,
+) []models.NetworkPeriod {
+	byQuarter := make(map[int]models.NetworkPeriod, len(persisted))
+	for _, period := range persisted {
+		byQuarter[period.Quarter] = period
+	}
+	periods := make([]models.NetworkPeriod, 0, 4)
+	for quarter := 1; quarter <= 4; quarter++ {
+		period := byQuarter[quarter]
+		period.NetworkID = network.ID
+		period.Year = year
+		period.Quarter = quarter
+		if period.ID == 0 {
+			period.VATIncluded = network.VATIncluded
+			period.VATRate = network.VATRate
+		}
+		periods = append(periods, period)
+	}
+	return periods
+}
+
+type networkPeriodInput struct {
+	Quarter     int     `json:"quarter"`
+	VATIncluded bool    `json:"vat_included"`
 	VATRate     float64 `json:"vat_rate"`
-	Year        int     `json:"year"`
+}
+
+func networkPeriodsFromInput(
+	network models.Network,
+	year int,
+	persisted []models.NetworkPeriod,
+	input []networkPeriodInput,
+) ([]models.NetworkPeriod, error) {
+	periods := networkPeriodsWithDefaults(network, year, persisted)
+	seen := make(map[int]bool, len(input))
+	for _, requested := range input {
+		if requested.Quarter < 1 || requested.Quarter > 4 || seen[requested.Quarter] {
+			return nil, fmt.Errorf("некорректный квартал: %d", requested.Quarter)
+		}
+		seen[requested.Quarter] = true
+		if requested.VATRate < 0 || requested.VATRate >= 100 {
+			return nil, errors.New("ставка НДС вне диапазона")
+		}
+		periods[requested.Quarter-1].VATIncluded = requested.VATIncluded
+		periods[requested.Quarter-1].VATRate = requested.VATRate
+	}
+	return periods, nil
 }
 
 // CreateNetwork заводит сеть и, если переданы настройки, сразу открывает год:
-// четыре квартала с одинаковым НДС и типом контракта.
+// четыре квартала получают одинаковые начальные настройки НДС, которые затем
+// можно изменить отдельно в профиле сети.
 func CreateNetwork(c *gin.Context) {
 	var input networkInput
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -154,7 +258,25 @@ func CreateNetwork(c *gin.Context) {
 		return
 	}
 
-	id, err := repository.InsertNetwork(input.Name, input.KAM, input.NetworkType)
+	month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, err := networkProfileSettings(
+		input,
+		models.Network{Month1Pct: 30, Month2Pct: 30, Month3Pct: 40},
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	vatIncluded, vatRate, err := networkVATSettings(input, models.Network{VATIncluded: true, VATRate: 20})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	id, err := repository.InsertNetwork(
+		input.Name, input.KAM, input.NetworkType,
+		vatIncluded, vatRate,
+		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative,
+	)
 	if err != nil {
 		respondNetworkError(c, err, "network_create_failed")
 		return
@@ -166,20 +288,9 @@ func CreateNetwork(c *gin.Context) {
 
 	// Первый год открываем сразу, чтобы КАМ попал в готовую сетку планов.
 	if input.Year > 0 {
-		vatIncluded := true
-		if input.VATIncluded != nil {
-			vatIncluded = *input.VATIncluded
-		}
-		vatRate := input.VATRate
-		if vatRate <= 0 {
-			vatRate = 20
-		}
-		periods := make([]models.NetworkPeriod, 0, 4)
-		for q := 1; q <= 4; q++ {
-			periods = append(periods, models.NetworkPeriod{
-				Quarter: q, VATIncluded: vatIncluded, VATRate: vatRate,
-			})
-		}
+		periods := networkPeriodsWithDefaults(models.Network{
+			ID: id, VATIncluded: vatIncluded, VATRate: vatRate,
+		}, input.Year, nil)
 		if _, err := repository.SaveNetworkPlan(repository.SaveNetworkPlanInput{
 			NetworkID: id, Year: input.Year, Periods: periods, UserName: username,
 		}); err != nil {
@@ -231,8 +342,43 @@ func UpdateNetwork(c *gin.Context) {
 	if input.IsActive != nil {
 		isActive = *input.IsActive
 	}
+	month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, err := networkProfileSettings(input, current)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	vatIncluded, vatRate, err := networkVATSettings(input, current)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var profilePeriods []models.NetworkPeriod
+	var previousProfilePeriods []models.NetworkPeriod
+	if input.Periods != nil {
+		if input.Year < 2000 || input.Year > 2100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
+			return
+		}
+		storedPeriods, fetchErr := repository.GetNetworkPeriods(id, input.Year)
+		if fetchErr != nil {
+			respondNetworkError(c, fetchErr, "network_periods_failed")
+			return
+		}
+		previousProfilePeriods = storedPeriods
+		profilePeriods, err = networkPeriodsFromInput(current, input.Year, storedPeriods, input.Periods)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 
-	if err := repository.UpdateNetwork(id, name, input.KAM, networkType, isActive, input.UpdatedAt); err != nil {
+	if err := repository.UpdateNetwork(
+		id, name, input.KAM, networkType, isActive,
+		vatIncluded, vatRate,
+		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative,
+		input.Year, profilePeriods,
+		input.UpdatedAt,
+	); err != nil {
 		respondNetworkError(c, err, "network_update_failed")
 		return
 	}
@@ -250,6 +396,44 @@ func UpdateNetwork(c *gin.Context) {
 	}
 	if current.IsActive != isActive {
 		changes["is_active"] = map[string]interface{}{"old": current.IsActive, "new": isActive}
+	}
+	if current.VATIncluded != vatIncluded {
+		changes["vat_included"] = map[string]interface{}{"old": current.VATIncluded, "new": vatIncluded}
+	}
+	if current.VATRate != vatRate {
+		changes["vat_rate"] = map[string]interface{}{"old": current.VATRate, "new": vatRate}
+	}
+	if current.Month1Pct != month1Pct || current.Month2Pct != month2Pct || current.Month3Pct != month3Pct {
+		changes["month_distribution"] = map[string]interface{}{
+			"old": []float64{current.Month1Pct, current.Month2Pct, current.Month3Pct},
+			"new": []float64{month1Pct, month2Pct, month3Pct},
+		}
+	}
+	if current.HasAnnualInvestmentCumulative != hasAnnualInvestmentCumulative {
+		changes["has_annual_investment_cumulative"] = map[string]interface{}{
+			"old": current.HasAnnualInvestmentCumulative,
+			"new": hasAnnualInvestmentCumulative,
+		}
+	}
+	if input.Periods != nil {
+		previousWithDefaults := networkPeriodsWithDefaults(current, input.Year, previousProfilePeriods)
+		storedByQuarter := make(map[int]models.NetworkPeriod, len(previousWithDefaults))
+		for _, period := range previousWithDefaults {
+			storedByQuarter[period.Quarter] = period
+		}
+		for _, period := range profilePeriods {
+			old := storedByQuarter[period.Quarter]
+			if old.VATIncluded != period.VATIncluded {
+				changes[fmt.Sprintf("vat_included_q%d", period.Quarter)] = map[string]interface{}{
+					"old": old.VATIncluded, "new": period.VATIncluded,
+				}
+			}
+			if old.VATRate != period.VATRate {
+				changes[fmt.Sprintf("vat_rate_q%d", period.Quarter)] = map[string]interface{}{
+					"old": old.VATRate, "new": period.VATRate,
+				}
+			}
+		}
 	}
 	if len(changes) > 0 {
 		_ = repository.InsertEntityAuditLog("network", id, username, "UPDATE", jsonString(changes))
@@ -287,6 +471,7 @@ func GetNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_periods_failed")
 		return
 	}
+	periods = networkPeriodsWithDefaults(network, year, periods)
 	plans, err := repository.GetNetworkPlans(id, year)
 	if err != nil {
 		respondNetworkError(c, err, "network_plans_failed")
@@ -309,19 +494,15 @@ func GetNetworkPlan(c *gin.Context) {
 		YearTotals:                 services.SumYearTotals(totals),
 		PeriodGroups:               periodGroups,
 		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
-		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulativeForNetwork(network, plans, periods, totals),
 	})
 }
 
 type savePlanInput struct {
 	Year         int                                  `json:"year"`
 	PeriodGroups []repository.NetworkPeriodGroupInput `json:"period_groups"`
-	Periods      []struct {
-		Quarter     int     `json:"quarter"`
-		VATIncluded bool    `json:"vat_included"`
-		VATRate     float64 `json:"vat_rate"`
-	} `json:"periods"`
-	Plans []repository.NetworkPlanInput `json:"plans"`
+	Periods      []networkPeriodInput                 `json:"periods"`
+	Plans        []repository.NetworkPlanInput        `json:"plans"`
 }
 
 // SaveNetworkPlan сохраняет кварталы и строки плана одной транзакцией.
@@ -340,20 +521,21 @@ func SaveNetworkPlan(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
 		return
 	}
-	if _, err := repository.GetNetworkByID(id); err != nil {
+	network, err := repository.GetNetworkByID(id)
+	if err != nil {
 		respondNetworkError(c, err, "network_plan_save_fetch_failed")
 		return
 	}
 
-	periods := make([]models.NetworkPeriod, 0, len(input.Periods))
-	for _, p := range input.Periods {
-		if p.VATRate < 0 || p.VATRate >= 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Ставка НДС вне диапазона"})
-			return
-		}
-		periods = append(periods, models.NetworkPeriod{
-			Quarter: p.Quarter, VATIncluded: p.VATIncluded, VATRate: p.VATRate,
-		})
+	storedPeriods, err := repository.GetNetworkPeriods(id, input.Year)
+	if err != nil {
+		respondNetworkError(c, err, "network_periods_failed")
+		return
+	}
+	periods, err := networkPeriodsFromInput(network, input.Year, storedPeriods, input.Periods)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	username, _ := currentUser(c)
@@ -374,6 +556,7 @@ func SaveNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_periods_failed")
 		return
 	}
+	updatedPeriods = networkPeriodsWithDefaults(network, input.Year, updatedPeriods)
 	updatedPlans, err := repository.GetNetworkPlans(id, input.Year)
 	if err != nil {
 		respondNetworkError(c, err, "network_plans_failed")
@@ -397,7 +580,7 @@ func SaveNetworkPlan(c *gin.Context) {
 		YearTotals:                 services.SumYearTotals(totals),
 		PeriodGroups:               periodGroups,
 		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, updatedPlans, totals),
-		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(updatedPlans, updatedPeriods, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulativeForNetwork(network, updatedPlans, updatedPeriods, totals),
 	})
 }
 
@@ -419,17 +602,21 @@ func PreviewNetworkPlan(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
 		return
 	}
+	network, err := repository.GetNetworkByID(id)
+	if err != nil {
+		respondNetworkError(c, err, "network_plan_preview_fetch_failed")
+		return
+	}
 
-	periods := make([]models.NetworkPeriod, 0, len(input.Periods))
-	for _, p := range input.Periods {
-		if p.VATRate < 0 || p.VATRate >= 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Ставка НДС вне диапазона"})
-			return
-		}
-		periods = append(periods, models.NetworkPeriod{
-			NetworkID: id, Year: input.Year,
-			Quarter: p.Quarter, VATIncluded: p.VATIncluded, VATRate: p.VATRate,
-		})
+	storedPeriods, err := repository.GetNetworkPeriods(id, input.Year)
+	if err != nil {
+		respondNetworkError(c, err, "network_periods_failed")
+		return
+	}
+	periods, err := networkPeriodsFromInput(network, input.Year, storedPeriods, input.Periods)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	draft := make([]services.NetworkPlanDraft, 0, len(input.Plans))
@@ -439,16 +626,6 @@ func PreviewNetworkPlan(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный квартал"})
 			return
 		}
-		month1Pct, month2Pct, month3Pct := 30.0, 30.0, 40.0
-		if p.Month1Pct != nil {
-			month1Pct = *p.Month1Pct
-		}
-		if p.Month2Pct != nil {
-			month2Pct = *p.Month2Pct
-		}
-		if p.Month3Pct != nil {
-			month3Pct = *p.Month3Pct
-		}
 		draft = append(draft, services.NetworkPlanDraft{
 			Quarter:        p.Quarter,
 			BrandAS:        p.BrandAS,
@@ -456,9 +633,9 @@ func PreviewNetworkPlan(c *gin.Context) {
 			PlanRub:        p.PlanRub,
 			ForecastRub:    p.ForecastRub,
 			InvestmentsPct: p.InvestmentsPct,
-			Month1Pct:      month1Pct,
-			Month2Pct:      month2Pct,
-			Month3Pct:      month3Pct,
+			Month1Pct:      network.Month1Pct,
+			Month2Pct:      network.Month2Pct,
+			Month3Pct:      network.Month3Pct,
 		})
 		if p.BrandAS != nil {
 			allowedBrands[strings.TrimSpace(*p.BrandAS)] = true
@@ -495,7 +672,7 @@ func PreviewNetworkPlan(c *gin.Context) {
 		YearTotals:                 yearTotals,
 		PeriodGroups:               periodGroups,
 		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
-		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals),
+		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulativeForNetwork(network, plans, periods, totals),
 	})
 }
 
@@ -510,6 +687,7 @@ func loadNetworkForecast(networkID, year, quarter int) (models.NetworkForecastRe
 	if err != nil {
 		return models.NetworkForecastResponse{}, err
 	}
+	periods = networkPeriodsWithDefaults(network, year, periods)
 	plans, err := repository.GetNetworkPlans(networkID, year)
 	if err != nil {
 		return models.NetworkForecastResponse{}, err
@@ -624,7 +802,14 @@ func GetNetworkPrices(c *gin.Context) {
 		respondNetworkError(c, err, "network_prices_failed")
 		return
 	}
-	c.JSON(http.StatusOK, models.NetworkPricesResponse{Network: network, Year: year, Data: prices})
+	skuOptions, err := repository.GetNetworkPriceSKUOptions()
+	if err != nil {
+		respondNetworkError(c, err, "network_price_sku_options_failed")
+		return
+	}
+	c.JSON(http.StatusOK, models.NetworkPricesResponse{
+		Network: network, Year: year, Data: prices, SKUOptions: skuOptions,
+	})
 }
 
 type savePricesInput struct {
@@ -664,6 +849,11 @@ func SaveNetworkPrices(c *gin.Context) {
 		respondNetworkError(c, err, "network_prices_refetch_failed")
 		return
 	}
+	skuOptions, err := repository.GetNetworkPriceSKUOptions()
+	if err != nil {
+		respondNetworkError(c, err, "network_price_sku_options_failed")
+		return
+	}
 	_ = repository.InsertEntityAuditLog(
 		"network_price", id, username, "UPDATE",
 		jsonString(map[string]interface{}{
@@ -672,7 +862,9 @@ func SaveNetworkPrices(c *gin.Context) {
 	)
 	c.JSON(http.StatusOK, models.NetworkPricesSaveResponse{
 		Message: "Saved",
-		Data:    models.NetworkPricesResponse{Network: network, Year: input.Year, Data: prices},
+		Data: models.NetworkPricesResponse{
+			Network: network, Year: input.Year, Data: prices, SKUOptions: skuOptions,
+		},
 	})
 }
 

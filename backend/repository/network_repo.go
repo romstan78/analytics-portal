@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"backend/config"
@@ -29,11 +28,18 @@ var (
 // ─── Карточка сети ──────────────────────────────────────────────────────────
 
 const networkColumns = `id, name, kam, network_type, is_active,
-	CONVERT(NVARCHAR, created_at, 121), CONVERT(NVARCHAR, updated_at, 121)`
+		vat_included, vat_rate,
+		month1_pct, month2_pct, month3_pct, has_annual_investment_cumulative,
+		CONVERT(NVARCHAR, created_at, 121), CONVERT(NVARCHAR, updated_at, 121)`
 
 func scanNetwork(scanner interface{ Scan(...interface{}) error }) (models.Network, error) {
 	var n models.Network
-	err := scanner.Scan(&n.ID, &n.Name, &n.KAM, &n.NetworkType, &n.IsActive, &n.CreatedAt, &n.UpdatedAt)
+	err := scanner.Scan(
+		&n.ID, &n.Name, &n.KAM, &n.NetworkType, &n.IsActive,
+		&n.VATIncluded, &n.VATRate,
+		&n.Month1Pct, &n.Month2Pct, &n.Month3Pct, &n.HasAnnualInvestmentCumulative,
+		&n.CreatedAt, &n.UpdatedAt,
+	)
 	return n, err
 }
 
@@ -83,7 +89,12 @@ func GetNetworkByID(id int) (models.Network, error) {
 }
 
 // InsertNetwork заводит новую сеть и возвращает её ID.
-func InsertNetwork(name, kam, networkType string) (int, error) {
+func InsertNetwork(
+	name, kam, networkType string,
+	vatIncluded bool, vatRate float64,
+	month1Pct, month2Pct, month3Pct float64,
+	hasAnnualInvestmentCumulative bool,
+) (int, error) {
 	var exists int
 	if err := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_Networks WHERE name = ?", name).Scan(&exists); err != nil {
 		return 0, err
@@ -94,25 +105,52 @@ func InsertNetwork(name, kam, networkType string) (int, error) {
 
 	var id int
 	err := config.DB.QueryRow(
-		`INSERT INTO dbo.tbl_Networks (name, kam, network_type)
-		 OUTPUT INSERTED.id VALUES (?, ?, ?)`,
-		name, nullIfEmpty(kam), networkType,
+		`INSERT INTO dbo.tbl_Networks (
+			name, kam, network_type, vat_included, vat_rate,
+			month1_pct, month2_pct, month3_pct,
+			has_annual_investment_cumulative
+		 ) OUTPUT INSERTED.id VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, nullIfEmpty(kam), networkType, vatIncluded, vatRate,
+		month1Pct, month2Pct, month3Pct,
+		hasAnnualInvestmentCumulative,
 	).Scan(&id)
 	return id, err
 }
 
 // UpdateNetwork правит карточку сети с проверкой updated_at (optimistic locking).
-func UpdateNetwork(id int, name, kam, networkType string, isActive bool, updatedAt string) error {
+func UpdateNetwork(
+	id int,
+	name, kam, networkType string,
+	isActive bool,
+	vatIncluded bool, vatRate float64,
+	month1Pct, month2Pct, month3Pct float64,
+	hasAnnualInvestmentCumulative bool,
+	year int, periods []models.NetworkPeriod,
+	updatedAt string,
+) error {
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	query := `UPDATE dbo.tbl_Networks
-		SET name = ?, kam = ?, network_type = ?, is_active = ?, updated_at = GETDATE()
-		WHERE id = ?`
-	args := []interface{}{name, nullIfEmpty(kam), networkType, isActive, id}
+			SET name = ?, kam = ?, network_type = ?, is_active = ?,
+				vat_included = ?, vat_rate = ?,
+				month1_pct = ?, month2_pct = ?, month3_pct = ?,
+				has_annual_investment_cumulative = ?, updated_at = GETDATE()
+			WHERE id = ?`
+	args := []interface{}{
+		name, nullIfEmpty(kam), networkType, isActive,
+		vatIncluded, vatRate,
+		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, id,
+	}
 	if updatedAt != "" {
 		query += " AND CONVERT(NVARCHAR, updated_at, 121) = ?"
 		args = append(args, updatedAt)
 	}
 
-	res, err := config.DB.Exec(query, args...)
+	res, err := tx.Exec(query, args...)
 	if err != nil {
 		return err
 	}
@@ -123,7 +161,7 @@ func UpdateNetwork(id int, name, kam, networkType string, isActive bool, updated
 	if affected == 0 {
 		// Строка есть, но версия устарела — иначе сети просто нет.
 		var exists int
-		if err := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_Networks WHERE id = ?", id).Scan(&exists); err != nil {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM dbo.tbl_Networks WHERE id = ?", id).Scan(&exists); err != nil {
 			return err
 		}
 		if exists == 0 {
@@ -131,7 +169,12 @@ func UpdateNetwork(id int, name, kam, networkType string, isActive bool, updated
 		}
 		return ErrNetworkConflict
 	}
-	return nil
+	for _, period := range periods {
+		if err := upsertPeriodTx(tx, id, year, period); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func nullIfEmpty(v string) interface{} {
@@ -302,13 +345,15 @@ func GetNetworkPeriodGroups(networkID, year int) ([]models.NetworkPeriodGroup, e
 // GetNetworkPlans возвращает строки плана сети за год.
 func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	rows, err := config.DB.Query(
-		`SELECT id, network_id, [year], [quarter], brand_as, in_gross, plan_rub, plan_units,
-			month1_pct, month2_pct, month3_pct,
-			fact_rub, forecast_rub, investments_pct, fact_investments_rub,
-			forecast_investments_rub, updated_by,
-			CONVERT(NVARCHAR, updated_at, 121)
-		 FROM dbo.tbl_NetworkPlans WHERE network_id = ? AND [year] = ?
-		 ORDER BY [quarter], brand_as`,
+		`SELECT p.id, p.network_id, p.[year], p.[quarter], p.brand_as, p.in_gross, p.plan_rub, p.plan_units,
+			n.month1_pct, n.month2_pct, n.month3_pct,
+			p.fact_rub, p.forecast_rub, p.investments_pct, p.fact_investments_rub,
+			p.forecast_investments_rub, p.updated_by,
+			CONVERT(NVARCHAR, p.updated_at, 121)
+		 FROM dbo.tbl_NetworkPlans p
+		 JOIN dbo.tbl_Networks n ON n.id = p.network_id
+		 WHERE p.network_id = ? AND p.[year] = ?
+		 ORDER BY p.[quarter], p.brand_as`,
 		networkID, year,
 	)
 	if err != nil {
@@ -340,9 +385,6 @@ type NetworkPlanInput struct {
 	PlanRub        *float64 `json:"plan_rub"`
 	ForecastRub    *float64 `json:"forecast_rub"`
 	InvestmentsPct *float64 `json:"investments_pct"`
-	Month1Pct      *float64 `json:"month1_pct"`
-	Month2Pct      *float64 `json:"month2_pct"`
-	Month3Pct      *float64 `json:"month3_pct"`
 	UpdatedAt      string   `json:"updated_at"`
 }
 
@@ -417,6 +459,10 @@ func planRowsToWrite(
 // пустая строка бренда заводится, а сохранённая строка, которой в запросе нет,
 // удаляется.
 func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
+	network, err := GetNetworkByID(in.NetworkID)
+	if err != nil {
+		return "", err
+	}
 	existing, err := GetNetworkPlans(in.NetworkID, in.Year)
 	if err != nil {
 		return "", err
@@ -475,6 +521,7 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	var changes []planChange
+	month1Pct, month2Pct, month3Pct := network.Month1Pct, network.Month2Pct, network.Month3Pct
 
 	for _, p := range in.Periods {
 		if p.Quarter < 1 || p.Quarter > 4 {
@@ -515,23 +562,6 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 
 		key := planKey(p.Quarter, p.BrandAS)
 		old, exists := existingByKey[key]
-		month1Pct, month2Pct, month3Pct := 30.0, 30.0, 40.0
-		if exists {
-			month1Pct, month2Pct, month3Pct = old.Month1Pct, old.Month2Pct, old.Month3Pct
-		}
-		if p.Month1Pct != nil {
-			month1Pct = *p.Month1Pct
-		}
-		if p.Month2Pct != nil {
-			month2Pct = *p.Month2Pct
-		}
-		if p.Month3Pct != nil {
-			month3Pct = *p.Month3Pct
-		}
-		if month1Pct < 0 || month2Pct < 0 || month3Pct < 0 ||
-			math.Abs(month1Pct+month2Pct+month3Pct-100) > 0.001 {
-			return "", fmt.Errorf("распределение квартала должно давать 100%%: %.2f + %.2f + %.2f", month1Pct, month2Pct, month3Pct)
-		}
 		brandLabel := ""
 		if p.BrandAS != nil {
 			brandLabel = *p.BrandAS
@@ -553,13 +583,6 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			}
 			if old.InGross != p.InGross {
 				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "in_gross", Old: old.InGross, New: p.InGross})
-			}
-			if old.Month1Pct != month1Pct || old.Month2Pct != month2Pct || old.Month3Pct != month3Pct {
-				changes = append(changes, planChange{
-					Quarter: p.Quarter, Brand: brandLabel, Field: "month_distribution",
-					Old: []float64{old.Month1Pct, old.Month2Pct, old.Month3Pct},
-					New: []float64{month1Pct, month2Pct, month3Pct},
-				})
 			}
 			if _, err := tx.Exec(
 				`UPDATE dbo.tbl_NetworkPlans
@@ -778,7 +801,7 @@ func GetNetworkAuditLog(networkID int) ([]models.AuditLogRow, error) {
 	return result, rows.Err()
 }
 
-// GetBrandOptions — список брендов для планирования (планы ведутся по брендам, не по СКЮ).
+// GetBrandOptions — список брендов для планирования (планы ведутся по брендам, не по SKU).
 func GetBrandOptions() ([]string, error) {
 	rows, err := config.DB.Query(
 		`SELECT DISTINCT brand_as FROM dbo.tbl_SKUMapping

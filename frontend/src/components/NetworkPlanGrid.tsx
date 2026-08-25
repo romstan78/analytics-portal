@@ -12,12 +12,9 @@ import {
   Autocomplete,
   Box,
   Button,
-  Paper,
-  Switch,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
@@ -34,23 +31,19 @@ import {
   brandsFromPlans,
   buildAmounts,
   buildDraft,
-  buildSettings,
   parseNumberInput,
   planKey,
   round2,
   shiftGrossPool,
 } from '../utils/networkPlan';
-import type { DraftCell, QuarterSettings } from '../utils/networkPlan';
+import type { DraftCell } from '../utils/networkPlan';
 import NetworkPlanSummary from './NetworkPlanSummary';
-import NetworkAllocationEditor from './NetworkAllocationEditor';
 import NetworkAnnualInvestmentCumulative from './NetworkAnnualInvestmentCumulative';
 import NetworkPeriodGroupsEditor from './NetworkPeriodGroupsEditor';
 import NetworkQuarterTable from './NetworkQuarterTable';
 import NetworkYearTable from './NetworkYearTable';
 import { YEAR_METRICS } from '../utils/networkPlanView';
 import type { YearMetric } from '../utils/networkPlanView';
-
-const DEFAULT_SETTINGS: QuarterSettings = { vat_included: true, vat_rate: 20 };
 
 const buildPeriodGroups = (data: NetworkPlanResponse): NetworkPeriodGroupInput[] =>
   data.period_groups.map((group) => ({
@@ -96,7 +89,6 @@ export default function NetworkPlanGrid({
   commentedCells,
 }: NetworkPlanGridProps) {
   const [draft, setDraft] = useState<Record<string, DraftCell>>(() => buildDraft(data.plans));
-  const [settings, setSettings] = useState<Record<number, QuarterSettings>>(() => buildSettings(data.periods, DEFAULT_SETTINGS));
   const [brands, setBrands] = useState<string[]>(() => brandsFromPlans(data.plans));
   const [periodGroups, setPeriodGroups] = useState<NetworkPeriodGroupInput[]>(() => buildPeriodGroups(data));
   const [dirty, setDirty] = useState(false);
@@ -109,7 +101,6 @@ export default function NetworkPlanGrid({
   if (loadedData !== data) {
     setLoadedData(data);
     setDraft(buildDraft(data.plans));
-    setSettings(buildSettings(data.periods, DEFAULT_SETTINGS));
     setBrands(brandsFromPlans(data.plans));
     setPeriodGroups(buildPeriodGroups(data));
     setDirty(false);
@@ -148,9 +139,6 @@ export default function NetworkPlanGrid({
           plan_rub: parseNumberInput(cell.planRub),
           forecast_rub: parseNumberInput(cell.forecastRub),
           investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
-          month1_pct: parseNumberInput(cell.month1Pct),
-          month2_pct: parseNumberInput(cell.month2Pct),
-          month3_pct: parseNumberInput(cell.month3Pct),
           updated_at: versions.get(planKey(quarter, brand)) ?? '',
         });
       });
@@ -158,21 +146,17 @@ export default function NetworkPlanGrid({
 
     return {
       year: data.year,
-      periods: QUARTERS.map((quarter) => {
-        const setting = settings[quarter] ?? DEFAULT_SETTINGS;
-        return { quarter, vat_included: setting.vat_included, vat_rate: setting.vat_rate };
-      }),
+      periods: QUARTERS.map((quarter) => ({
+        quarter,
+        vat_included: data.periods.find((period) => period.quarter === quarter)?.vat_included
+          ?? data.network.vat_included,
+        vat_rate: data.periods.find((period) => period.quarter === quarter)?.vat_rate
+          ?? data.network.vat_rate,
+      })),
       plans: rows,
       period_groups: periodGroups,
     };
-  }, [data.plans, data.year, brands, draft, periodGroups, settings]);
-
-  const allocationValid = useMemo(() => Object.values(draft).every((cell) => {
-    const sum = (parseNumberInput(cell.month1Pct) ?? 0)
-      + (parseNumberInput(cell.month2Pct) ?? 0)
-      + (parseNumberInput(cell.month3Pct) ?? 0);
-    return Math.abs(sum - 100) < 0.001;
-  }), [draft]);
+  }, [data.network.vat_included, data.network.vat_rate, data.periods, data.plans, data.year, brands, draft, periodGroups]);
 
   // НДС, инвестиции и итоги считает бэкенд — здесь их не воспроизводим.
   // До первого ответа показываем то, что пришло с загрузкой года.
@@ -180,7 +164,7 @@ export default function NetworkPlanGrid({
   const previewQuery = useQuery({
     queryKey: ['network-plan-preview', data.network.id, debouncedRequest],
     queryFn: () => networkAPI.previewPlan(data.network.id, debouncedRequest),
-    enabled: dirty && allocationValid,
+    enabled: dirty,
     placeholderData: (previous) => previous,
     staleTime: Infinity,
   });
@@ -196,18 +180,6 @@ export default function NetworkPlanGrid({
       const key = planKey(quarter, brand);
       return { ...prev, [key]: { ...(prev[key] ?? EMPTY_CELL), ...patch } };
     });
-    setDirty(true);
-  };
-
-  const setQuarterSetting = (quarter: number, patch: Partial<QuarterSettings>) => {
-    setSettings((prev) => ({ ...prev, [quarter]: { ...(prev[quarter] ?? DEFAULT_SETTINGS), ...patch } }));
-    setDirty(true);
-  };
-
-  // НДС обычно одинаков весь год — отдельная кнопка избавляет от четырёх правок.
-  const applyVatToAllQuarters = (from: number) => {
-    const source = settings[from] ?? DEFAULT_SETTINGS;
-    setSettings(() => Object.fromEntries(QUARTERS.map((q) => [q, { ...source }])));
     setDirty(true);
   };
 
@@ -279,7 +251,6 @@ export default function NetworkPlanGrid({
   };
 
   const availableBrands = brandOptions.filter((b) => !brands.includes(b));
-  const vatQuarters: number[] = period === 'year' ? [...QUARTERS] : [period];
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -331,49 +302,13 @@ export default function NetworkPlanGrid({
             variant="contained"
             size="small"
             startIcon={<SaveIcon />}
-            disabled={saving || !dirty || !allocationValid}
+            disabled={saving || !dirty}
             onClick={handleSave}
           >
             Сохранить
           </Button>
         )}
       </Box>
-
-      {/* НДС квартала: влияет только на инвестиции */}
-      <Paper variant="outlined" sx={{ px: 1.5, py: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-          <Tooltip title="НДС применяется только к инвестициям: объёмы от него не зависят">
-            <Typography variant="caption" color="text.secondary">НДС</Typography>
-          </Tooltip>
-          {vatQuarters.map((quarter) => {
-            const setting = settings[quarter] ?? DEFAULT_SETTINGS;
-            return (
-              <Box key={quarter} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Typography variant="caption" sx={{ minWidth: 20 }}>Q{quarter}</Typography>
-                <Switch
-                  size="small"
-                  checked={setting.vat_included}
-                  disabled={!canEdit}
-                  onChange={(e) => setQuarterSetting(quarter, { vat_included: e.target.checked })}
-                  slotProps={{ input: { 'aria-label': `Сеть работает с НДС в Q${quarter}` } }}
-                />
-                <TextField
-                  size="small"
-                  label="ставка"
-                  value={setting.vat_rate}
-                  disabled={!canEdit || !setting.vat_included}
-                  onChange={(e) => setQuarterSetting(quarter, { vat_rate: parseNumberInput(e.target.value) ?? 0 })}
-                  sx={{ width: 84 }}
-                  slotProps={{ htmlInput: { inputMode: 'decimal', style: { padding: '6px 8px' } } }}
-                />
-              </Box>
-            );
-          })}
-          {canEdit && period !== 'year' && (
-            <Button size="small" onClick={() => applyVatToAllQuarters(period)}>Ко всем кварталам</Button>
-          )}
-        </Box>
-      </Paper>
 
       {period === 'year' && (
         <NetworkPeriodGroupsEditor
@@ -384,24 +319,6 @@ export default function NetworkPlanGrid({
           canEdit={canEdit}
           onChange={changePeriodGroups}
         />
-      )}
-
-      {period !== 'year' && (
-        <NetworkAllocationEditor
-          key={`${data.year}-${period}`}
-          year={data.year}
-          quarter={period}
-          brands={brands}
-          draft={draft}
-          canEdit={canEdit}
-          onCellChange={(brand, patch) => setCell(period, brand, patch)}
-        />
-      )}
-
-      {!allocationValid && (
-        <Typography variant="caption" color="warning.main">
-          Сохранение недоступно: распределение каждого квартального плана должно давать 100%.
-        </Typography>
       )}
 
       <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} />
@@ -420,10 +337,12 @@ export default function NetworkPlanGrid({
             onToggleGross={toggleGross}
             onRemoveBrand={removeBrand}
           />
-          <NetworkAnnualInvestmentCumulative
-            year={data.year}
-            data={view.annual_investment_cumulative}
-          />
+          {data.network.has_annual_investment_cumulative && view.annual_investment_cumulative && (
+            <NetworkAnnualInvestmentCumulative
+              year={data.year}
+              data={view.annual_investment_cumulative}
+            />
+          )}
         </>
       ) : (
         <NetworkQuarterTable
@@ -450,10 +369,11 @@ export default function NetworkPlanGrid({
         по контракту и остаток к распределению от переклассификации не меняются.
         Инвестиции по плану и по прогнозу считаются одним
         процентом, факт инвестиций приходит суммой и процентом не пересчитывается. Сумма
-        с вычетом НДС по ставке квартала показывается в подсказке ячейки. Факт объёма
+        с вычетом НДС по ставке из профиля сети показывается в подсказке ячейки. Факт объёма
         и факт инвестиций загружаются из отгрузок и в форме не редактируются. Объединение
         кварталов меняет только период оценки: исходные суммы каждого квартала остаются на месте.
-        Годовой кумулятив доступен только после выполнения плана всего портфеля;
+        Годовой кумулятив показывается для сетей, где он включён в профиле, и доступен
+        для доплаты только после выполнения плана всего портфеля;
         внутри него доплата рассчитывается для выполнивших годовой план брендов
         или валового объёма с вычетом фактических выплат Q1–Q3 и прогноза Q4.
       </Typography>

@@ -83,6 +83,7 @@ var exported = []entry{
 	{models.NetworkForecastResponse{}, ""},
 	{models.NetworkForecastSaveResponse{}, ""},
 	{models.NetworkContractPrice{}, ""},
+	{models.NetworkPriceSKUOption{}, ""},
 	{models.NetworkPricesResponse{}, ""},
 	{models.NetworkPricesSaveResponse{}, ""},
 	{repository.NetworkPlanInput{}, ""},

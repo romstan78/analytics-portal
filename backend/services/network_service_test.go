@@ -452,6 +452,26 @@ func TestCalculateNetworkAnnualInvestmentCumulativeRequiresRowCompletionAndClamp
 	}
 }
 
+func TestCalculateNetworkAnnualInvestmentCumulativeForNetworkUsesProfileFlag(t *testing.T) {
+	plans := []models.NetworkPlan{{
+		Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+		ForecastRub: models.PtrFloat(100), InvestmentsPct: models.PtrFloat(10),
+	}}
+	periods := []models.NetworkPeriod{{Quarter: 1}}
+	totals := CalculateNetworkTotals(EnrichNetworkPlans(plans, periods), periods)
+
+	if got := CalculateNetworkAnnualInvestmentCumulativeForNetwork(
+		models.Network{}, plans, periods, totals,
+	); got != nil {
+		t.Fatalf("для сети с выключенным флагом ожидался nil, получено %#v", got)
+	}
+	if got := CalculateNetworkAnnualInvestmentCumulativeForNetwork(
+		models.Network{HasAnnualInvestmentCumulative: true}, plans, periods, totals,
+	); got == nil {
+		t.Fatal("для сети с включённым флагом ожидался расчёт")
+	}
+}
+
 func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	stored := []models.NetworkPlan{{

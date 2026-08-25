@@ -404,6 +404,28 @@ func getGlobalOlapSSSKUPrices(year int) ([]olapSKUPrice, error) {
 	return result, rows.Err()
 }
 
+// GetNetworkPriceSKUOptions возвращает тот же общий срез OLAP SS, который
+// используется для первичной подстановки цен. В ответ входят и ранее
+// исключённые из конкретной сети SKU, чтобы пользователь мог добавить их
+// обратно явно.
+func GetNetworkPriceSKUOptions() ([]models.NetworkPriceSKUOption, error) {
+	rows, err := getGlobalOlapSSSKUPrices(2026)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]models.NetworkPriceSKUOption, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, models.NetworkPriceSKUOption{
+			BrandAS:     row.BrandAS,
+			SKU:         row.SKU,
+			Price:       row.Price,
+			SourceYear:  row.Year,
+			SourceMonth: row.Month,
+		})
+	}
+	return result, nil
+}
+
 func contractPriceSKUKey(sku string) string {
 	return strings.ToLower(strings.TrimSpace(sku))
 }
@@ -419,6 +441,7 @@ func mergeNetworkContractPrices(
 	networkID, year int,
 	persisted []models.NetworkContractPrice,
 	defaults, comparisons []olapSKUPrice,
+	excluded map[string]bool,
 ) []models.NetworkContractPrice {
 	defaultBySKU := make(map[string]olapSKUPrice, len(defaults))
 	for _, row := range defaults {
@@ -451,7 +474,7 @@ func mergeNetworkContractPrices(
 
 	for _, source := range defaults {
 		key := contractPriceSKUKey(source.SKU)
-		if persistedSKU[key] {
+		if persistedSKU[key] || excluded[key] {
 			continue
 		}
 		row := models.NetworkContractPrice{
@@ -483,6 +506,27 @@ func mergeNetworkContractPrices(
 		return result[i].ValidFrom < result[j].ValidFrom
 	})
 	return result
+}
+
+func getNetworkContractPriceExclusions(networkID int) (map[string]bool, error) {
+	rows, err := config.DB.Query(
+		`SELECT sku FROM dbo.tbl_NetworkContractPriceExclusions WHERE network_id = ?`,
+		networkID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	excluded := make(map[string]bool)
+	for rows.Next() {
+		var sku string
+		if err := rows.Scan(&sku); err != nil {
+			return nil, err
+		}
+		excluded[contractPriceSKUKey(sku)] = true
+	}
+	return excluded, rows.Err()
 }
 
 // GetNetworkContractPrices возвращает цены, пересекающие выбранный год.
@@ -537,7 +581,11 @@ func GetNetworkContractPrices(networkID, year int) ([]models.NetworkContractPric
 			return nil, err
 		}
 	}
-	return mergeNetworkContractPrices(networkID, year, result, defaults, comparisons), nil
+	excluded, err := getNetworkContractPriceExclusions(networkID)
+	if err != nil {
+		return nil, err
+	}
+	return mergeNetworkContractPrices(networkID, year, result, defaults, comparisons, excluded), nil
 }
 
 func parsePriceDate(value string) (time.Time, error) {
@@ -554,18 +602,25 @@ func SaveNetworkContractPrices(in SaveNetworkPricesInput) error {
 	defer func() { _ = tx.Rollback() }()
 
 	deletedIDs := make(map[int64]bool, len(in.DeletedRows))
+	deletedSKUs := make(map[string]string, len(in.DeletedRows))
+	activeSKUs := make(map[string]bool, len(in.Rows))
+	for _, row := range in.Rows {
+		if sku := strings.TrimSpace(row.SKU); sku != "" {
+			activeSKUs[contractPriceSKUKey(sku)] = true
+		}
+	}
 	for _, row := range in.DeletedRows {
 		if row.ID <= 0 || deletedIDs[row.ID] {
 			continue
 		}
 		deletedIDs[row.ID] = true
 
-		var updatedAt, sourceType string
+		var updatedAt, sourceType, sku string
 		if err := tx.QueryRow(
-			`SELECT CONVERT(NVARCHAR, updated_at, 121), source_type
+			`SELECT CONVERT(NVARCHAR, updated_at, 121), source_type, sku
 			 FROM dbo.tbl_NetworkContractPrices WHERE id = ? AND network_id = ?`,
 			row.ID, in.NetworkID,
-		).Scan(&updatedAt, &sourceType); err != nil {
+		).Scan(&updatedAt, &sourceType, &sku); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNetworkNotFound
 			}
@@ -577,9 +632,50 @@ func SaveNetworkContractPrices(in SaveNetworkPricesInput) error {
 		if sourceType != "manual" {
 			return ErrNetworkPriceDeleteForbidden
 		}
+		deletedSKUs[contractPriceSKUKey(sku)] = strings.TrimSpace(sku)
 		if _, err := tx.Exec(
 			`DELETE FROM dbo.tbl_NetworkContractPrices WHERE id = ? AND network_id = ?`,
 			row.ID, in.NetworkID,
+		); err != nil {
+			return err
+		}
+	}
+
+	// Удалённый из формы SKU больше не должен автоматически возвращаться из
+	// OLAP SS. Если тот же SKU остаётся среди сохраняемых строк, исключение не
+	// ставим: это частичная нормализация периодов, а не удаление SKU целиком.
+	for key, sku := range deletedSKUs {
+		if activeSKUs[key] {
+			continue
+		}
+		res, err := tx.Exec(
+			`UPDATE dbo.tbl_NetworkContractPriceExclusions
+			 SET sku = ?, excluded_by = ?, excluded_at = GETDATE()
+			 WHERE network_id = ? AND sku = ?`,
+			sku, nullIfEmpty(in.UserName), in.NetworkID, sku,
+		)
+		if err != nil {
+			return err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			if _, err := tx.Exec(
+				`INSERT INTO dbo.tbl_NetworkContractPriceExclusions (network_id, sku, excluded_by)
+				 VALUES (?, ?, ?)`,
+				in.NetworkID, sku, nullIfEmpty(in.UserName),
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for key := range activeSKUs {
+		if _, err := tx.Exec(
+			`DELETE FROM dbo.tbl_NetworkContractPriceExclusions
+			 WHERE network_id = ? AND LOWER(LTRIM(RTRIM(sku))) = ?`,
+			in.NetworkID, key,
 		); err != nil {
 			return err
 		}

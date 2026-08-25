@@ -51,6 +51,12 @@ export function parseNumberInput(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+export function isMonthDistributionValid(values: [string, string, string]): boolean {
+  const numbers = values.map(parseNumberInput);
+  return numbers.every((value) => value != null && value >= 0 && value <= 100)
+    && Math.abs(numbers.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 100) < 0.001;
+}
+
 export function formatRub(value: number | null | undefined, digits = 0): string {
   if (value == null) return '—';
   return value.toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -111,9 +117,6 @@ export interface DraftCell {
   planRub: string;
   forecastRub: string;
   investmentsPct: string;
-  month1Pct: string;
-  month2Pct: string;
-  month3Pct: string;
   inGross: boolean;
   factRub: number | null;
   factInvestmentsRub: number | null;
@@ -123,9 +126,6 @@ export const EMPTY_CELL: DraftCell = {
   planRub: '',
   forecastRub: '',
   investmentsPct: '',
-  month1Pct: '30',
-  month2Pct: '30',
-  month3Pct: '40',
   inGross: false,
   factRub: null,
   factInvestmentsRub: null,
@@ -197,9 +197,6 @@ export function buildDraft(plans: NetworkPlan[]): Record<string, DraftCell> {
       planRub: asInput(plan.plan_rub),
       forecastRub: asInput(plan.forecast_rub),
       investmentsPct: asInput(plan.investments_pct),
-      month1Pct: asInput(plan.month1_pct),
-      month2Pct: asInput(plan.month2_pct),
-      month3Pct: asInput(plan.month3_pct),
       inGross: plan.brand_as != null && plan.in_gross,
       factRub: plan.fact_rub,
       factInvestmentsRub: plan.fact_investments_rub,

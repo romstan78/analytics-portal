@@ -205,6 +205,12 @@ export interface Network {
   kam: string | null;
   network_type: string;
   is_active: boolean;
+  vat_included: boolean;
+  vat_rate: number;
+  month1_pct: number;
+  month2_pct: number;
+  month3_pct: number;
+  has_annual_investment_cumulative: boolean;
   created_at: string | null;
   updated_at: string;
 }
@@ -350,7 +356,7 @@ export interface NetworkPlanResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
-  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
+  annual_investment_cumulative?: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkPlanSaveResponse {
@@ -362,7 +368,7 @@ export interface NetworkPlanSaveResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
-  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
+  annual_investment_cumulative?: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkPlanPreviewResponse {
@@ -373,7 +379,7 @@ export interface NetworkPlanPreviewResponse {
   year_totals: NetworkPlanTotals;
   period_groups: NetworkPeriodGroup[];
   period_group_totals: NetworkPeriodGroupTotals[];
-  annual_investment_cumulative: NetworkAnnualInvestmentCumulative;
+  annual_investment_cumulative?: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkListResponse {
@@ -543,10 +549,19 @@ export interface NetworkContractPrice {
   updated_at: string;
 }
 
+export interface NetworkPriceSKUOption {
+  brand_as: string;
+  sku: string;
+  price: number;
+  source_year: number;
+  source_month: number;
+}
+
 export interface NetworkPricesResponse {
   network: Network;
   year: number;
   data: NetworkContractPrice[];
+  sku_options: NetworkPriceSKUOption[];
 }
 
 export interface NetworkPricesSaveResponse {
@@ -561,9 +576,6 @@ export interface NetworkPlanInput {
   plan_rub: number | null;
   forecast_rub: number | null;
   investments_pct: number | null;
-  month1_pct: number | null;
-  month2_pct: number | null;
-  month3_pct: number | null;
   updated_at: string;
 }
 

@@ -192,7 +192,7 @@ func TestMergeNetworkContractPricesAddsSameSKUDefaultForAnyNetwork(t *testing.T)
 		BrandAS: "Бренд А", SKU: "SKU-1", Price: 123.45, Year: 2026, Month: 7,
 	}}
 
-	got := mergeNetworkContractPrices(42, 2027, nil, defaults, nil)
+	got := mergeNetworkContractPrices(42, 2027, nil, defaults, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
@@ -223,7 +223,7 @@ func TestMergeNetworkContractPricesRefreshesOnlyUnconfirmedSeed(t *testing.T) {
 		{BrandAS: "Бренд Б", SKU: "SKU-2", Price: 130, Year: 2026, Month: 7},
 	}
 
-	got := mergeNetworkContractPrices(8, 2026, persisted, defaults, defaults)
+	got := mergeNetworkContractPrices(8, 2026, persisted, defaults, defaults, nil)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 without duplicate defaults", len(got))
 	}
@@ -235,5 +235,20 @@ func TestMergeNetworkContractPricesRefreshesOnlyUnconfirmedSeed(t *testing.T) {
 	}
 	if got[1].OlapPrice == nil || *got[1].OlapPrice != 130 {
 		t.Fatalf("OLAP SS comparison missing: %#v", got[1])
+	}
+}
+
+func TestMergeNetworkContractPricesDoesNotRestoreExplicitlyExcludedSKU(t *testing.T) {
+	defaults := []olapSKUPrice{
+		{BrandAS: "Бренд А", SKU: "SKU-1", Price: 120, Year: 2026, Month: 7},
+		{BrandAS: "Бренд Б", SKU: "SKU-2", Price: 130, Year: 2026, Month: 7},
+	}
+
+	got := mergeNetworkContractPrices(
+		8, 2027, nil, defaults, nil,
+		map[string]bool{contractPriceSKUKey(" SKU-1 "): true},
+	)
+	if len(got) != 1 || got[0].SKU != "SKU-2" {
+		t.Fatalf("исключённый SKU вернулся из OLAP SS: %#v", got)
 	}
 }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { NetworkContractPrice } from '../types/network';
-import { buildQuarterlyPriceDrafts, quarterlyPriceInputs } from './networkPrices';
+import type { NetworkContractPrice, NetworkPriceSKUOption } from '../types/network';
+import {
+  buildQuarterlyPriceDrafts,
+  createQuarterlyPriceDraftFromOption,
+  filterAvailableSKUOptions,
+  quarterlyPriceInputs,
+} from './networkPrices';
 
 const priceRow = (patch: Partial<NetworkContractPrice> = {}): NetworkContractPrice => ({
   id: 11,
@@ -78,5 +83,34 @@ describe('quarterly network prices', () => {
     expect(manual.canDelete).toBe(true);
     expect(manual.deleteRows).toEqual([{ id: 11, updated_at: '2026-08-24 10:00:00.000' }]);
     expect(olap.canDelete).toBe(false);
+  });
+
+  it('fills brand and all quarter prices from a selected OLAP SKU', () => {
+    const option: NetworkPriceSKUOption = {
+      brand_as: 'Бренд Б',
+      sku: 'SKU из списка',
+      price: 77.25,
+      source_year: 2026,
+      source_month: 8,
+    };
+
+    const draft = createQuarterlyPriceDraftFromOption(option, 'new-1');
+
+    expect(draft.brand).toBe('Бренд Б');
+    expect(draft.sku).toBe('SKU из списка');
+    expect(draft.prices).toEqual(['77,25', '77,25', '77,25', '77,25']);
+    expect(draft.olapPrice).toBe(77.25);
+    expect(draft.isNew).toBe(true);
+    expect(draft.canDelete).toBe(true);
+  });
+
+  it('excludes SKU already shown in the price table from add options', () => {
+    const options: NetworkPriceSKUOption[] = [
+      { brand_as: 'A', sku: 'SKU 1', price: 10, source_year: 2026, source_month: 8 },
+      { brand_as: 'B', sku: 'SKU 2', price: 20, source_year: 2026, source_month: 8 },
+    ];
+    const drafts = [createQuarterlyPriceDraftFromOption(options[0], 'new-1')];
+
+    expect(filterAvailableSKUOptions(options, drafts)).toEqual([options[1]]);
   });
 });

@@ -415,6 +415,22 @@ func CalculateNetworkAnnualInvestmentCumulative(
 	return result
 }
 
+// CalculateNetworkAnnualInvestmentCumulativeForNetwork не отдаёт показатель,
+// пока он не включён в профиле сети. Так API и интерфейс используют один флаг,
+// а скрытая карточка кумулятива не продолжает передаваться клиенту.
+func CalculateNetworkAnnualInvestmentCumulativeForNetwork(
+	network models.Network,
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+	totals []NetworkPlanTotals,
+) *models.NetworkAnnualInvestmentCumulative {
+	if !network.HasAnnualInvestmentCumulative {
+		return nil
+	}
+	result := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
+	return &result
+}
+
 // NetworkPlanDraft — строка сетки, как её ввёл пользователь.
 // Факта здесь нет: он приходит загрузкой отгрузок и берётся из сохранённых строк.
 type NetworkPlanDraft struct {

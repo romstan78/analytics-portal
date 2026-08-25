@@ -48,6 +48,27 @@ func TestBuildNetworkForecastAllocatesQuarterPlanWithoutLosingKopecks(t *testing
 	}
 }
 
+func TestBuildNetworkForecastUsesNetworkProfileDistribution(t *testing.T) {
+	brand := "Альфа"
+	response := BuildNetworkForecast(
+		models.Network{Month1Pct: 20, Month2Pct: 30, Month3Pct: 50}, 2027, 1,
+		[]models.NetworkPlan{{
+			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(100),
+			// Старое распределение строки больше не является источником.
+			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
+		}}, nil, nil, nil, nil, nil,
+		time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	want := map[int]float64{1: 20, 2: 30, 3: 50}
+	for month, expected := range want {
+		row := forecastRow(response, brand, month, nil)
+		if row == nil || row.PlanRub == nil || *row.PlanRub != expected {
+			t.Fatalf("план месяца %d = %#v, ожидалось %.2f из профиля сети", month, row, expected)
+		}
+	}
+}
+
 func TestBuildNetworkForecastRecommendationUsesHistoryAndApprovedPromoNotPlan(t *testing.T) {
 	brand := "Альфа"
 	facts := []models.NetworkMonthlyFact{

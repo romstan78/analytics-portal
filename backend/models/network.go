@@ -2,18 +2,24 @@ package models
 
 // Network — карточка сети в реестре: то, что не зависит от периода.
 type Network struct {
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	KAM         *string `json:"kam"`
-	NetworkType string  `json:"network_type"` // regular | warehouse
-	IsActive    bool    `json:"is_active"`
-	CreatedAt   *string `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID                            int     `json:"id"`
+	Name                          string  `json:"name"`
+	KAM                           *string `json:"kam"`
+	NetworkType                   string  `json:"network_type"` // regular | warehouse
+	IsActive                      bool    `json:"is_active"`
+	VATIncluded                   bool    `json:"vat_included"` // значение по умолчанию для новых кварталов
+	VATRate                       float64 `json:"vat_rate"`     // ставка по умолчанию для новых кварталов
+	Month1Pct                     float64 `json:"month1_pct"`
+	Month2Pct                     float64 `json:"month2_pct"`
+	Month3Pct                     float64 `json:"month3_pct"`
+	HasAnnualInvestmentCumulative bool    `json:"has_annual_investment_cumulative"`
+	CreatedAt                     *string `json:"created_at"`
+	UpdatedAt                     string  `json:"updated_at"`
 }
 
-// NetworkPeriod — атрибуты сети, действующие на конкретный квартал.
-// vat_included = сеть работает с НДС в этом квартале; НДС применяется
-// только к инвестициям, планы от него не зависят.
+// NetworkPeriod сохраняется для совместимости с существующими данными и API.
+// НДС применяется только к инвестициям, планы от него не зависят. Признак
+// vat_included и ставка vat_rate выбираются поквартально в профиле сети.
 // Тип контракта здесь не хранится: валовый объём — свойство бренда (NetworkPlan.InGross).
 type NetworkPeriod struct {
 	ID          int     `json:"id"`
@@ -29,15 +35,17 @@ type NetworkPeriod struct {
 // BrandAS = nil — строка общего объёма валового контракта (пул), в который
 // входят бренды с InGross = true. Остальные бренды планируются отдельно.
 type NetworkPlan struct {
-	ID          int      `json:"id"`
-	NetworkID   int      `json:"network_id"`
-	Year        int      `json:"year"`
-	Quarter     int      `json:"quarter"`
-	BrandAS     *string  `json:"brand_as"`
-	InGross     bool     `json:"in_gross"`   // бренд входит в валовый объём этого квартала
-	PlanRub     *float64 `json:"plan_rub"`   // план как введён, НДС к нему не применяется
-	PlanUnits   *float64 `json:"plan_units"` // задел под таблицу цен контракта
-	Month1Pct   float64  `json:"month1_pct"` // распределение квартального плана: первый месяц
+	ID        int      `json:"id"`
+	NetworkID int      `json:"network_id"`
+	Year      int      `json:"year"`
+	Quarter   int      `json:"quarter"`
+	BrandAS   *string  `json:"brand_as"`
+	InGross   bool     `json:"in_gross"`   // бренд входит в валовый объём этого квартала
+	PlanRub   *float64 `json:"plan_rub"`   // план как введён, НДС к нему не применяется
+	PlanUnits *float64 `json:"plan_units"` // задел под таблицу цен контракта
+	// Для совместимости распределение остаётся в строке ответа, но его единый
+	// источник — профиль Network, а не отдельный план бренда или квартала.
+	Month1Pct   float64  `json:"month1_pct"`
 	Month2Pct   float64  `json:"month2_pct"`
 	Month3Pct   float64  `json:"month3_pct"`
 	FactRub     *float64 `json:"fact_rub"` // факт отгрузок, заполняется загрузкой
@@ -181,41 +189,41 @@ type NetworkComment struct {
 
 // NetworkPlanResponse — данные вкладки «Планы» за год.
 type NetworkPlanResponse struct {
-	Network                    Network                           `json:"network"`
-	Year                       int                               `json:"year"`
-	Periods                    []NetworkPeriod                   `json:"periods"`
-	Plans                      []NetworkPlan                     `json:"plans"`
-	Totals                     []NetworkPlanTotals               `json:"totals"`
-	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
-	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
-	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
-	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
+	Network                    Network                            `json:"network"`
+	Year                       int                                `json:"year"`
+	Periods                    []NetworkPeriod                    `json:"periods"`
+	Plans                      []NetworkPlan                      `json:"plans"`
+	Totals                     []NetworkPlanTotals                `json:"totals"`
+	YearTotals                 NetworkPlanTotals                  `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup               `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals         `json:"period_group_totals"`
+	AnnualInvestmentCumulative *NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative,omitempty"`
 }
 
 // NetworkPlanSaveResponse — состояние года после сохранения.
 type NetworkPlanSaveResponse struct {
-	Message                    string                            `json:"message"`
-	Year                       int                               `json:"year"`
-	Periods                    []NetworkPeriod                   `json:"periods"`
-	Plans                      []NetworkPlan                     `json:"plans"`
-	Totals                     []NetworkPlanTotals               `json:"totals"`
-	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
-	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
-	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
-	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
+	Message                    string                             `json:"message"`
+	Year                       int                                `json:"year"`
+	Periods                    []NetworkPeriod                    `json:"periods"`
+	Plans                      []NetworkPlan                      `json:"plans"`
+	Totals                     []NetworkPlanTotals                `json:"totals"`
+	YearTotals                 NetworkPlanTotals                  `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup               `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals         `json:"period_group_totals"`
+	AnnualInvestmentCumulative *NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative,omitempty"`
 }
 
 // NetworkPlanPreviewResponse — пересчёт несохранённого черновика.
 // В БД ничего не пишется: ответ показывает, что получится после сохранения.
 type NetworkPlanPreviewResponse struct {
-	Year                       int                               `json:"year"`
-	Periods                    []NetworkPeriod                   `json:"periods"`
-	Plans                      []NetworkPlan                     `json:"plans"`
-	Totals                     []NetworkPlanTotals               `json:"totals"`
-	YearTotals                 NetworkPlanTotals                 `json:"year_totals"`
-	PeriodGroups               []NetworkPeriodGroup              `json:"period_groups"`
-	PeriodGroupTotals          []NetworkPeriodGroupTotals        `json:"period_group_totals"`
-	AnnualInvestmentCumulative NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative"`
+	Year                       int                                `json:"year"`
+	Periods                    []NetworkPeriod                    `json:"periods"`
+	Plans                      []NetworkPlan                      `json:"plans"`
+	Totals                     []NetworkPlanTotals                `json:"totals"`
+	YearTotals                 NetworkPlanTotals                  `json:"year_totals"`
+	PeriodGroups               []NetworkPeriodGroup               `json:"period_groups"`
+	PeriodGroupTotals          []NetworkPeriodGroupTotals         `json:"period_group_totals"`
+	AnnualInvestmentCumulative *NetworkAnnualInvestmentCumulative `json:"annual_investment_cumulative,omitempty"`
 }
 
 // NetworkListResponse — список сетей реестра.
@@ -403,10 +411,22 @@ type NetworkContractPrice struct {
 	UpdatedAt     string   `json:"updated_at"`
 }
 
+// NetworkPriceSKUOption — SKU из общего среза OLAP SS, доступный для
+// добавления в цены сети. Цена и бренд приходят из того же источника, что и
+// автоматическая подстановка цен.
+type NetworkPriceSKUOption struct {
+	BrandAS     string  `json:"brand_as"`
+	SKU         string  `json:"sku"`
+	Price       float64 `json:"price"`
+	SourceYear  int     `json:"source_year"`
+	SourceMonth int     `json:"source_month"`
+}
+
 type NetworkPricesResponse struct {
-	Network Network                `json:"network"`
-	Year    int                    `json:"year"`
-	Data    []NetworkContractPrice `json:"data"`
+	Network    Network                 `json:"network"`
+	Year       int                     `json:"year"`
+	Data       []NetworkContractPrice  `json:"data"`
+	SKUOptions []NetworkPriceSKUOption `json:"sku_options"`
 }
 
 type NetworkPricesSaveResponse struct {

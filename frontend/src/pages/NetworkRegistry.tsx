@@ -37,6 +37,7 @@ import {
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
 import NetworkForecastTab from '../components/NetworkForecastTab';
+import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
 import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
@@ -48,9 +49,17 @@ import type {
   NetworkPlanSaveRequest,
   NetworkType,
 } from '../types/network';
-import { formatPct, formatRub, planKey } from '../utils/networkPlan';
+import {
+  QUARTERS,
+  formatPct,
+  formatRub,
+  isMonthDistributionValid,
+  parseNumberInput,
+  planKey,
+} from '../utils/networkPlan';
 
-const YEARS = [new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1];
+const YEARS = [2026, 2027, 2028];
+const DEFAULT_YEAR = 2027;
 
 const FIELD_LABELS: Record<string, string> = {
   plan_rub: 'План, ₽',
@@ -62,6 +71,14 @@ const FIELD_LABELS: Record<string, string> = {
   brand: 'Бренд в плане',
   vat_included: 'НДС',
   vat_rate: 'Ставка НДС',
+  vat_included_q1: 'Q1 · работа с НДС',
+  vat_included_q2: 'Q2 · работа с НДС',
+  vat_included_q3: 'Q3 · работа с НДС',
+  vat_included_q4: 'Q4 · работа с НДС',
+  vat_rate_q1: 'Q1 · ставка НДС',
+  vat_rate_q2: 'Q2 · ставка НДС',
+  vat_rate_q3: 'Q3 · ставка НДС',
+  vat_rate_q4: 'Q4 · ставка НДС',
   period: 'Квартал открыт',
   month_distribution: 'Распределение по месяцам',
   period_group: 'Объединение кварталов',
@@ -69,7 +86,24 @@ const FIELD_LABELS: Record<string, string> = {
   network_type: 'Тип сети',
   kam: 'КАМ',
   is_active: 'Активность',
+  has_annual_investment_cumulative: 'Годовой кумулятив инвестиций',
 };
+
+const MONTH_DISTRIBUTION_FIELDS = ['month1_pct', 'month2_pct', 'month3_pct'] as const;
+
+type NetworkProfileDraft = Omit<
+  Partial<Network>,
+  'month1_pct' | 'month2_pct' | 'month3_pct' | 'vat_included' | 'vat_rate'
+> & {
+  month1_pct?: string;
+  month2_pct?: string;
+  month3_pct?: string;
+};
+
+interface NetworkProfilePeriodDraft {
+  vatIncluded: boolean;
+  vatRate: string;
+}
 
 const TYPE_LABELS: Record<string, string> = {
   regular: 'Обычная',
@@ -79,11 +113,14 @@ const TYPE_LABELS: Record<string, string> = {
 // Значения в истории приходят разных типов: суммы, флаги, коды.
 function formatAuditValue(field: string, value: unknown): string {
   if (value == null || value === '') return '—';
-  if (field === 'vat_included') return value ? 'с НДС' : 'без НДС';
+  if (field === 'vat_included' || field.startsWith('vat_included_q')) return value ? 'с НДС' : 'без НДС';
   if (field === 'is_active') return value ? 'активна' : 'скрыта';
+  if (field === 'has_annual_investment_cumulative') return value ? 'включён' : 'выключен';
   if (field === 'in_gross') return value ? 'в валовом объёме' : 'отдельно';
   if (field === 'network_type') return TYPE_LABELS[String(value)] ?? String(value);
-  if (field === 'investments_pct' || field === 'vat_rate') return formatPct(Number(value));
+  if (field === 'investments_pct' || field === 'vat_rate' || field.startsWith('vat_rate_q')) {
+    return formatPct(Number(value));
+  }
   if (field === 'plan_rub' || field === 'forecast_rub' || field === 'fact_rub') return formatRub(Number(value));
   return String(value);
 }
@@ -139,12 +176,13 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   // Список сетей сворачивается: выбрав сеть, всю ширину отдаём таблице планов.
   const [listOpen, setListOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(DEFAULT_YEAR);
   const [tab, setTab] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState<{ quarter: number | null; brand: string | null } | null>(null);
   const [commentText, setCommentText] = useState('');
-  const [profile, setProfile] = useState<Partial<Network>>({});
+  const [profile, setProfile] = useState<NetworkProfileDraft>({});
+  const [profilePeriods, setProfilePeriods] = useState<Record<number, NetworkProfilePeriodDraft>>({});
   const [toast, setToast] = useState<{ text: string; severity: 'success' | 'error' } | null>(null);
 
   const networksQuery = useQuery({
@@ -207,11 +245,23 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
         kam: profile.kam ?? network.kam ?? '',
         network_type: (profile.network_type ?? network.network_type) as NetworkType,
         is_active: profile.is_active ?? network.is_active,
+        month1_pct: parseNumberInput(profile.month1_pct ?? String(network.month1_pct)) ?? network.month1_pct,
+        month2_pct: parseNumberInput(profile.month2_pct ?? String(network.month2_pct)) ?? network.month2_pct,
+        month3_pct: parseNumberInput(profile.month3_pct ?? String(network.month3_pct)) ?? network.month3_pct,
+        has_annual_investment_cumulative:
+          profile.has_annual_investment_cumulative ?? network.has_annual_investment_cumulative,
+        year,
+        periods: profilePeriodValues.map(({ quarter, vatIncluded, vatRate }) => ({
+          quarter,
+          vat_included: vatIncluded,
+          vat_rate: parseNumberInput(vatRate) ?? 0,
+        })),
         updated_at: network.updated_at,
       }),
     onSuccess: () => {
       setProfile({});
-      setToast({ text: 'Карточка сохранена', severity: 'success' });
+      setProfilePeriods({});
+      setToast({ text: 'Профиль сети сохранён', severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networks'] });
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
@@ -238,6 +288,27 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const networks = networksQuery.data?.data ?? [];
   const selected = planQuery.data?.network ?? networks.find((n) => n.id === selectedId) ?? null;
   const comments = useMemo(() => commentsQuery.data?.data ?? [], [commentsQuery.data]);
+  const monthDistribution: [string, string, string] = selected ? [
+    profile.month1_pct ?? String(selected.month1_pct),
+    profile.month2_pct ?? String(selected.month2_pct),
+    profile.month3_pct ?? String(selected.month3_pct),
+  ] : ['30', '30', '40'];
+  const monthDistributionValid = isMonthDistributionValid(monthDistribution);
+  const profilePeriodValues = QUARTERS.map((quarter) => {
+    const saved = planQuery.data?.periods.find((period) => period.quarter === quarter);
+    const draft = profilePeriods[quarter];
+    return {
+      quarter,
+      vatIncluded: draft?.vatIncluded ?? saved?.vat_included ?? selected?.vat_included ?? true,
+      vatRate: draft?.vatRate ?? String(saved?.vat_rate ?? selected?.vat_rate ?? 20),
+    };
+  });
+  const profileVATValid = profilePeriodValues.every(({ vatRate }) => {
+    const parsed = parseNumberInput(vatRate);
+    return parsed != null && parsed >= 0 && parsed < 100;
+  });
+  const profilePeriodsReady = planQuery.data?.year === year && planQuery.data.network.id === selectedId;
+  const profileDirty = Object.keys(profile).length > 0 || Object.keys(profilePeriods).length > 0;
 
   // Ячейки с комментариями подсвечиваются в сетке планов.
   const commentedCells = useMemo(() => {
@@ -311,7 +382,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               <ListItemButton
                 key={network.id}
                 selected={network.id === selectedId}
-                onClick={() => { setSelectedId(network.id); setProfile({}); }}
+                onClick={() => { setSelectedId(network.id); setProfile({}); setProfilePeriods({}); }}
               >
                 <ListItemText
                   primary={network.name}
@@ -349,21 +420,27 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 {selected.kam && <Chip size="small" label={`КАМ: ${selected.kam}`} variant="outlined" />}
                 {!selected.is_active && <Chip size="small" label="скрыта" color="warning" />}
                 <Box sx={{ flex: 1 }} />
-                <TextField select label="Год" value={year} onChange={(e) => setYear(Number(e.target.value))} sx={{ width: 120 }}>
+                <TextField
+                  select
+                  label="Год"
+                  value={year}
+                  onChange={(e) => { setYear(Number(e.target.value)); setProfilePeriods({}); }}
+                  sx={{ width: 120 }}
+                >
                   {YEARS.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
                 </TextField>
               </Box>
 
               <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ mb: 2 }}>
+                <Tab label="Профиль сети" />
+                <Tab label="Цены и SKU" />
                 <Tab label="План и факт" />
                 <Tab label="Прогноз" />
-                <Tab label="Цены и SKU" />
-                <Tab label="Профиль" />
                 <Tab label={`Комментарии${comments.length ? ` · ${comments.length}` : ''}`} />
                 <Tab label="История" />
               </Tabs>
 
-              {tab === 0 && (
+              {tab === 2 && (
                 <>
                   {planQuery.isLoading && <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box>}
                   {planQuery.isError && <Alert severity="error">Не удалось загрузить планы</Alert>}
@@ -381,16 +458,16 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </>
               )}
 
-              {tab === 1 && (
+              {tab === 3 && (
                 <NetworkForecastTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
               )}
 
-              {tab === 2 && (
+              {tab === 1 && (
                 <NetworkPricesTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
               )}
 
-              {tab === 3 && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 480 }}>
+              {tab === 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 720 }}>
                   <TextField
                     label="Название сети"
                     value={profile.name ?? selected.name}
@@ -414,6 +491,90 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     <MenuItem value="regular">Обычная</MenuItem>
                     <MenuItem value="warehouse">Складская</MenuItem>
                   </TextField>
+                  <Paper variant="outlined" sx={{ p: 1.5 }}>
+                    <Typography variant="subtitle2" sx={{ mb: 0.25 }}>НДС · {year}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Для каждого квартала отдельно укажите, работает ли сеть с НДС, и ставку.
+                      НДС применяется только к инвестициям.
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                        gap: 1,
+                        mt: 1.25,
+                      }}
+                    >
+                      {profilePeriodValues.map(({ quarter, vatIncluded, vatRate }) => (
+                        <Paper key={quarter} variant="outlined" sx={{ p: 1.25 }}>
+                          <Typography variant="subtitle2">Q{quarter}</Typography>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                size="small"
+                                checked={vatIncluded}
+                                disabled={!canEdit || !profilePeriodsReady}
+                                onChange={(event) => setProfilePeriods((current) => ({
+                                  ...current,
+                                  [quarter]: {
+                                    vatIncluded: event.target.checked,
+                                    vatRate: current[quarter]?.vatRate ?? vatRate,
+                                  },
+                                }))}
+                                slotProps={{ input: { 'aria-label': `Сеть работает с НДС в Q${quarter}` } }}
+                              />
+                            }
+                            label="Работает с НДС"
+                          />
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Ставка, %"
+                            value={vatRate}
+                            disabled={!canEdit || !profilePeriodsReady || !vatIncluded}
+                            error={parseNumberInput(vatRate) == null
+                              || (parseNumberInput(vatRate) ?? 0) < 0
+                              || (parseNumberInput(vatRate) ?? 100) >= 100}
+                            onChange={(event) => setProfilePeriods((current) => ({
+                              ...current,
+                              [quarter]: {
+                                vatIncluded: current[quarter]?.vatIncluded ?? vatIncluded,
+                                vatRate: event.target.value,
+                              },
+                            }))}
+                            slotProps={{ htmlInput: { inputMode: 'decimal' } }}
+                          />
+                        </Paper>
+                      ))}
+                    </Box>
+                  </Paper>
+                  <NetworkAllocationEditor
+                    values={monthDistribution}
+                    canEdit={canEdit}
+                    onChange={(index, value) => setProfile((current) => ({
+                      ...current,
+                      [MONTH_DISTRIBUTION_FIELDS[index]]: value,
+                    }))}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={
+                          profile.has_annual_investment_cumulative
+                          ?? selected.has_annual_investment_cumulative
+                        }
+                        disabled={!canEdit}
+                        onChange={(event) => setProfile((current) => ({
+                          ...current,
+                          has_annual_investment_cumulative: event.target.checked,
+                        }))}
+                      />
+                    }
+                    label="Показывать годовой кумулятив инвестиций"
+                  />
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+                    Показатель появится во вкладке «План и факт» только для этой сети.
+                  </Typography>
                   <FormControlLabel
                     control={
                       <Switch
@@ -424,17 +585,20 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     }
                     label="Сеть активна"
                   />
-                  <Typography variant="caption" color="text.secondary">
-                    Тип контракта и НДС относятся к кварталу и меняются во вкладке «План и факт».
-                  </Typography>
                   {canEdit && (
                     <Box>
                       <Button
                         variant="contained"
-                        disabled={profileMutation.isPending || Object.keys(profile).length === 0}
+                        disabled={
+                          profileMutation.isPending
+                          || !profileDirty
+                          || !profilePeriodsReady
+                          || !monthDistributionValid
+                          || !profileVATValid
+                        }
                         onClick={() => profileMutation.mutate(selected)}
                       >
-                        Сохранить карточку
+                        Сохранить профиль
                       </Button>
                     </Box>
                   )}

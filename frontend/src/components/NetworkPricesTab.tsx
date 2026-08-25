@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -18,13 +19,18 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { Add as AddIcon, DeleteOutlined as DeleteIcon, Save as SaveIcon } from '@mui/icons-material';
+import { DeleteOutlined as DeleteIcon, Save as SaveIcon } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
-import type { NetworkContractPriceDeleteInput, NetworkPricesSaveRequest } from '../types/network';
+import type {
+  NetworkContractPriceDeleteInput,
+  NetworkPriceSKUOption,
+  NetworkPricesSaveRequest,
+} from '../types/network';
 import { formatRub, parseNumberInput } from '../utils/networkPlan';
 import {
   buildQuarterlyPriceDrafts,
-  createEmptyQuarterlyPriceDraft,
+  createQuarterlyPriceDraftFromOption,
+  filterAvailableSKUOptions,
   quarterlyPriceInputs,
   type PriceQuarterValues,
   type QuarterlyPriceDraft,
@@ -55,6 +61,10 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
     [query.data, year],
   );
   const draft = draftEdits ?? baseDraft;
+  const availableSKUOptions = useMemo(
+    () => filterAvailableSKUOptions(query.data?.sku_options ?? [], draft),
+    [query.data?.sku_options, draft],
+  );
   const dirty = draftEdits != null || deletedRows.length > 0;
 
   const mutation = useMutation({
@@ -81,10 +91,10 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
     }));
   };
 
-  const addRow = () => {
+  const addRow = (option: NetworkPriceSKUOption) => {
     setDraftEdits((current) => [
       ...(current ?? baseDraft),
-      createEmptyQuarterlyPriceDraft(`new-${Date.now()}`),
+      createQuarterlyPriceDraftFromOption(option, `new-${option.source_year}-${option.sku}`),
     ]);
   };
 
@@ -122,7 +132,21 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
           </Typography>
         </Box>
         <Box sx={{ flex: 1 }} />
-        {canEdit && <Button size="small" startIcon={<AddIcon />} onClick={addRow}>Добавить SKU</Button>}
+        {canEdit && (
+          <Autocomplete
+            size="small"
+            options={availableSKUOptions}
+            value={null}
+            onChange={(_, option) => {
+              if (option) addRow(option);
+            }}
+            getOptionLabel={(option) => `${option.sku} · ${option.brand_as}`}
+            isOptionEqualToValue={(option, value) => option.sku === value.sku}
+            noOptionsText="Все доступные SKU уже добавлены"
+            sx={{ width: 360 }}
+            renderInput={(params) => <TextField {...params} label="Добавить SKU" />}
+          />
+        )}
         {dirty && <Typography variant="caption" color="warning.main">Есть несохранённые изменения</Typography>}
         {canEdit && (
           <Button
@@ -158,42 +182,20 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
               return (
                 <TableRow key={row.key} hover>
                   <TableCell sx={{ verticalAlign: 'top' }}>
-                    {row.manualNew ? (
-                      <TextField
-                        size="small"
-                        fullWidth
-                        value={row.brand}
-                        disabled={!canEdit}
-                        onChange={(event) => updateRow(row.key, { brand: event.target.value })}
-                      />
-                    ) : (
-                      <Typography variant="body2" sx={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-                        {row.brand}
-                      </Typography>
-                    )}
+                    <Typography variant="body2" sx={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                      {row.brand}
+                    </Typography>
                   </TableCell>
                   <TableCell sx={{ verticalAlign: 'top' }}>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
-                      {row.manualNew ? (
-                        <TextField
-                          size="small"
-                          fullWidth
-                          multiline
-                          minRows={2}
-                          value={row.sku}
-                          disabled={!canEdit}
-                          onChange={(event) => updateRow(row.key, { sku: event.target.value })}
-                        />
-                      ) : (
-                        <Typography
-                          variant="body2"
-                          sx={{ flex: 1, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 }}
-                        >
-                          {row.sku}
-                        </Typography>
-                      )}
+                      <Typography
+                        variant="body2"
+                        sx={{ flex: 1, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 }}
+                      >
+                        {row.sku}
+                      </Typography>
                       {canEdit && row.canDelete && (
-                        <Tooltip title={row.manualNew ? 'Убрать строку' : 'Удалить созданный вручную SKU'}>
+                        <Tooltip title={row.isNew ? 'Убрать строку' : 'Удалить добавленный SKU'}>
                           <IconButton
                             size="small"
                             color="error"
@@ -247,7 +249,7 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
               <TableRow>
                 <TableCell colSpan={8}>
                   <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
-                    В OLAP SS за последний доступный месяц 2026 года не найдено пар ₽/уп. по SKU. Добавьте цену вручную.
+                    В OLAP SS за последний доступный месяц 2026 года не найдено доступных SKU.
                   </Typography>
                 </TableCell>
               </TableRow>

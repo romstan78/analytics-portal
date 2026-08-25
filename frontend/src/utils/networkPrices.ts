@@ -2,6 +2,7 @@ import type {
   NetworkContractPrice,
   NetworkContractPriceDeleteInput,
   NetworkContractPriceInput,
+  NetworkPriceSKUOption,
 } from '../types/network';
 import { formatNumberInput, parseNumberInput } from './networkPlan';
 
@@ -18,7 +19,7 @@ export interface QuarterlyPriceDraft {
   olapPrice: number | null;
   olapYear: number | null;
   olapMonth: number | null;
-  manualNew: boolean;
+  isNew: boolean;
   canDelete: boolean;
   deleteRows: NetworkContractPriceDeleteInput[];
 }
@@ -84,9 +85,8 @@ export const buildQuarterlyPriceDrafts = (
       olapPrice: olap.olap_price,
       olapYear: olap.olap_year,
       olapMonth: olap.olap_month,
-      manualNew: false,
+      isNew: false,
       canDelete: deleteRows.length > 0
-        && olap.olap_price == null
         && sorted.every((row) => row.source_type === 'manual'),
       deleteRows,
     });
@@ -95,21 +95,32 @@ export const buildQuarterlyPriceDrafts = (
   return result.sort((a, b) => a.brand.localeCompare(b.brand, 'ru') || a.sku.localeCompare(b.sku, 'ru'));
 };
 
-export const createEmptyQuarterlyPriceDraft = (key: string): QuarterlyPriceDraft => ({
+export const createQuarterlyPriceDraftFromOption = (
+  option: NetworkPriceSKUOption,
+  key: string,
+): QuarterlyPriceDraft => ({
   key,
-  brand: '',
-  sku: '',
-  prices: emptyStrings(),
+  brand: option.brand_as,
+  sku: option.sku,
+  prices: [1, 2, 3, 4].map(() => formatNumberInput(String(option.price))) as PriceQuarterValues<string>,
   periodIds: emptyNumbers(),
   updatedAts: emptyStrings(),
-  confirmed: true,
-  olapPrice: null,
-  olapYear: null,
-  olapMonth: null,
-  manualNew: true,
+  confirmed: false,
+  olapPrice: option.price,
+  olapYear: option.source_year,
+  olapMonth: option.source_month,
+  isNew: true,
   canDelete: true,
   deleteRows: [],
 });
+
+export const filterAvailableSKUOptions = (
+  options: NetworkPriceSKUOption[],
+  drafts: QuarterlyPriceDraft[],
+): NetworkPriceSKUOption[] => {
+  const existing = new Set(drafts.map((draft) => skuKey(draft.sku)));
+  return options.filter((option) => !existing.has(skuKey(option.sku)));
+};
 
 // Один физический период может заполнить сразу четыре ячейки (годовая цена),
 // но его ID можно обновить только один раз. Поэтому первая четверть сохраняет

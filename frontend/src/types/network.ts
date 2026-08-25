@@ -41,6 +41,7 @@ export type {
   NetworkForecastResponse,
   NetworkForecastSaveResponse,
   NetworkContractPrice,
+  NetworkPriceSKUOption,
   NetworkPricesResponse,
   NetworkPricesSaveResponse,
   NetworkForecastInput,

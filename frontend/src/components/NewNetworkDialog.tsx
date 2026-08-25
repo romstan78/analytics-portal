@@ -14,6 +14,9 @@ import {
 } from '@mui/material';
 import type { NetworkType } from '../types/network';
 
+const YEARS = [2026, 2027, 2028];
+const DEFAULT_YEAR = 2027;
+
 export interface NewNetworkValues {
   name: string;
   kam: string;
@@ -40,7 +43,7 @@ export default function NewNetworkDialog({ open, saving, error, onClose, onSubmi
     network_type: 'regular',
     vat_included: true,
     vat_rate: 20,
-    year: new Date().getFullYear(),
+    year: DEFAULT_YEAR,
   });
 
   const set = <K extends keyof NewNetworkValues>(key: K, value: NewNetworkValues[K]) =>
@@ -77,7 +80,7 @@ export default function NewNetworkDialog({ open, saving, error, onClose, onSubmi
 
         <FormControlLabel
           control={<Switch checked={values.vat_included} onChange={(e) => set('vat_included', e.target.checked)} />}
-          label="Сеть работает с НДС"
+          label="Кварталы первого года работают с НДС"
         />
         <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
           НДС применяется только к инвестициям: помимо суммы до вычета показывается сумма с вычетом ставки.
@@ -91,13 +94,17 @@ export default function NewNetworkDialog({ open, saving, error, onClose, onSubmi
         )}
 
         <TextField
+          select
           label="Открыть год"
           value={values.year}
-          onChange={(e) => set('year', Number(e.target.value) || new Date().getFullYear())}
-        />
+          onChange={(e) => set('year', Number(e.target.value))}
+        >
+          {YEARS.map((year) => <MenuItem key={year} value={year}>{year}</MenuItem>)}
+        </TextField>
         <Typography variant="caption" color="text.secondary">
-          НДС применяется ко всем четырём кварталам года и меняется поквартально во вкладке
-          «Планы». Валовый объём там же отмечается на брендах: часть брендов может входить
+          Начальная настройка НДС применяется к Q1–Q4 выбранного года. После создания каждый
+          квартал можно изменить отдельно в «Профиле сети». Валовый объём
+          отмечается на брендах во вкладке «План и факт»: часть брендов может входить
           в общий объём контракта, часть планироваться отдельно.
         </Typography>
       </DialogContent>
