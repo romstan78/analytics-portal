@@ -22,10 +22,10 @@ interface HomeBlock {
 
 const blocks: HomeBlock[] = [
   {
-    title: 'Интернет-продажи',
+    title: 'Продажи',
     path: '/internet-sales',
     icon: <CartIcon sx={{ fontSize: 48 }} />,
-    desc: 'Детализация онлайн-заказов',
+    desc: 'Детализация онлайн и оффлайн продаж',
     color: '#f59e0b',
     ready: true,
   },
@@ -33,7 +33,7 @@ const blocks: HomeBlock[] = [
     title: 'Реестр сетей',
     path: '/network-registry',
     icon: <ListAltIcon sx={{ fontSize: 48 }} />,
-    desc: 'Справочник торговых сетей',
+    desc: 'План-Факт-Прогноз по аптечным сетям',
     color: '#10b981',
     ready: true,
   },
@@ -57,7 +57,7 @@ const blocks: HomeBlock[] = [
     title: 'Оборачиваемость',
     path: '/turnover',
     icon: <RefreshIcon sx={{ fontSize: 36 }} />,
-    desc: 'Анализ оборотов запасов',
+    desc: 'Анализ оборачиваемости по АС',
     color: '#8b5cf6',
     ready: false,
   },
