@@ -108,11 +108,72 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 
 // ─── Карточка сети ──────────────────────────────────────────────────────────
 
+// networkOwnKAM возвращает КАМа текущей учётной записи и сам отвечает клиенту
+// при ошибке. Пустая строка — ограничения нет.
+func networkOwnKAM(c *gin.Context) (string, bool) {
+	username, _ := c.Get("username")
+	role, _ := c.Get("role")
+	kam, err := repository.GetOwnKAM(fmt.Sprint(username), fmt.Sprint(role))
+	if err != nil {
+		config.Logger.Error("network_scope_failed", "error", err.Error(), "user", fmt.Sprint(username))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось определить доступ к реестру"})
+		return "", false
+	}
+	return kam, true
+}
+
+// NetworkAccessRequired закрывает карточку сети вне закрепления пользователя.
+//
+// Ограничение списка само по себе косметическое: адрес карточки содержит id, и
+// без этой проверки чужая сеть открывалась бы по прямой ссылке. Ответ — 404, а
+// не 403: существование чужой сети тоже не его дело.
+func NetworkAccessRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ownKAM, ok := networkOwnKAM(c)
+		if !ok {
+			c.Abort()
+			return
+		}
+		if ownKAM == "" {
+			c.Next()
+			return
+		}
+		id, ok := networkIDParam(c)
+		if !ok {
+			c.Abort()
+			return
+		}
+		network, err := repository.GetNetworkByID(id)
+		if err != nil {
+			respondNetworkError(c, err, "network_access_check_failed")
+			c.Abort()
+			return
+		}
+		if network.KAM == nil || strings.TrimSpace(*network.KAM) != ownKAM {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Сеть не найдена"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // GetNetworks — список сетей реестра.
 func GetNetworks(c *gin.Context) {
+	// Реестр ведёт каждый КАМ за себя: подчинённые в область не входят, даже
+	// если их промо этот пользователь согласует. Поэтому фильтр по КАМу здесь
+	// не дополняется запросом клиента, а подменяется собственным закреплением.
+	ownKAM, ok := networkOwnKAM(c)
+	if !ok {
+		return
+	}
+	requestedKAM := strings.TrimSpace(c.Query("kam"))
+	if ownKAM != "" {
+		requestedKAM = ownKAM
+	}
 	networks, err := repository.ListNetworks(
 		strings.TrimSpace(c.Query("search")),
-		strings.TrimSpace(c.Query("kam")),
+		requestedKAM,
 		c.Query("include_inactive") == "1",
 	)
 	if err != nil {
@@ -1071,6 +1132,26 @@ func GetNetworkAudit(c *gin.Context) {
 }
 
 // GetNetworkBrands — бренды для строк плана.
+// GetNetworkKAMs отдаёт список КАМов для фильтра реестра.
+func GetNetworkKAMs(c *gin.Context) {
+	ownKAM, ok := networkOwnKAM(c)
+	if !ok {
+		return
+	}
+	// Закреплённому КАМу выбирать не из чего: в списке только он сам, иначе
+	// фильтр предлагал бы коллег, чьи сети всё равно не откроются.
+	if ownKAM != "" {
+		c.JSON(http.StatusOK, models.NetworkKAMsResponse{Data: []string{ownKAM}})
+		return
+	}
+	kams, err := repository.GetKAMOptions()
+	if err != nil {
+		respondNetworkError(c, err, "network_kams_failed")
+		return
+	}
+	c.JSON(http.StatusOK, models.NetworkKAMsResponse{Data: kams})
+}
+
 func GetNetworkBrands(c *gin.Context) {
 	brands, err := repository.GetBrandOptions()
 	if err != nil {

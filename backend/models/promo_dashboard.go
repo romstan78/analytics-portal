@@ -58,3 +58,16 @@ type PromoDashboardResponse struct {
 	NetworkCalendar []PromoDashboardCalendarPoint `json:"networkCalendar"`
 	BrandCalendar   []PromoDashboardCalendarPoint `json:"brandCalendar"`
 }
+
+// PromoApprovalAccessResponse — доступна ли пользователю страница согласования.
+//
+// Роль сама по себе ответа не даёт: КАМ допускается к согласованию только при
+// наличии закрепления за чужими КАМами, а ступень следует из него же. Поэтому
+// интерфейс спрашивает доступ у сервера, а не выводит его из роли.
+type PromoApprovalAccessResponse struct {
+	Allowed bool `json:"allowed"`
+	// ApprovalRole пуст у администратора: он выбирает ступень сам.
+	ApprovalRole string `json:"approval_role"`
+	// Scoped — доступ ограничен закреплением, а не открыт по всей очереди.
+	Scoped bool `json:"scoped"`
+}

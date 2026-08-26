@@ -264,6 +264,11 @@ type NetworkBrandsResponse struct {
 	Data []string `json:"data"`
 }
 
+// NetworkKAMsResponse — КАМы для фильтра списка сетей.
+type NetworkKAMsResponse struct {
+	Data []string `json:"data"`
+}
+
 // NetworkMonthlyFact — атомарный факт сети. SKU может быть пустым, если источник
 // отдаёт готовый итог бренда; квартальные суммы всегда собираются из этих строк.
 type NetworkMonthlyFact struct {

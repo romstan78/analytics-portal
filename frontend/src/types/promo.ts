@@ -17,6 +17,7 @@ export type {
   PromoDashboardBreakdown,
   PromoDashboardCalendarPoint,
   PromoDashboardResponse,
+  PromoApprovalAccessResponse,
 } from './api.generated';
 
 export interface FilterOptions {
@@ -132,6 +133,9 @@ export interface NetworkGeoResponse {
 export interface ApprovalsResponse {
   data: ApprovalRow[];
   total: number;
+  // Ступень, на которой сервер выполнил запрос. У делегированного КАМа она
+  // следует из закрепления и может отличаться от отправленной.
+  approval_role?: string;
 }
 
 export interface ApprovalFiltersResponse {

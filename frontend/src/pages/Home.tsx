@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Card, CardActionArea, Button, Chip } from '@mui/material';
+import { getDisplayName } from '../api/auth';
 import {
   BarChart as BarChartIcon,
   ListAlt as ListAltIcon,
@@ -99,7 +100,7 @@ export default function Home({ onLogout }: HomeProps) {
             size="small"
             sx={{ mt: 1 }}
           >
-            Выйти ({localStorage.getItem('username')})
+            Выйти ({getDisplayName()})
           </Button>
         )}
       </Box>

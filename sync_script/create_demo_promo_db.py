@@ -576,7 +576,23 @@ def execute_many(cursor: pyodbc.Cursor, query: str, values: list[tuple[Any, ...]
 
 
 def clear_target(cursor: pyodbc.Cursor) -> None:
+    # Интернет-продажи и реестр сетей очищаются вместе с промо: они собраны из
+    # демо-сетей, брендов и SKU, а новая загрузка может выдать другие
+    # соответствия. Иначе в demo-БД остались бы продажи и планы по
+    # несуществующим сетям. Порядок учитывает внешние ключи реестра.
     for table in (
+        "dbo.tbl_NetworkContractPriceExclusions",
+        "dbo.tbl_NetworkContractPrices",
+        "dbo.tbl_NetworkPeriodGroups",
+        "dbo.tbl_NetworkForecasts",
+        "dbo.tbl_NetworkMonthlyFacts",
+        "dbo.tbl_NetworkComments",
+        "dbo.tbl_NetworkPlans",
+        "dbo.tbl_NetworkPeriods",
+        "dbo.tbl_Networks",
+        "dbo.tbl_EcomSalesNormalized",
+        "dbo.tbl_EcomSalesConsolidated",
+        "dbo.tbl_ChannelSegmentMapping",
         "dbo.tbl_PromoDedupRelatedMoves",
         "dbo.tbl_PromoDedupChanges",
         "dbo.tbl_PromoDedupRuns",

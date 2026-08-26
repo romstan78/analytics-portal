@@ -33,6 +33,7 @@ func salesFilterFromQuery(c *gin.Context) repository.SalesFilter {
 		BrandNames:    c.QueryArray("brandName"),
 		ProductNames:  c.QueryArray("productName"),
 		NetworkNames:  c.QueryArray("networkName"),
+		KAMs:          c.QueryArray("kam"),
 		UnRubs:        c.QueryArray("un_rub"),
 		Segments:      c.QueryArray("segment"),
 		Channels:      c.QueryArray("channel"),
@@ -74,6 +75,7 @@ func GetSalesNetworkOptions(c *gin.Context) {
 		Quarters:     c.QueryArray("quarters"),
 		BrandNames:   c.QueryArray("brandName"),
 		ProductNames: c.QueryArray("productName"),
+		KAMs:         c.QueryArray("kam"),
 	})
 	if err != nil {
 		respondSalesError(c, err)
@@ -216,6 +218,7 @@ func GetSalesDashboard(c *gin.Context) {
 		BrandNames:      c.QueryArray("brandName"),
 		ProductNames:    c.QueryArray("productName"),
 		NetworkNames:    c.QueryArray("networkName"),
+		KAMs:            c.QueryArray("kam"),
 		FocusProducts:   append(c.QueryArray("focusProducts"), c.Query("focusProduct")),
 		FocusNetworks:   append(c.QueryArray("focusNetworks"), c.Query("focusNetwork")),
 		CompareChannels: c.QueryArray("compareChannels"),

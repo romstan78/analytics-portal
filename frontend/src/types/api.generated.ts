@@ -30,6 +30,7 @@ export interface DrilldownRow {
 }
 
 export interface SalesFilterOptions {
+  kam: string[];
   year: string[];
   brandName: string[];
   productName: string[];
@@ -408,6 +409,10 @@ export interface NetworkBrandsResponse {
   data: string[];
 }
 
+export interface NetworkKAMsResponse {
+  data: string[];
+}
+
 export interface NetworkMonthlyFact {
   id: number;
   network_id: number;
@@ -709,6 +714,12 @@ export interface PromoDashboardCalendarPoint {
   year: number;
   month: number;
   metrics: PromoDashboardMetrics;
+}
+
+export interface PromoApprovalAccessResponse {
+  allowed: boolean;
+  approval_role: string;
+  scoped: boolean;
 }
 
 export interface PromoDashboardResponse {

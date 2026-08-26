@@ -15,6 +15,20 @@ import (
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{3,100}$`)
 
+// bootstrapRoles повторяет CK8_Users_role. Роль kam появилась вместе с реестром
+// сетей: без неё завести КАМа было нечем, хотя все операции реестра требуют
+// именно её (main.go, RoleRequired("admin", "kam")).
+var bootstrapRoles = []string{"admin", "agreement1", "agreement2", "kam"}
+
+func allowedBootstrapRole(role string) bool {
+	for _, allowed := range bootstrapRoles {
+		if role == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	_ = godotenv.Load()
 	username := strings.TrimSpace(os.Getenv("BOOTSTRAP_USERNAME"))
@@ -27,10 +41,8 @@ func main() {
 	if len(password) < 12 {
 		log.Fatal("BOOTSTRAP_PASSWORD должен содержать минимум 12 символов")
 	}
-	switch role {
-	case "admin", "agreement1", "agreement2":
-	default:
-		log.Fatal("BOOTSTRAP_ROLE должен быть admin, agreement1 или agreement2")
+	if !allowedBootstrapRole(role) {
+		log.Fatalf("BOOTSTRAP_ROLE должен быть одним из: %s", strings.Join(bootstrapRoles, ", "))
 	}
 
 	if err := config.Init(); err != nil {

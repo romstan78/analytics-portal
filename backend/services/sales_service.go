@@ -146,6 +146,7 @@ type SalesDashboardRequest struct {
 	BrandNames      []string
 	ProductNames    []string
 	NetworkNames    []string
+	KAMs            []string
 	FocusProducts   []string
 	FocusNetworks   []string
 	CompareChannels []string
@@ -190,6 +191,9 @@ type SalesNetworkOptionsRequest struct {
 	Quarters     []string
 	BrandNames   []string
 	ProductNames []string
+	// KAMs сужает список сетей до закреплённых за выбранными КАМами: фильтр
+	// «КАМ → Сеть» иначе предлагал бы сети чужих КАМов.
+	KAMs []string
 }
 
 // SalesNetworkOptions возвращает сети, по которым есть данные при текущих
@@ -219,6 +223,7 @@ func SalesNetworkOptions(req SalesNetworkOptionsRequest) ([]string, error) {
 		Quarters:     req.Quarters,
 		BrandNames:   req.BrandNames,
 		ProductNames: req.ProductNames,
+		KAMs:         req.KAMs,
 		UnRubs:       []string{dbUnit},
 		Segments:     segments,
 		Channels:     UniqueNonEmptyStrings([]string{req.Channel}, 0),
@@ -356,6 +361,7 @@ func BuildSalesDashboard(req SalesDashboardRequest) (*models.SalesDashboardRespo
 			BrandNames:   req.BrandNames,
 			ProductNames: req.ProductNames,
 			NetworkNames: req.NetworkNames,
+			KAMs:         req.KAMs,
 			UnRubs:       []string{req.DBUnit()},
 			Segments:     req.Segments,
 			Channels:     UniqueNonEmptyStrings([]string{req.Channel}, 0),

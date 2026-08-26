@@ -67,6 +67,7 @@ import {
   parseNumberInput,
 } from '../utils/networkPlan';
 import { EntryModeChip, MonthCell } from './NetworkForecastCells';
+import NetworkPromoDetail from './NetworkPromoDetail';
 import type { EntryMode } from '../utils/networkForecastView';
 import { MONTHS, amountLabel } from '../utils/networkForecastView';
 
@@ -85,6 +86,21 @@ interface Props {
 }
 
 const EMPTY_DRAFT: ForecastDraft = { rub: '', units: '', investments: '' };
+
+// Свод по промо бренда за квартал. Разбивка приходит помесячно
+// (NetworkForecastMonth) и в квартальный итог бренда не сворачивается, поэтому
+// складывается здесь — данные уже загружены, лишнего запроса не нужно.
+function promoSummary(months: NetworkForecastMonth[]): string {
+  const sum = (pick: (row: NetworkForecastMonth) => number) =>
+    months.reduce((total, row) => total + pick(row), 0);
+  return [
+    `Промо за квартал: ${sum((row) => row.promo_count)}`,
+    `согласовано ${sum((row) => row.approved_promo_count)}, черновики ${sum((row) => row.draft_promo_count)}`,
+    `План промо: ${formatRubShort(sum((row) => row.promo_plan_rub))} ₽`,
+    `Uplift плана: ${formatRubShort(sum((row) => row.promo_uplift_rub))} ₽`,
+    `Инвестиции промо: ${formatRubShort(sum((row) => row.promo_investments_rub))} ₽`,
+  ].join(' · ') + ' — нажмите, чтобы раскрыть список';
+}
 
 const forecastKey = (month: number, brand: string, sku: string | null): string =>
   `${month}|${brand}|${sku ?? ''}`;
@@ -126,6 +142,9 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   const [displayUnit, setDisplayUnit] = useState<NetworkEntryUnit>('rub');
   const [draftEdits, setDraftEdits] = useState<Record<string, ForecastDraft> | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Детализация промо раскрывается отдельно от ввода по месяцам: это
+  // справка к счётчику, а не часть формы.
+  const [promoDetail, setPromoDetail] = useState<string | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<NetworkForecastImportPreview | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -522,6 +541,10 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                 unit: sample?.entry_unit === 'units' ? 'units' : 'rub',
               };
               const open = expanded === brand;
+              const promoOpen = promoDetail === brand;
+              const brandMonths = monthNumbers
+                .map((month) => rowsByKey.get(forecastKey(month, brand, null)))
+                .filter((row): row is NetworkForecastMonth => row != null);
 
               return [
                 <TableRow key={brand} hover>
@@ -544,12 +567,16 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                         onChange={(next) => entryModeMutation.mutate({ brand, mode: next })}
                       />
                       {brandTotal.promo_count > 0 && (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label={`промо ${brandTotal.promo_count}`}
-                          sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
-                        />
+                        <Tooltip title={promoSummary(brandMonths)}>
+                          <Chip
+                            size="small"
+                            variant={promoOpen ? 'filled' : 'outlined'}
+                            color={promoOpen ? 'primary' : 'default'}
+                            label={`промо ${brandTotal.promo_count}`}
+                            onClick={() => setPromoDetail(promoOpen ? null : brand)}
+                            sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
+                          />
+                        </Tooltip>
                       )}
                     </Box>
                   </TableCell>
@@ -570,6 +597,18 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                     </Typography>
                   </TableCell>
                   <TableCell align="right">{formatRubShort(brandTotal.eac_investments_rub)} ₽</TableCell>
+                </TableRow>,
+                <TableRow key={`${brand}-promo`}>
+                  <TableCell colSpan={6} sx={{ p: 0, border: 0 }}>
+                    <Collapse in={promoOpen} unmountOnExit>
+                      <NetworkPromoDetail
+                        networkName={query.data.network.name}
+                        brand={brand}
+                        year={year}
+                        months={monthNumbers}
+                      />
+                    </Collapse>
+                  </TableCell>
                 </TableRow>,
                 <TableRow key={`${brand}-detail`}>
                   <TableCell colSpan={6} sx={{ p: 0, border: 0 }}>

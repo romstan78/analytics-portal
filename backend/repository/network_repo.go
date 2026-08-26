@@ -908,6 +908,38 @@ func GetNetworkAuditLog(networkID int) ([]models.AuditLogRow, error) {
 }
 
 // GetBrandOptions — список брендов для планирования (планы ведутся по брендам, не по SKU).
+// GetKAMOptions возвращает КАМов для фильтра реестра.
+//
+// Основной источник — справочник tbl_KAMNetworkMapping. К нему добавляются
+// КАМы, проставленные прямо в карточках сетей: фильтр применяется к
+// tbl_Networks.kam, и без объединения сеть с КАМом вне справочника нельзя было
+// бы отобрать ни одним значением списка.
+func GetKAMOptions() ([]string, error) {
+	rows, err := config.DB.Query(
+		`SELECT kam FROM (
+		     SELECT DISTINCT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_KAMNetworkMapping
+		     WHERE kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
+		     UNION
+		     SELECT DISTINCT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_Networks
+		     WHERE kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
+		 ) options ORDER BY kam`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []string{}
+	for rows.Next() {
+		var kam string
+		if err := rows.Scan(&kam); err != nil {
+			return nil, err
+		}
+		result = append(result, kam)
+	}
+	return result, rows.Err()
+}
+
 func GetBrandOptions() ([]string, error) {
 	rows, err := config.DB.Query(
 		`SELECT DISTINCT brand_as FROM dbo.tbl_SKUMapping

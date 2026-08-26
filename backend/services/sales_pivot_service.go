@@ -23,6 +23,7 @@ type SalesPivotRequest struct {
 	BrandNames      []string
 	ProductNames    []string
 	NetworkNames    []string
+	KAMs            []string
 	Segments        []string
 	Channel         string
 }
@@ -279,6 +280,7 @@ func BuildSalesPivot(req SalesPivotRequest) (*models.SalesPivotResponse, error) 
 		BrandNames:   req.BrandNames,
 		ProductNames: req.ProductNames,
 		NetworkNames: req.NetworkNames,
+		KAMs:         req.KAMs,
 		UnRubs:       []string{req.DBUnit()},
 		Segments:     req.Segments,
 		Channels:     UniqueNonEmptyStrings([]string{req.Channel}, 0),

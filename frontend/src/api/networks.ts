@@ -14,6 +14,7 @@ import type {
   NetworkForecastImportResponse,
   NetworkForecastSaveRequest,
   NetworkForecastSaveResponse,
+  NetworkKAMsResponse,
   NetworkEntryLevel,
   NetworkEntryUnit,
   NetworkListResponse,
@@ -40,6 +41,11 @@ export const networkAPI = {
   getBrands: (): Promise<NetworkBrandsResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/brands`)
       .then(r => parseJSONResponse<NetworkBrandsResponse>(r, 'Ошибка загрузки брендов')),
+
+  // КАМы справочника для фильтра списка сетей
+  getKAMs: (): Promise<NetworkKAMsResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/kams`)
+      .then(r => parseJSONResponse<NetworkKAMsResponse>(r, 'Ошибка загрузки списка КАМ')),
 
   // Новая сеть; year открывает первый год сразу четырьмя кварталами
   create: (data: {

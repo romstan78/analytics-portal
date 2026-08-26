@@ -83,6 +83,44 @@ func parseEURMonthlyRates(reader io.Reader) (map[int]float64, error) {
 	return rates, nil
 }
 
+// fillMissingMonths достраивает месяцы, за которые ЦБ ещё не публиковал курс.
+//
+// Дневных котировок нет за незакрытый остаток текущего года, а суммы за такие
+// месяцы в витрине встречаются: планы и демонстрационный контур заполнены
+// вперёд. Без курса пересчёт в евро возвращал бы ошибку на весь дашборд, хотя
+// не хватает котировки за один месяц. Пропуск закрывается последним известным
+// курсом; когда ЦБ опубликует настоящий, он заменит перенесённый при
+// ближайшем обновлении кеша.
+func fillMissingMonths(rates map[int]float64) map[int]float64 {
+	filled := make(map[int]float64, 12)
+	carried := 0.0
+	for month := 1; month <= 12; month++ {
+		if rate, ok := rates[month]; ok && rate > 0 {
+			carried = rate
+		}
+		if carried > 0 {
+			filled[month] = carried
+		}
+	}
+	// Месяцы до первой котировки закрываются первым известным курсом: год
+	// может начинаться с пропуска, если выборка ЦБ стартовала не с января.
+	first := 0.0
+	for month := 1; month <= 12; month++ {
+		if filled[month] > 0 {
+			first = filled[month]
+			break
+		}
+	}
+	if first > 0 {
+		for month := 1; month <= 12; month++ {
+			if filled[month] <= 0 {
+				filled[month] = first
+			}
+		}
+	}
+	return filled
+}
+
 // LoadEURMonthlyRates возвращает средние месячные курсы EUR за год.
 func LoadEURMonthlyRates(year int) (map[int]float64, error) {
 	eurRateCache.Lock()
@@ -124,6 +162,7 @@ func LoadEURMonthlyRates(year int) (map[int]float64, error) {
 	if err != nil {
 		return nil, err
 	}
+	rates = fillMissingMonths(rates)
 	eurRateCache.Lock()
 	eurRateCache.Items[year] = eurRateCacheEntry{Rates: rates, ExpiresAt: time.Now().Add(6 * time.Hour)}
 	eurRateCache.Unlock()

@@ -104,3 +104,137 @@ func TestAppendApprovalCommentPreservesHistoryAndAuthor(t *testing.T) {
 		t.Fatalf("author or approval level is missing: %q", got)
 	}
 }
+
+// Область согласования обязана попадать в WHERE независимо от того, что
+// прислал клиент: именно она, а не параметр kam, ограничивает выборку.
+func TestBuildApprovalsWhereAppliesScope(t *testing.T) {
+	where, args := buildApprovalsWhere(ApprovalParams{
+		Role:        "agreement2",
+		AllowedKAMs: []string{"Алексеева Марина", "Крылов Сергей"},
+		YearStr:     "2026",
+	})
+	if !strings.Contains(where, "p.kam IN (?,?)") {
+		t.Fatalf("where = %q, ожидалось ограничение по области", where)
+	}
+	if len(args) != 3 || args[1] != "Алексеева Марина" || args[2] != "Крылов Сергей" {
+		t.Fatalf("args = %#v, ожидались год и оба КАМа области", args)
+	}
+}
+
+func TestBuildApprovalsWhereWithoutScopeStaysOpen(t *testing.T) {
+	where, _ := buildApprovalsWhere(ApprovalParams{Role: "agreement1", YearStr: "2026"})
+	if strings.Contains(where, "p.kam IN") {
+		t.Fatalf("where = %q, без области ограничения быть не должно", where)
+	}
+}
+
+// Клиентский фильтр по КАМу и область складываются: подстановка чужого КАМа
+// не должна расширять выборку.
+func TestBuildApprovalsWhereCombinesScopeWithRequestedKAM(t *testing.T) {
+	where, args := buildApprovalsWhere(ApprovalParams{
+		Role:        "agreement2",
+		KAM:         "Ершов Максим",
+		AllowedKAMs: []string{"Крылов Сергей"},
+		YearStr:     "2026",
+	})
+	if !strings.Contains(where, "p.kam = ?") || !strings.Contains(where, "p.kam IN (?)") {
+		t.Fatalf("where = %q, ожидались оба условия", where)
+	}
+	if len(args) != 3 {
+		t.Fatalf("args = %#v, ожидались год, запрошенный КАМ и область", args)
+	}
+}
+
+func TestBuildApprovalWhereFiltersScopeEvenForKAMColumn(t *testing.T) {
+	// Справочник КАМов собирает саму колонку kam и потому исключает её из
+	// фильтра. Область обязана применяться всё равно, иначе список выдал бы
+	// имена КАМов вне зоны ответственности.
+	where, args := buildApprovalWhere(ApprovalFilterParams{
+		Role:        "agreement2",
+		AllowedKAMs: []string{"Жукова Ольга"},
+		YearStr:     "2026",
+	}, "kam")
+	if !strings.Contains(where, "p.kam IN (?)") {
+		t.Fatalf("where = %q, область должна применяться и к колонке kam", where)
+	}
+	if args[len(args)-1] != "Жукова Ольга" {
+		t.Fatalf("args = %#v, последним аргументом ожидался КАМ области", args)
+	}
+}
+
+func TestKAMAllowedByScope(t *testing.T) {
+	scope := []string{"Крылов Сергей", "Жукова Ольга"}
+	if !KAMAllowedByScope(scope, "Крылов Сергей") {
+		t.Fatal("КАМ области должен допускаться")
+	}
+	if KAMAllowedByScope(scope, "Ершов Максим") {
+		t.Fatal("КАМ вне области не должен допускаться")
+	}
+	if !KAMAllowedByScope(nil, "Ершов Максим") {
+		t.Fatal("пустая область не ограничивает")
+	}
+}
+
+// Область видимости обязана попадать в базовое условие всех промо-выборок:
+// справочники фильтров, строки, дашборд и выгрузка строятся на нём одном.
+func TestBuildBaseWhereAppliesVisibilityScope(t *testing.T) {
+	where, args := BuildBaseWhere(PromoFilterParams{
+		AllowedKAMs: []string{"Ершов Максим", "Жукова Ольга"},
+		YearFromStr: "2026",
+	})
+	if !strings.Contains(where, "kam IN (?,?)") {
+		t.Fatalf("where = %q, ожидалось ограничение по области видимости", where)
+	}
+	if len(args) != 3 || args[0] != "Ершов Максим" || args[1] != "Жукова Ольга" {
+		t.Fatalf("args = %#v, область должна идти первой", args)
+	}
+	if !strings.Contains(where, "deleted_at IS NULL") {
+		t.Fatalf("where = %q, потеряно условие по удалённым", where)
+	}
+}
+
+func TestBuildBaseWhereWithoutScopeStaysOpen(t *testing.T) {
+	where, args := BuildBaseWhere(PromoFilterParams{YearFromStr: "2026"})
+	if strings.Contains(where, "kam IN") {
+		t.Fatalf("where = %q, без области ограничения быть не должно", where)
+	}
+	if len(args) != 1 {
+		t.Fatalf("args = %#v, ожидался только год", args)
+	}
+}
+
+// Строки, дашборд и выгрузка строятся вторым сборщиком условия — область
+// обязана применяться и в нём, иначе ограничение осталось бы только на
+// справочниках фильтров.
+func TestBuildPromoWhereAppliesVisibilityScope(t *testing.T) {
+	where, args := buildPromoWhere(PromoFilterParams{
+		AllowedKAMs: []string{"Жукова Ольга"},
+	}, nil)
+	if !strings.Contains(where, "p.kam IN (?)") {
+		t.Fatalf("where = %q, область не применена", where)
+	}
+	if len(args) != 1 || args[0] != "Жукова Ольга" {
+		t.Fatalf("args = %#v, ожидалась область", args)
+	}
+}
+
+// Клиентский фильтр по КАМу не расширяет область: условия складываются.
+func TestBuildPromoWhereCombinesScopeWithRequestedKAMs(t *testing.T) {
+	where, args := buildPromoWhere(PromoFilterParams{
+		AllowedKAMs: []string{"Жукова Ольга"},
+		Kams:        []string{"Ершов Максим"},
+	}, nil)
+	if strings.Count(where, "p.kam IN") != 2 {
+		t.Fatalf("where = %q, ожидались оба условия по КАМу", where)
+	}
+	if len(args) != 2 || args[0] != "Жукова Ольга" || args[1] != "Ершов Максим" {
+		t.Fatalf("args = %#v, область должна идти первой", args)
+	}
+}
+
+func TestBuildPromoWhereWithoutScopeStaysOpen(t *testing.T) {
+	where, _ := buildPromoWhere(PromoFilterParams{}, nil)
+	if strings.Contains(where, "p.kam IN") {
+		t.Fatalf("where = %q, без области ограничения быть не должно", where)
+	}
+}

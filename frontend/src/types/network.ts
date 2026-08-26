@@ -32,6 +32,7 @@ export type {
   NetworkCommentsResponse,
   NetworkAuditResponse,
   NetworkBrandsResponse,
+  NetworkKAMsResponse,
   NetworkMonthlyFact,
   NetworkForecastLine,
   NetworkPromoIndicator,
