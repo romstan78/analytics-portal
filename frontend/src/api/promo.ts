@@ -1,6 +1,7 @@
 import { refreshToken, logout } from './auth';
 import type {
   ApprovalFiltersResponse,
+  PromoApprovalAccessResponse,
   ApprovalsResponse,
   BatchApproveResponse,
   FilterOptions,
@@ -274,6 +275,12 @@ export const promoAPI = {
     return fetchWithAuth(`${API_BASE}/api/promo/approvals?${qs}`)
       .then(r => parseJSONResponse<ApprovalsResponse>(r, 'Ошибка загрузки промо на согласование'));
   },
+
+  // Доступна ли пользователю страница согласования. Роль сама по себе ответа
+  // не даёт: КАМ допускается только при наличии закрепления за чужими КАМами.
+  getApprovalAccess: (): Promise<PromoApprovalAccessResponse> =>
+    fetchWithAuth(`${API_BASE}/api/promo/approval-access`)
+      .then(r => parseJSONResponse<PromoApprovalAccessResponse>(r, 'Ошибка проверки доступа к согласованию')),
 
   // Справочники сетей/брендов/механик для страницы согласования
   getApprovalFilters: (params: ApprovalFiltersParams = {}): Promise<ApprovalFiltersResponse> => {

@@ -68,7 +68,10 @@ interface PromoApprovalProps {
 export default function PromoApproval({ role, onDataChanged }: PromoApprovalProps) {
   const queryClient = useQueryClient();
   const [adminApprovalRole, setAdminApprovalRole] = useState<ApprovalRoleName>('agreement1');
-  const approvalRole: ApprovalRoleName = role === 'admin'
+  // Ступень, которую запрашивает интерфейс. У роли kam её в роли нет: ступень
+  // задаёт закрепление за КАМами, и сервер подставит собственную. Отправляемое
+  // значение остаётся неизменным, иначе ключ запроса зависел бы от ответа.
+  const requestApprovalRole: ApprovalRoleName = role === 'admin'
     ? adminApprovalRole
     : (role === 'agreement2' ? 'agreement2' : 'agreement1');
   // Основной вид: очередь + детали. Карточки оставлены как дополнительный режим.
@@ -146,7 +149,7 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
   // Загрузка справочников
   useEffect(() => {
     promoAPI.getApprovalFilters({
-      approval_role: approvalRole,
+      approval_role: requestApprovalRole,
       approval_status: appliedStatus,
       kam: appliedKam,
       network_name: appliedNetwork,
@@ -162,20 +165,20 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [approvalRole, appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
+  }, [requestApprovalRole, appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
 
   // Загрузка данных. Ключ содержит все применённые фильтры и страницу,
   // поэтому устаревшие ответы отбрасываются самим React Query.
   const approvalsQueryKey = useMemo(() => [
-    'approvals', approvalRole, appliedKam, appliedStatus, appliedYear, appliedMonth,
+    'approvals', requestApprovalRole, appliedKam, appliedStatus, appliedYear, appliedMonth,
     appliedNetwork, appliedBrand, appliedMechanics, appliedHasComments, page, pageSize,
-  ] as const, [approvalRole, appliedKam, appliedStatus, appliedYear, appliedMonth, appliedNetwork, appliedBrand, appliedMechanics, appliedHasComments, page, pageSize]);
+  ] as const, [requestApprovalRole, appliedKam, appliedStatus, appliedYear, appliedMonth, appliedNetwork, appliedBrand, appliedMechanics, appliedHasComments, page, pageSize]);
 
   const approvalsQuery = useQuery({
     queryKey: approvalsQueryKey,
     enabled: hasApplied,
     queryFn: () => promoAPI.getApprovals({
-      approval_role: approvalRole,
+      approval_role: requestApprovalRole,
       kam: appliedKam || undefined,
       approval_status: appliedStatus,
       year: appliedYear,
@@ -190,6 +193,15 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
   });
 
   const { data: approvalsData, isFetching, error: approvalsError, refetch } = approvalsQuery;
+
+  // Действующая ступень — та, на которой сервер выполнил запрос. Для КАМа с
+  // закреплением она может отличаться от запрошенной, и подписи, выбор поля
+  // статуса и сами действия обязаны идти за ней, а не за отправленным значением.
+  const approvalRole: ApprovalRoleName = approvalsData?.approval_role === 'agreement2'
+    ? 'agreement2'
+    : approvalsData?.approval_role === 'agreement1'
+      ? 'agreement1'
+      : requestApprovalRole;
 
   const approvals: ApprovalRow[] = useMemo(
     () => (hasApplied ? (approvalsData?.data ?? []) : []),

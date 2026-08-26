@@ -108,11 +108,72 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 
 // ─── Карточка сети ──────────────────────────────────────────────────────────
 
+// networkOwnKAM возвращает КАМа текущей учётной записи и сам отвечает клиенту
+// при ошибке. Пустая строка — ограничения нет.
+func networkOwnKAM(c *gin.Context) (string, bool) {
+	username, _ := c.Get("username")
+	role, _ := c.Get("role")
+	kam, err := repository.GetOwnKAM(fmt.Sprint(username), fmt.Sprint(role))
+	if err != nil {
+		config.Logger.Error("network_scope_failed", "error", err.Error(), "user", fmt.Sprint(username))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось определить доступ к реестру"})
+		return "", false
+	}
+	return kam, true
+}
+
+// NetworkAccessRequired закрывает карточку сети вне закрепления пользователя.
+//
+// Ограничение списка само по себе косметическое: адрес карточки содержит id, и
+// без этой проверки чужая сеть открывалась бы по прямой ссылке. Ответ — 404, а
+// не 403: существование чужой сети тоже не его дело.
+func NetworkAccessRequired() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ownKAM, ok := networkOwnKAM(c)
+		if !ok {
+			c.Abort()
+			return
+		}
+		if ownKAM == "" {
+			c.Next()
+			return
+		}
+		id, ok := networkIDParam(c)
+		if !ok {
+			c.Abort()
+			return
+		}
+		network, err := repository.GetNetworkByID(id)
+		if err != nil {
+			respondNetworkError(c, err, "network_access_check_failed")
+			c.Abort()
+			return
+		}
+		if network.KAM == nil || strings.TrimSpace(*network.KAM) != ownKAM {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Сеть не найдена"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // GetNetworks — список сетей реестра.
 func GetNetworks(c *gin.Context) {
+	// Реестр ведёт каждый КАМ за себя: подчинённые в область не входят, даже
+	// если их промо этот пользователь согласует. Поэтому фильтр по КАМу здесь
+	// не дополняется запросом клиента, а подменяется собственным закреплением.
+	ownKAM, ok := networkOwnKAM(c)
+	if !ok {
+		return
+	}
+	requestedKAM := strings.TrimSpace(c.Query("kam"))
+	if ownKAM != "" {
+		requestedKAM = ownKAM
+	}
 	networks, err := repository.ListNetworks(
 		strings.TrimSpace(c.Query("search")),
-		strings.TrimSpace(c.Query("kam")),
+		requestedKAM,
 		c.Query("include_inactive") == "1",
 	)
 	if err != nil {
@@ -131,6 +192,8 @@ type networkInput struct {
 	Month2Pct                     *float64             `json:"month2_pct"`
 	Month3Pct                     *float64             `json:"month3_pct"`
 	HasAnnualInvestmentCumulative *bool                `json:"has_annual_investment_cumulative"`
+	DefaultEntryLevel             *string              `json:"default_entry_level"`
+	DefaultEntryUnit              *string              `json:"default_entry_unit"`
 	UpdatedAt                     string               `json:"updated_at"`
 	VATIncluded                   *bool                `json:"vat_included"`
 	VATRate                       *float64             `json:"vat_rate"`
@@ -138,7 +201,29 @@ type networkInput struct {
 	Periods                       []networkPeriodInput `json:"periods"`
 }
 
-func networkProfileSettings(input networkInput, fallback models.Network) (float64, float64, float64, bool, error) {
+// networkProfile — настройки карточки сети, не зависящие от квартала.
+type networkProfile struct {
+	Month1Pct                     float64
+	Month2Pct                     float64
+	Month3Pct                     float64
+	HasAnnualInvestmentCumulative bool
+	// Режим ведения для брендов, которых в плане ещё нет: у каждого КАМа своя
+	// привычка, и сеть должна открываться сразу в ней.
+	DefaultEntryLevel string
+	DefaultEntryUnit  string
+}
+
+// oneOf возвращает значение, если оно есть в списке допустимых.
+func oneOf(value string, allowed ...string) (string, bool) {
+	for _, option := range allowed {
+		if value == option {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func networkProfileSettings(input networkInput, fallback models.Network) (networkProfile, error) {
 	month1Pct, month2Pct, month3Pct := fallback.Month1Pct, fallback.Month2Pct, fallback.Month3Pct
 	if input.Month1Pct != nil {
 		month1Pct = *input.Month1Pct
@@ -154,16 +239,47 @@ func networkProfileSettings(input networkInput, fallback models.Network) (float6
 		hasAnnualInvestmentCumulative = *input.HasAnnualInvestmentCumulative
 	}
 
+	entryLevel := fallback.DefaultEntryLevel
+	if entryLevel == "" {
+		entryLevel = "brand"
+	}
+	if input.DefaultEntryLevel != nil {
+		entryLevel = strings.TrimSpace(*input.DefaultEntryLevel)
+	}
+	entryUnit := fallback.DefaultEntryUnit
+	if entryUnit == "" {
+		entryUnit = "rub"
+	}
+	if input.DefaultEntryUnit != nil {
+		entryUnit = strings.TrimSpace(*input.DefaultEntryUnit)
+	}
+
 	if month1Pct < 0 || month1Pct > 100 ||
 		month2Pct < 0 || month2Pct > 100 ||
 		month3Pct < 0 || month3Pct > 100 ||
 		math.Abs(month1Pct+month2Pct+month3Pct-100) > 0.001 {
-		return 0, 0, 0, false, fmt.Errorf(
+		return networkProfile{}, fmt.Errorf(
 			"распределение месяцев должно давать 100%%: %.2f + %.2f + %.2f",
 			month1Pct, month2Pct, month3Pct,
 		)
 	}
-	return month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, nil
+	entryLevel, levelOK := oneOf(entryLevel, "brand", "sku")
+	if !levelOK {
+		return networkProfile{}, errors.New("уровень ведения: brand или sku")
+	}
+	entryUnit, unitOK := oneOf(entryUnit, "rub", "units")
+	if !unitOK {
+		return networkProfile{}, errors.New("единица ведения: rub или units")
+	}
+
+	return networkProfile{
+		Month1Pct:                     month1Pct,
+		Month2Pct:                     month2Pct,
+		Month3Pct:                     month3Pct,
+		HasAnnualInvestmentCumulative: hasAnnualInvestmentCumulative,
+		DefaultEntryLevel:             entryLevel,
+		DefaultEntryUnit:              entryUnit,
+	}, nil
 }
 
 func networkVATSettings(input networkInput, fallback models.Network) (bool, float64, error) {
@@ -258,7 +374,7 @@ func CreateNetwork(c *gin.Context) {
 		return
 	}
 
-	month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, err := networkProfileSettings(
+	profile, err := networkProfileSettings(
 		input,
 		models.Network{Month1Pct: 30, Month2Pct: 30, Month3Pct: 40},
 	)
@@ -275,7 +391,9 @@ func CreateNetwork(c *gin.Context) {
 	id, err := repository.InsertNetwork(
 		input.Name, input.KAM, input.NetworkType,
 		vatIncluded, vatRate,
-		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative,
+		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
+		profile.HasAnnualInvestmentCumulative,
+		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
 	)
 	if err != nil {
 		respondNetworkError(c, err, "network_create_failed")
@@ -342,7 +460,7 @@ func UpdateNetwork(c *gin.Context) {
 	if input.IsActive != nil {
 		isActive = *input.IsActive
 	}
-	month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative, err := networkProfileSettings(input, current)
+	profile, err := networkProfileSettings(input, current)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -375,7 +493,9 @@ func UpdateNetwork(c *gin.Context) {
 	if err := repository.UpdateNetwork(
 		id, name, input.KAM, networkType, isActive,
 		vatIncluded, vatRate,
-		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative,
+		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
+		profile.HasAnnualInvestmentCumulative,
+		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
 		input.Year, profilePeriods,
 		input.UpdatedAt,
 	); err != nil {
@@ -403,16 +523,23 @@ func UpdateNetwork(c *gin.Context) {
 	if current.VATRate != vatRate {
 		changes["vat_rate"] = map[string]interface{}{"old": current.VATRate, "new": vatRate}
 	}
-	if current.Month1Pct != month1Pct || current.Month2Pct != month2Pct || current.Month3Pct != month3Pct {
+	if current.Month1Pct != profile.Month1Pct || current.Month2Pct != profile.Month2Pct ||
+		current.Month3Pct != profile.Month3Pct {
 		changes["month_distribution"] = map[string]interface{}{
 			"old": []float64{current.Month1Pct, current.Month2Pct, current.Month3Pct},
-			"new": []float64{month1Pct, month2Pct, month3Pct},
+			"new": []float64{profile.Month1Pct, profile.Month2Pct, profile.Month3Pct},
 		}
 	}
-	if current.HasAnnualInvestmentCumulative != hasAnnualInvestmentCumulative {
+	if current.HasAnnualInvestmentCumulative != profile.HasAnnualInvestmentCumulative {
 		changes["has_annual_investment_cumulative"] = map[string]interface{}{
 			"old": current.HasAnnualInvestmentCumulative,
-			"new": hasAnnualInvestmentCumulative,
+			"new": profile.HasAnnualInvestmentCumulative,
+		}
+	}
+	if current.DefaultEntryLevel != profile.DefaultEntryLevel || current.DefaultEntryUnit != profile.DefaultEntryUnit {
+		changes["default_entry_mode"] = map[string]interface{}{
+			"old": []string{current.DefaultEntryLevel, current.DefaultEntryUnit},
+			"new": []string{profile.DefaultEntryLevel, profile.DefaultEntryUnit},
 		}
 	}
 	if input.Periods != nil {
@@ -781,6 +908,62 @@ func SaveNetworkForecast(c *gin.Context) {
 	c.JSON(http.StatusOK, models.NetworkForecastSaveResponse{Message: "Saved", Data: response})
 }
 
+type entryModeInput struct {
+	Year       int    `json:"year"`
+	Quarter    int    `json:"quarter"`
+	BrandAS    string `json:"brand_as"`
+	EntryLevel string `json:"entry_level"`
+	EntryUnit  string `json:"entry_unit"`
+}
+
+// UpdateNetworkEntryMode переключает уровень и единицу ведения бренда.
+// Ответ — пересобранный прогноз квартала: смена режима меняет то, какие строки
+// считаются введёнными, поэтому форма должна получить пересчитанную сетку.
+func UpdateNetworkEntryMode(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	var input entryModeInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Year < 2000 || input.Year > 2100 || input.Quarter < 1 || input.Quarter > 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный период"})
+		return
+	}
+
+	username, _ := currentUser(c)
+	err := repository.UpdateNetworkPlanEntryMode(
+		id, input.Year, input.Quarter, input.BrandAS, input.EntryLevel, input.EntryUnit, username,
+	)
+	if errors.Is(err, repository.ErrNetworkBrandNotPlanned) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Бренда нет в плане квартала: сначала добавьте его во вкладке «Планы»",
+		})
+		return
+	}
+	if err != nil {
+		respondNetworkError(c, err, "network_entry_mode_failed")
+		return
+	}
+
+	response, err := loadNetworkForecast(id, input.Year, input.Quarter)
+	if err != nil {
+		respondNetworkError(c, err, "network_entry_mode_refetch_failed")
+		return
+	}
+	_ = repository.InsertEntityAuditLog(
+		"network_plan", id, username, "UPDATE",
+		jsonString(map[string]interface{}{
+			"year": input.Year, "quarter": input.Quarter, "brand": input.BrandAS,
+			"entry_level": input.EntryLevel, "entry_unit": input.EntryUnit,
+		}),
+	)
+	c.JSON(http.StatusOK, models.NetworkForecastSaveResponse{Message: "Saved", Data: response})
+}
+
 // ─── Цены контракта ─────────────────────────────────────────────────────────
 
 func GetNetworkPrices(c *gin.Context) {
@@ -949,6 +1132,26 @@ func GetNetworkAudit(c *gin.Context) {
 }
 
 // GetNetworkBrands — бренды для строк плана.
+// GetNetworkKAMs отдаёт список КАМов для фильтра реестра.
+func GetNetworkKAMs(c *gin.Context) {
+	ownKAM, ok := networkOwnKAM(c)
+	if !ok {
+		return
+	}
+	// Закреплённому КАМу выбирать не из чего: в списке только он сам, иначе
+	// фильтр предлагал бы коллег, чьи сети всё равно не откроются.
+	if ownKAM != "" {
+		c.JSON(http.StatusOK, models.NetworkKAMsResponse{Data: []string{ownKAM}})
+		return
+	}
+	kams, err := repository.GetKAMOptions()
+	if err != nil {
+		respondNetworkError(c, err, "network_kams_failed")
+		return
+	}
+	c.JSON(http.StatusOK, models.NetworkKAMsResponse{Data: kams})
+}
+
 func GetNetworkBrands(c *gin.Context) {
 	brands, err := repository.GetBrandOptions()
 	if err != nil {

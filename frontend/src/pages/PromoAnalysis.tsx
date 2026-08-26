@@ -138,6 +138,14 @@ interface DashboardFilterSnapshot {
 export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Доступ к согласованию спрашивается у сервера: у роли kam он зависит от
+  // закрепления за чужими КАМами, и по одной роли его не определить.
+  const approvalAccessQuery = useQuery({
+    queryKey: ['approvalAccess', role],
+    queryFn: () => promoAPI.getApprovalAccess(),
+    staleTime: 10 * 60 * 1000,
+  });
+  const canApprove = approvalAccessQuery.data?.allowed ?? false;
   const [tab, setTab] = useState(0);
   const [allSkuOptions, setAllSkuOptions] = useState<string[]>([]);
   const [allNetworkOptions, setAllNetworkOptions] = useState<string[]>([]);
@@ -373,9 +381,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
         <Tab label="Дашборд" />
         <Tab label="Просмотр данных" />
         <Tab label="Новое промо" />
-        {(role === 'admin' || role === 'agreement1' || role === 'agreement2') && (
-          <Tab label="Согласование" />
-        )}
+        {canApprove && <Tab label="Согласование" />}
       </Tabs>
 
       {(tab === 0 || tab === 1) && (
@@ -497,7 +503,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       )}
 
       {/* ─── Tab 3: Согласование ──────────────────────────────────────── */}
-      {tab === 3 && (
+      {tab === 3 && canApprove && (
         <Suspense fallback={<Box sx={{ display: 'grid', flex: 1, placeItems: 'center' }}><CircularProgress /></Box>}>
           <PromoApproval role={role} onDataChanged={() => {
             queryClient.invalidateQueries({ queryKey: ['promoData'] });

@@ -38,6 +38,7 @@ import {
 import { networkAPI } from '../api/networks';
 import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
+import NetworkVATEditor from '../components/NetworkVATEditor';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
 import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
@@ -54,6 +55,7 @@ import {
   formatPct,
   formatRub,
   isMonthDistributionValid,
+  isVATRateValid,
   parseNumberInput,
   planKey,
 } from '../utils/networkPlan';
@@ -173,6 +175,8 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const canEdit = role === 'admin' || role === 'kam';
 
   const [search, setSearch] = useState('');
+  // Фильтр списка сетей по КАМ. Пустая строка — все сети реестра.
+  const [kam, setKam] = useState('');
   // Список сетей сворачивается: выбрав сеть, всю ширину отдаём таблице планов.
   const [listOpen, setListOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -186,8 +190,14 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const [toast, setToast] = useState<{ text: string; severity: 'success' | 'error' } | null>(null);
 
   const networksQuery = useQuery({
-    queryKey: ['networks', search],
-    queryFn: () => networkAPI.getNetworks({ search }),
+    queryKey: ['networks', search, kam],
+    queryFn: () => networkAPI.getNetworks({ search, kam }),
+  });
+
+  const kamsQuery = useQuery({
+    queryKey: ['networkKams'],
+    queryFn: () => networkAPI.getKAMs(),
+    staleTime: 30 * 60 * 1000,
   });
 
   const brandsQuery = useQuery({
@@ -303,10 +313,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
       vatRate: draft?.vatRate ?? String(saved?.vat_rate ?? selected?.vat_rate ?? 20),
     };
   });
-  const profileVATValid = profilePeriodValues.every(({ vatRate }) => {
-    const parsed = parseNumberInput(vatRate);
-    return parsed != null && parsed >= 0 && parsed < 100;
-  });
+  // Та же проверка, что подсвечивает поле в NetworkVATEditor: кнопка сохранения
+  // и подсказка об ошибке обязаны включаться и гаснуть вместе.
+  const profileVATValid = profilePeriodValues.every(({ vatRate }) => isVATRateValid(vatRate));
   const profilePeriodsReady = planQuery.data?.year === year && planQuery.data.network.id === selectedId;
   const profileDirty = Object.keys(profile).length > 0 || Object.keys(profilePeriods).length > 0;
 
@@ -375,6 +384,20 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               },
             }}
           />
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="КАМ"
+            value={kam}
+            onChange={(e) => setKam(e.target.value)}
+            sx={{ mt: 1.5 }}
+          >
+            <MenuItem value="">Все КАМ</MenuItem>
+            {(kamsQuery.data?.data ?? []).map((option) => (
+              <MenuItem key={option} value={option}>{option}</MenuItem>
+            ))}
+          </TextField>
           {networksQuery.isLoading && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={22} /></Box>}
           {networksQuery.isError && <Alert severity="error" sx={{ mt: 1 }}>Не удалось загрузить список сетей</Alert>}
           <List dense sx={{ maxHeight: '70vh', overflowY: 'auto', mt: 1 }}>
@@ -491,63 +514,16 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     <MenuItem value="regular">Обычная</MenuItem>
                     <MenuItem value="warehouse">Складская</MenuItem>
                   </TextField>
-                  <Paper variant="outlined" sx={{ p: 1.5 }}>
-                    <Typography variant="subtitle2" sx={{ mb: 0.25 }}>НДС · {year}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Для каждого квартала отдельно укажите, работает ли сеть с НДС, и ставку.
-                      НДС применяется только к инвестициям.
-                    </Typography>
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
-                        gap: 1,
-                        mt: 1.25,
-                      }}
-                    >
-                      {profilePeriodValues.map(({ quarter, vatIncluded, vatRate }) => (
-                        <Paper key={quarter} variant="outlined" sx={{ p: 1.25 }}>
-                          <Typography variant="subtitle2">Q{quarter}</Typography>
-                          <FormControlLabel
-                            control={
-                              <Switch
-                                size="small"
-                                checked={vatIncluded}
-                                disabled={!canEdit || !profilePeriodsReady}
-                                onChange={(event) => setProfilePeriods((current) => ({
-                                  ...current,
-                                  [quarter]: {
-                                    vatIncluded: event.target.checked,
-                                    vatRate: current[quarter]?.vatRate ?? vatRate,
-                                  },
-                                }))}
-                                slotProps={{ input: { 'aria-label': `Сеть работает с НДС в Q${quarter}` } }}
-                              />
-                            }
-                            label="Работает с НДС"
-                          />
-                          <TextField
-                            fullWidth
-                            size="small"
-                            label="Ставка, %"
-                            value={vatRate}
-                            disabled={!canEdit || !profilePeriodsReady || !vatIncluded}
-                            error={parseNumberInput(vatRate) == null
-                              || (parseNumberInput(vatRate) ?? 0) < 0
-                              || (parseNumberInput(vatRate) ?? 100) >= 100}
-                            onChange={(event) => setProfilePeriods((current) => ({
-                              ...current,
-                              [quarter]: {
-                                vatIncluded: current[quarter]?.vatIncluded ?? vatIncluded,
-                                vatRate: event.target.value,
-                              },
-                            }))}
-                            slotProps={{ htmlInput: { inputMode: 'decimal' } }}
-                          />
-                        </Paper>
-                      ))}
-                    </Box>
-                  </Paper>
+                  <NetworkVATEditor
+                    year={year}
+                    values={profilePeriodValues}
+                    canEdit={canEdit}
+                    ready={profilePeriodsReady}
+                    onChange={(quarter, next) => setProfilePeriods((current) => ({
+                      ...current,
+                      [quarter]: next,
+                    }))}
+                  />
                   <NetworkAllocationEditor
                     values={monthDistribution}
                     canEdit={canEdit}

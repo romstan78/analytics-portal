@@ -57,6 +57,13 @@ export function isMonthDistributionValid(values: [string, string, string]): bool
     && Math.abs(numbers.reduce<number>((sum, value) => sum + (value ?? 0), 0) - 100) < 0.001;
 }
 
+// Ставка НДС повторяет CK_NetworkPeriods_vat_rate: 100% и выше база не примет,
+// поэтому проверка живёт рядом с полем ввода, а не только в подсказке об ошибке.
+export function isVATRateValid(value: string): boolean {
+  const parsed = parseNumberInput(value);
+  return parsed != null && parsed >= 0 && parsed < 100;
+}
+
 export function formatRub(value: number | null | undefined, digits = 0): string {
   if (value == null) return '—';
   return value.toLocaleString('ru-RU', { minimumFractionDigits: digits, maximumFractionDigits: digits });

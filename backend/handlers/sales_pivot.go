@@ -26,6 +26,7 @@ func salesPivotRequestFromQuery(c *gin.Context) services.SalesPivotRequest {
 		BrandNames:      c.QueryArray("brandName"),
 		ProductNames:    c.QueryArray("productName"),
 		NetworkNames:    c.QueryArray("networkName"),
+		KAMs:            c.QueryArray("kam"),
 		Segments:        append(c.QueryArray("focusSegments"), c.Query("focusSegment")),
 		Channel:         c.Query("focusChannel"),
 	}

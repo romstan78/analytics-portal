@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"backend/config"
@@ -65,6 +66,9 @@ func Login(c *gin.Context) {
 		"token":    accessToken,
 		"username": req.Username,
 		"role":     user.Role,
+		// Отображаемое имя: у КАМа это имя из справочника, у остальных —
+		// логин. Интерфейс подписывает пользователя им, а не логином.
+		"display_name": displayName(user.Username, user.KAM),
 	})
 }
 
@@ -142,14 +146,25 @@ func RefreshToken(c *gin.Context) {
 	setRefreshCookie(c, newRefreshToken)
 
 	c.JSON(http.StatusOK, gin.H{
-		"token":    newAccessToken,
-		"username": user.Username,
-		"role":     user.Role,
+		"token":        newAccessToken,
+		"username":     user.Username,
+		"role":         user.Role,
+		"display_name": displayName(user.Username, user.KAM),
 	})
 }
 
 // setRefreshCookie кладёт refresh-токен в httpOnly cookie, доступную только
 // эндпоинтам /api/auth/*. SameSite задан явно.
+// displayName — как подписывать пользователя в интерфейсе. Логин собран
+// транслитерацией и читается плохо, поэтому у закреплённого КАМа показывается
+// его имя из справочника.
+func displayName(username, kam string) string {
+	if trimmed := strings.TrimSpace(kam); trimmed != "" {
+		return trimmed
+	}
+	return username
+}
+
 func setRefreshCookie(c *gin.Context, token string) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(

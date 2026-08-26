@@ -14,6 +14,8 @@ export interface InternetSalesViewSnapshot {
     yearTo: string;
     months: number[];
     quarters: number[];
+    // Сохранённые до появления фильтра по КАМу виды его не содержат.
+    kam?: string[];
     brandName: string[];
     productName: string[];
     networkName: string[];

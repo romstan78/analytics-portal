@@ -11,14 +11,47 @@ func TestNetworkProfileSettingsUsesFallbackAndValidatesDistribution(t *testing.T
 		Month1Pct: 25, Month2Pct: 35, Month3Pct: 40,
 		HasAnnualInvestmentCumulative: true,
 	}
-	month1, month2, month3, enabled, err := networkProfileSettings(networkInput{}, fallback)
-	if err != nil || month1 != 25 || month2 != 35 || month3 != 40 || !enabled {
-		t.Fatalf("профиль по умолчанию = %.2f/%.2f/%.2f enabled=%v err=%v", month1, month2, month3, enabled, err)
+	profile, err := networkProfileSettings(networkInput{}, fallback)
+	if err != nil || profile.Month1Pct != 25 || profile.Month2Pct != 35 ||
+		profile.Month3Pct != 40 || !profile.HasAnnualInvestmentCumulative {
+		t.Fatalf("профиль по умолчанию = %#v err=%v", profile, err)
+	}
+	// Сеть, заведённая до появления режима ведения, открывается в рублях по бренду.
+	if profile.DefaultEntryLevel != "brand" || profile.DefaultEntryUnit != "rub" {
+		t.Fatalf("режим по умолчанию = %q/%q, ожидалось brand/rub",
+			profile.DefaultEntryLevel, profile.DefaultEntryUnit)
 	}
 
 	invalid := 20.0
-	if _, _, _, _, err := networkProfileSettings(networkInput{Month3Pct: &invalid}, fallback); err == nil {
+	if _, err := networkProfileSettings(networkInput{Month3Pct: &invalid}, fallback); err == nil {
 		t.Fatal("профиль с суммой не 100% должен отклоняться")
+	}
+}
+
+func TestNetworkProfileSettingsKeepsAndValidatesEntryMode(t *testing.T) {
+	fallback := models.Network{
+		Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
+		DefaultEntryLevel: "sku", DefaultEntryUnit: "units",
+	}
+	// Запрос без режима не переключает сеть на чужой способ ведения.
+	profile, err := networkProfileSettings(networkInput{}, fallback)
+	if err != nil || profile.DefaultEntryLevel != "sku" || profile.DefaultEntryUnit != "units" {
+		t.Fatalf("режим сети = %q/%q err=%v, ожидалось sku/units",
+			profile.DefaultEntryLevel, profile.DefaultEntryUnit, err)
+	}
+
+	level, unit := "brand", "rub"
+	profile, err = networkProfileSettings(networkInput{
+		DefaultEntryLevel: &level, DefaultEntryUnit: &unit,
+	}, fallback)
+	if err != nil || profile.DefaultEntryLevel != "brand" || profile.DefaultEntryUnit != "rub" {
+		t.Fatalf("режим из запроса = %q/%q err=%v, ожидалось brand/rub",
+			profile.DefaultEntryLevel, profile.DefaultEntryUnit, err)
+	}
+
+	wrong := "package"
+	if _, err := networkProfileSettings(networkInput{DefaultEntryUnit: &wrong}, fallback); err == nil {
+		t.Fatal("неизвестная единица ведения должна отклоняться")
 	}
 }
 

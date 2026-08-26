@@ -13,8 +13,13 @@ type Network struct {
 	Month2Pct                     float64 `json:"month2_pct"`
 	Month3Pct                     float64 `json:"month3_pct"`
 	HasAnnualInvestmentCumulative bool    `json:"has_annual_investment_cumulative"`
-	CreatedAt                     *string `json:"created_at"`
-	UpdatedAt                     string  `json:"updated_at"`
+	// Режим ведения для брендов, которых в плане ещё нет: уровень ввода
+	// (brand | sku) и единица (rub | units). У каждого КАМа своя привычка,
+	// поэтому сеть открывается сразу в ней, а бренд может её переопределить.
+	DefaultEntryLevel string  `json:"default_entry_level"`
+	DefaultEntryUnit  string  `json:"default_entry_unit"`
+	CreatedAt         *string `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 // NetworkPeriod сохраняется для совместимости с существующими данными и API.
@@ -43,6 +48,12 @@ type NetworkPlan struct {
 	InGross   bool     `json:"in_gross"`   // бренд входит в валовый объём этого квартала
 	PlanRub   *float64 `json:"plan_rub"`   // план как введён, НДС к нему не применяется
 	PlanUnits *float64 `json:"plan_units"` // задел под таблицу цен контракта
+	// Режим ведения бренда, общий для вкладок «Планы» и «Прогноз».
+	// EntryLevel = sku означает, что введены SKU-строки, а строка бренда —
+	// их сумма; EntryUnit говорит, какая метрика введена, а какая пересчитана
+	// по цене контракта. На строке пула не используется.
+	EntryLevel string `json:"entry_level"`
+	EntryUnit  string `json:"entry_unit"`
 	// Для совместимости распределение остаётся в строке ответа, но его единый
 	// источник — профиль Network, а не отдельный план бренда или квартала.
 	Month1Pct   float64  `json:"month1_pct"`
@@ -253,6 +264,11 @@ type NetworkBrandsResponse struct {
 	Data []string `json:"data"`
 }
 
+// NetworkKAMsResponse — КАМы для фильтра списка сетей.
+type NetworkKAMsResponse struct {
+	Data []string `json:"data"`
+}
+
 // NetworkMonthlyFact — атомарный факт сети. SKU может быть пустым, если источник
 // отдаёт готовый итог бренда; квартальные суммы всегда собираются из этих строк.
 type NetworkMonthlyFact struct {
@@ -309,15 +325,27 @@ type NetworkPromoIndicator struct {
 
 // NetworkForecastMonth — готовая ячейка прогноза. План распределён из квартала,
 // факт загружен, официальный и системный прогнозы показаны рядом.
+//
+// Прогноз инвестиций руками не вводится: это процент бренда из квартального
+// плана, применённый к EAC объёма. InvestmentsSource говорит, откуда взялась
+// показанная сумма, чтобы форма не выдавала расчёт за введённое значение.
 type NetworkForecastMonth struct {
-	Year                   int      `json:"year"`
-	Quarter                int      `json:"quarter"`
-	Month                  int      `json:"month"`
-	BrandAS                string   `json:"brand_as"`
-	SKU                    *string  `json:"sku"`
-	ContractPrice          *float64 `json:"contract_price"`
-	PlanRub                *float64 `json:"plan_rub"`
-	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
+	Year               int      `json:"year"`
+	Quarter            int      `json:"quarter"`
+	Month              int      `json:"month"`
+	BrandAS            string   `json:"brand_as"`
+	SKU                *string  `json:"sku"`
+	ContractPrice      *float64 `json:"contract_price"`
+	PlanRub            *float64 `json:"plan_rub"`
+	PlanInvestmentsRub *float64 `json:"plan_investments_rub"`
+	InvestmentsPct     *float64 `json:"investments_pct"`
+	InvestmentsSource  string   `json:"investments_source"` // fact | pct | override | none
+	EntryLevel         string   `json:"entry_level"`        // brand | sku
+	EntryUnit          string   `json:"entry_unit"`         // rub | units
+	// IsDerived: строку считает система, а не человек. Владелец значения —
+	// другой уровень: сумма SKU для строки бренда либо разложение бренда по
+	// миксу для строки SKU. Такие значения форма показывает, но не даёт править.
+	IsDerived              bool     `json:"is_derived"`
 	FactRub                *float64 `json:"fact_rub"`
 	FactUnits              *float64 `json:"fact_units"`
 	FactInvestmentsRub     *float64 `json:"fact_investments_rub"`

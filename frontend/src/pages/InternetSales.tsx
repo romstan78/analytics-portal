@@ -55,6 +55,8 @@ interface SalesFilters {
   yearTo: string;
   months: number[];
   quarters: number[];
+  // КАМа в самих продажах нет — он закреплён за сетью в справочнике.
+  kam: string[];
   brandName: string[];
   productName: string[];
   networkName: string[];
@@ -62,11 +64,12 @@ interface SalesFilters {
 
 const EMPTY_FILTERS: SalesFilters = {
   yearFrom: '', yearTo: '', months: [], quarters: [],
-  brandName: [], productName: [], networkName: [],
+  kam: [], brandName: [], productName: [], networkName: [],
 };
 
 interface SalesMeta {
   year: string[];
+  kam: string[];
   brandName: string[];
   productName: string[];
   segment: string[];
@@ -80,10 +83,12 @@ const normalizeStringList = (value: unknown) => Array.isArray(value) ? value.fil
 
 export default function InternetSales() {
   const navigate = useNavigate();
-  const [view, setView] = useState<'dashboard' | 'summary' | 'details'>('summary');
+  // Первым открывается дашборд: он отвечает на вопрос «что происходит»,
+  // а сводная нужна уже под разбор конкретных цифр.
+  const [view, setView] = useState<'dashboard' | 'summary' | 'details'>('dashboard');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [meta, setMeta] = useState<SalesMeta>({
-    year: [], brandName: [], productName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
+    year: [], kam: [], brandName: [], productName: [], segment: [], channel: [], channelSegmentMap: {}, loading: true, error: null,
   });
   const [networkOptions, setNetworkOptions] = useState<string[]>([]);
   const [networkOptionsLoading, setNetworkOptionsLoading] = useState(false);
@@ -120,6 +125,7 @@ export default function InternetSales() {
         const channelSegmentMap = data.channelSegmentMap || {};
         setMeta({
           year: years,
+          kam: normalizeStringList(data.kam),
           brandName: normalizeStringList(data.brandName),
           productName: normalizeStringList(data.productName),
           segment: segments,
@@ -173,7 +179,7 @@ export default function InternetSales() {
     // Зависимости перечислены по полям намеренно: эффект сам правит
     // filters.networkName, и полный объект filters зациклил бы его.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.brandName, filters.productName, focusChannel, focusSegments, unit]);
+  }, [analysisYear, filters.yearFrom, filters.yearTo, filters.months, filters.quarters, filters.kam, filters.brandName, filters.productName, focusChannel, focusSegments, unit]);
 
   const dashboardEnabled = view === 'dashboard' && Boolean(analysisYear) && focusSegments.length > 0;
   const { data: dashboardData, isFetching: dashboardFetching, error: dashboardQueryError } = useQuery({
@@ -274,6 +280,7 @@ export default function InternetSales() {
       ...snapshot.filters,
       months: [...(snapshot.filters.months || [])],
       quarters: [...(snapshot.filters.quarters || [])],
+      kam: [...(snapshot.filters.kam || [])],
       brandName: [...(snapshot.filters.brandName || [])],
       productName: [...(snapshot.filters.productName || [])],
       networkName: [...(snapshot.filters.networkName || [])],
@@ -290,7 +297,7 @@ export default function InternetSales() {
     setDashboardFocus([]);
   }, []);
 
-  const activeFilterCount = filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
+  const activeFilterCount = filters.kam.length + filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: '#f6f8fb' }}>
@@ -327,14 +334,18 @@ export default function InternetSales() {
             <ToggleButton value="all">Весь год</ToggleButton>
             {[1, 2, 3, 4].map(quarter => <ToggleButton key={quarter} value={String(quarter)}>Q{quarter}</ToggleButton>)}
           </ToggleButtonGroup>
-          <Autocomplete multiple size="small" options={meta.brandName} value={filters.brandName}
-            onChange={(_, values) => setFilters(current => ({ ...current, brandName: values }))}
-            renderInput={(params) => <TextField {...params} label="Бренд" />}
-            limitTags={1} sx={{ minWidth: 190, flex: 1 }} />
-          <Autocomplete multiple size="small" options={meta.productName} value={filters.productName}
-            onChange={(_, values) => setFilters(current => ({ ...current, productName: values }))}
-            renderInput={(params) => <TextField {...params} label="SKU" />}
-            limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
+          {/* Порядок фильтров идёт сверху вниз по структуре продаж:
+              КАМ отвечает за сети, сеть продаёт бренды, бренд состоит из SKU.
+              Выбор КАМа сужает список сетей — он приходит с сервера уже с
+              учётом закрепления. */}
+          <Tooltip title="КАМ закреплён за сетью в справочнике; выбор сужает список сетей">
+            <Box sx={{ minWidth: 190, flex: 1 }}>
+              <Autocomplete multiple size="small" options={meta.kam} value={filters.kam}
+                onChange={(_, values) => setFilters(current => ({ ...current, kam: values }))}
+                renderInput={(params) => <TextField {...params} label="КАМ" />}
+                limitTags={1} />
+            </Box>
+          </Tooltip>
           <Tooltip title="Список содержит только сети, по которым есть данные при выбранных фильтрах">
             <Box sx={{ minWidth: 210, flex: 1.2 }}>
               <Autocomplete multiple size="small" options={networkOptions} value={filters.networkName} loading={networkOptionsLoading}
@@ -343,6 +354,14 @@ export default function InternetSales() {
                 limitTags={1} />
             </Box>
           </Tooltip>
+          <Autocomplete multiple size="small" options={meta.brandName} value={filters.brandName}
+            onChange={(_, values) => setFilters(current => ({ ...current, brandName: values }))}
+            renderInput={(params) => <TextField {...params} label="Бренд" />}
+            limitTags={1} sx={{ minWidth: 190, flex: 1 }} />
+          <Autocomplete multiple size="small" options={meta.productName} value={filters.productName}
+            onChange={(_, values) => setFilters(current => ({ ...current, productName: values }))}
+            renderInput={(params) => <TextField {...params} label="SKU" />}
+            limitTags={1} sx={{ minWidth: 210, flex: 1.2 }} />
           <ToggleButtonGroup size="small" exclusive value={unit} onChange={(_, value) => {
             if (!value) return;
             setUnit(value);

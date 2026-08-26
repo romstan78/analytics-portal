@@ -75,13 +75,15 @@ func checkDimension(column string) error {
 
 // SalesFilter — параметры фильтрации интернет-продаж.
 type SalesFilter struct {
-	YearFromStr   string
-	YearToStr     string
-	Months        []string
-	Quarters      []string
-	BrandNames    []string // точные значения из справочника (GetData/экспорт)
-	ProductNames  []string
-	NetworkNames  []string
+	YearFromStr  string
+	YearToStr    string
+	Months       []string
+	Quarters     []string
+	BrandNames   []string // точные значения из справочника (GetData/экспорт)
+	ProductNames []string
+	NetworkNames []string
+	// KAMs фильтрует по закреплению сети за КАМом: в самих продажах КАМа нет.
+	KAMs          []string
 	UnRubs        []string
 	Segments      []string
 	Channels      []string
@@ -203,6 +205,21 @@ func BuildSalesWhere(f SalesFilter) (string, []interface{}) {
 	inAny("n.productName", f.ProductNames)
 	inAny("n.networkName", f.NetworkNames)
 
+	// КАМа в интернет-продажах нет: он закреплён за сетью, поэтому фильтр
+	// сводится к списку сетей этого КАМа из справочника.
+	if kams := filterNonEmpty(f.KAMs); len(kams) > 0 {
+		placeholders := strings.Repeat(",?", len(kams))[1:]
+		args := make([]interface{}, 0, len(kams))
+		for _, kam := range kams {
+			args = append(args, kam)
+		}
+		q = q.Where(
+			"n.networkName IN (SELECT g.network_name FROM dbo.tbl_NetworkGeoMapping g"+
+				" WHERE g.kam IN ("+placeholders+"))",
+			args...,
+		)
+	}
+
 	if f.Search != "" {
 		likeArg := "%" + f.Search + "%"
 		q = q.Where(sq.Or{
@@ -291,6 +308,13 @@ func SalesFilterOptions() models.SalesFilterOptions {
 			" WHERE " + expr + " IS NOT NULL ORDER BY " + expr
 	}
 	options := models.SalesFilterOptions{
+		// КАМы берутся из справочника сетей и сужаются до тех, чьи сети
+		// действительно встречаются в продажах: иначе фильтр предлагал бы
+		// имена, по которым ничего не находится.
+		KAM: salesDistinct(`SELECT DISTINCT g.kam FROM dbo.tbl_NetworkGeoMapping g
+			WHERE g.kam IS NOT NULL AND LTRIM(RTRIM(g.kam)) <> ''
+			  AND EXISTS (SELECT 1 FROM ` + salesTable + ` n WHERE n.networkName = g.network_name)
+			ORDER BY g.kam`),
 		Year:        salesDistinct(distinctOf("CONVERT(varchar(4), [year])")),
 		BrandName:   salesDistinct(distinctOf("brandName")),
 		ProductName: salesDistinct(distinctOf("productName")),

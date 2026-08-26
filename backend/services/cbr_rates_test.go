@@ -24,3 +24,36 @@ func TestParseEURMonthlyRatesEmpty(t *testing.T) {
 		t.Fatal("parseEURMonthlyRates() accepted a response without quotes")
 	}
 }
+
+func TestFillMissingMonthsCarriesLastRate(t *testing.T) {
+	// Год ещё не закрыт: котировок после августа нет, но суммы за эти месяцы
+	// в витрине есть, и пересчёт в евро обязан остаться возможным.
+	filled := fillMissingMonths(map[int]float64{1: 90, 2: 92, 8: 96})
+	for month := 1; month <= 12; month++ {
+		if filled[month] <= 0 {
+			t.Fatalf("месяц %d остался без курса: %#v", month, filled)
+		}
+	}
+	if filled[2] != 92 {
+		t.Fatalf("filled[2] = %v, опубликованный курс изменён", filled[2])
+	}
+	if filled[7] != 92 {
+		t.Fatalf("filled[7] = %v, ожидался перенос курса за февраль", filled[7])
+	}
+	if filled[12] != 96 {
+		t.Fatalf("filled[12] = %v, ожидался перенос курса за август", filled[12])
+	}
+}
+
+func TestFillMissingMonthsBackfillsLeadingGap(t *testing.T) {
+	filled := fillMissingMonths(map[int]float64{5: 95})
+	if filled[1] != 95 || filled[4] != 95 || filled[12] != 95 {
+		t.Fatalf("filled = %#v, ожидался единый курс за весь год", filled)
+	}
+}
+
+func TestFillMissingMonthsWithoutRatesStaysEmpty(t *testing.T) {
+	if filled := fillMissingMonths(map[int]float64{}); len(filled) != 0 {
+		t.Fatalf("filled = %#v, ожидалась пустая карта", filled)
+	}
+}

@@ -25,10 +25,22 @@ type PromoFilterParams struct {
 	Months                                            []string
 	Kams, Brands, SKUs, Networks, Mechanics, Statuses []string
 	DeletedFilter                                     string // "" = active only, "deleted" = deleted only, "all" = both
+	// AllowedKAMs — область видимости пользователя. Пустой срез означает
+	// отсутствие ограничения; непустой применяется всегда и не зависит от
+	// Kams, который приходит из query-параметров.
+	AllowedKAMs []string
 }
 
 func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
 	where := "WHERE 1=1"
+	baseArgs := []interface{}{}
+	if len(params.AllowedKAMs) > 0 {
+		placeholders := strings.Repeat(",?", len(params.AllowedKAMs))[1:]
+		where += " AND kam IN (" + placeholders + ")"
+		for _, kam := range params.AllowedKAMs {
+			baseArgs = append(baseArgs, kam)
+		}
+	}
 	switch params.DeletedFilter {
 	case "deleted":
 		where += " AND deleted_at IS NOT NULL"
@@ -37,7 +49,7 @@ func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
 	default:
 		where += " AND deleted_at IS NULL"
 	}
-	args := []interface{}{}
+	args := baseArgs
 	if params.YearFromStr != "" {
 		if y, _ := strconv.Atoi(params.YearFromStr); true {
 			where += " AND year >= ?"
@@ -148,6 +160,16 @@ func buildPromoWhere(params PromoFilterParams, channels []string) (string, []int
 		where += " AND p.deleted_at IS NULL"
 	}
 	args := []interface{}{}
+
+	// Область видимости применяется до пользовательских фильтров и независимо
+	// от них: строки, дашборд и выгрузка строятся этим условием.
+	if len(params.AllowedKAMs) > 0 {
+		placeholders := strings.Repeat(",?", len(params.AllowedKAMs))[1:]
+		where += " AND p.kam IN (" + placeholders + ")"
+		for _, kam := range params.AllowedKAMs {
+			args = append(args, kam)
+		}
+	}
 
 	if params.YearFromStr != "" {
 		if y, err := strconv.Atoi(params.YearFromStr); err == nil {
@@ -951,8 +973,12 @@ func execPromoWrite(query string, args ...interface{}) (int64, error) {
 // ─── Approvals ──────────────────────────────────────────────────────────────
 
 type ApprovalParams struct {
-	Role              string
-	KAM               string
+	Role string
+	KAM  string
+	// AllowedKAMs — область согласования пользователя. Пустой срез означает
+	// отсутствие ограничения; непустой применяется всегда и не зависит от KAM,
+	// который приходит из query-параметра и потому доверия не заслуживает.
+	AllowedKAMs       []string
 	ApprovalStatus    string
 	YearStr, MonthStr string
 	Network           string
@@ -996,6 +1022,13 @@ func buildApprovalsWhere(params ApprovalParams) (string, []interface{}) {
 	if params.KAM != "" {
 		where += " AND p.kam = ?"
 		args = append(args, params.KAM)
+	}
+	if len(params.AllowedKAMs) > 0 {
+		placeholders := strings.Repeat(",?", len(params.AllowedKAMs))[1:]
+		where += " AND p.kam IN (" + placeholders + ")"
+		for _, kam := range params.AllowedKAMs {
+			args = append(args, kam)
+		}
 	}
 	if params.Network != "" {
 		where += " AND p.network_name = ?"
@@ -1564,6 +1597,9 @@ func InsertComment(promoID int, userName string, role string, commentText string
 
 type ApprovalFilterParams struct {
 	ApprovalStatus, KAM, Network, Brand, MechFilter, YearStr, MonthStr, Role string
+	// AllowedKAMs применяется даже к колонке, которую справочник сам собирает:
+	// список КАМов обязан сузиться до области согласования.
+	AllowedKAMs []string
 }
 
 // buildApprovalWhere — строит WHERE-условия для страницы согласования.
@@ -1593,6 +1629,13 @@ func buildApprovalWhere(params ApprovalFilterParams, excludeCol string) (string,
 	if params.KAM != "" && excludeCol != "kam" {
 		where += " AND p.kam = ?"
 		args = append(args, params.KAM)
+	}
+	if len(params.AllowedKAMs) > 0 {
+		placeholders := strings.Repeat(",?", len(params.AllowedKAMs))[1:]
+		where += " AND p.kam IN (" + placeholders + ")"
+		for _, kam := range params.AllowedKAMs {
+			args = append(args, kam)
+		}
 	}
 
 	if params.Network != "" && excludeCol != "network_name" {

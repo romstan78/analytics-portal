@@ -1,3 +1,15 @@
+// Вкладка «Прогноз» реестра сетей.
+//
+// Одна сетка на все способы ведения: строка бренда — свод за квартал, внутри
+// раскрывается ввод по месяцам и детализация по SKU. Что именно вводится,
+// решает режим бренда (уровень и единица), а не режим формы: в одной сети часть
+// брендов ведут в рублях по бренду, часть — в упаковках по SKU, и обе группы
+// должны быть видны рядом.
+//
+// Расчётов здесь нет. EAC, инвестиции и разложение по миксу считает backend
+// (backend/services/network_forecast_service.go); форма показывает пришедшее и
+// отправляет обратно только введённую метрику.
+
 import { type ChangeEvent, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -6,14 +18,15 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Drawer,
   FormControl,
   FormControlLabel,
   IconButton,
+  MenuItem,
   Paper,
   Radio,
   RadioGroup,
@@ -29,48 +42,64 @@ import {
   Typography,
 } from '@mui/material';
 import {
-  Close as CloseIcon,
   DeleteSweepOutlined as ClearIcon,
-  Inventory2Outlined as SKUIcon,
+  ExpandMore as ExpandIcon,
+  RestartAlt as ResetIcon,
   Save as SaveIcon,
   UploadFileOutlined as ImportIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
 import type {
+  NetworkEntryUnit,
   NetworkForecastInput,
   NetworkForecastClearScope,
   NetworkForecastImportPreview,
   NetworkForecastMonth,
   NetworkForecastResponse,
   NetworkForecastSaveRequest,
+  NetworkInvestmentsSource,
 } from '../types/network';
 import {
   formatNumberInput,
+  formatPct,
   formatRub,
   formatRubShort,
   parseNumberInput,
 } from '../utils/networkPlan';
+import { EntryModeChip, MonthCell } from './NetworkForecastCells';
+import NetworkPromoDetail from './NetworkPromoDetail';
+import type { EntryMode } from '../utils/networkForecastView';
+import { MONTHS, amountLabel } from '../utils/networkForecastView';
 
 const QUARTERS = [1, 2, 3, 4] as const;
-const MONTHS = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
-];
-
-type Measure = 'volume' | 'investments';
-type Unit = 'rub' | 'units';
 
 interface ForecastDraft {
   rub: string;
   units: string;
   investments: string;
-  reason: string;
 }
 
 interface Props {
   networkId: number;
   year: number;
   canEdit: boolean;
+}
+
+const EMPTY_DRAFT: ForecastDraft = { rub: '', units: '', investments: '' };
+
+// Свод по промо бренда за квартал. Разбивка приходит помесячно
+// (NetworkForecastMonth) и в квартальный итог бренда не сворачивается, поэтому
+// складывается здесь — данные уже загружены, лишнего запроса не нужно.
+function promoSummary(months: NetworkForecastMonth[]): string {
+  const sum = (pick: (row: NetworkForecastMonth) => number) =>
+    months.reduce((total, row) => total + pick(row), 0);
+  return [
+    `Промо за квартал: ${sum((row) => row.promo_count)}`,
+    `согласовано ${sum((row) => row.approved_promo_count)}, черновики ${sum((row) => row.draft_promo_count)}`,
+    `План промо: ${formatRubShort(sum((row) => row.promo_plan_rub))} ₽`,
+    `Uplift плана: ${formatRubShort(sum((row) => row.promo_uplift_rub))} ₽`,
+    `Инвестиции промо: ${formatRubShort(sum((row) => row.promo_investments_rub))} ₽`,
+  ].join(' · ') + ' — нажмите, чтобы раскрыть список';
 }
 
 const forecastKey = (month: number, brand: string, sku: string | null): string =>
@@ -83,14 +112,10 @@ const draftFromRows = (rows: NetworkForecastMonth[]): Record<string, ForecastDra
     rub: asInput(row.forecast_rub),
     units: asInput(row.forecast_units),
     investments: asInput(row.forecast_investments_rub),
-    reason: row.adjustment_reason ?? '',
   }]));
 
 const sameDraft = (left: ForecastDraft | undefined, right: ForecastDraft | undefined): boolean =>
-  left?.rub === right?.rub
-  && left?.units === right?.units
-  && left?.investments === right?.investments
-  && left?.reason === right?.reason;
+  left?.rub === right?.rub && left?.units === right?.units && left?.investments === right?.investments;
 
 const monthLabel = (month: number, row?: NetworkForecastMonth): string => {
   if (row?.is_closed) return `${MONTHS[month - 1]} · закрыт`;
@@ -98,32 +123,32 @@ const monthLabel = (month: number, row?: NetworkForecastMonth): string => {
   return MONTHS[month - 1];
 };
 
-function SummaryTile({ label, value, hint, warning = false }: {
-  label: string;
-  value: string;
-  hint: string;
-  warning?: boolean;
-}) {
-  return (
-    <Paper variant="outlined" sx={{ p: 1.25, minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
-      <Typography variant="h6" sx={{ mt: 0.25, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-      <Typography variant="caption" color={warning ? 'warning.main' : 'text.secondary'}>{hint}</Typography>
-    </Paper>
-  );
-}
+const pctLabel = (value: number | null): string =>
+  value == null ? '—' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`;
+
+// Подпись, откуда взялась сумма инвестиций. Вводить её нельзя: это процент
+// бренда из квартального плана, применённый к EAC объёма.
+const investmentsNote = (row: NetworkForecastMonth): string => ({
+  fact: 'факт выплат',
+  pct: row.investments_pct == null ? 'нет процента' : `${formatPct(row.investments_pct)} % от прогноза`,
+  override: 'переопределено вручную',
+  none: row.investments_pct == null ? 'процент не задан' : 'нет прогноза объёма',
+}[row.investments_source as NetworkInvestmentsSource] ?? '');
 
 export default function NetworkForecastTab({ networkId, year, canEdit }: Props) {
   const now = new Date();
   const defaultQuarter = year === now.getFullYear() ? Math.floor(now.getMonth() / 3) + 1 : 1;
   const [quarter, setQuarter] = useState(defaultQuarter);
-  const [measure, setMeasure] = useState<Measure>('volume');
-  const [unit, setUnit] = useState<Unit>('rub');
+  const [displayUnit, setDisplayUnit] = useState<NetworkEntryUnit>('rub');
   const [draftEdits, setDraftEdits] = useState<Record<string, ForecastDraft> | null>(null);
-  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  // Детализация промо раскрывается отдельно от ввода по месяцам: это
+  // справка к счётчику, а не часть формы.
+  const [promoDetail, setPromoDetail] = useState<string | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<NetworkForecastImportPreview | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const [clearMonth, setClearMonth] = useState<number | null>(null);
   const [clearScope, setClearScope] = useState<NetworkForecastClearScope>('all');
   const queryClient = useQueryClient();
@@ -147,9 +172,15 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
 
   const saveMutation = useMutation({
     mutationFn: (request: NetworkForecastSaveRequest) => networkAPI.saveForecast(networkId, request),
-    onSuccess: (response) => {
-      applyForecastData(response.data);
-    },
+    onSuccess: (response) => applyForecastData(response.data),
+  });
+
+  const entryModeMutation = useMutation({
+    mutationFn: (input: { brand: string; mode: EntryMode }) => networkAPI.setEntryMode(networkId, {
+      year, quarter, brand_as: input.brand,
+      entry_level: input.mode.level, entry_unit: input.mode.unit,
+    }),
+    onSuccess: (response) => applyForecastData(response.data),
   });
 
   const importPreviewMutation = useMutation({
@@ -176,7 +207,7 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
       networkAPI.clearForecastMonth(networkId, { year, ...request }),
     onSuccess: (response) => {
       applyForecastData(response.data);
-      setClearMonth(null);
+      setClearOpen(false);
     },
   });
 
@@ -185,35 +216,46 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
     return [start, start + 1, start + 2];
   }, [quarter]);
 
-  const brandRows = useMemo(() => (query.data?.months ?? []).filter((row) => row.sku == null), [query.data]);
-  const skuRows = useMemo(() => (query.data?.months ?? []).filter((row) => row.sku != null), [query.data]);
   const rowsByKey = useMemo(() => new Map((query.data?.months ?? []).map((row) => [
     forecastKey(row.month, row.brand_as, row.sku), row,
   ])), [query.data]);
+
+  const skusByBrand = useMemo(() => {
+    const map = new Map<string, string[]>();
+    (query.data?.months ?? []).forEach((row) => {
+      if (row.sku == null) return;
+      const list = map.get(row.brand_as) ?? [];
+      if (!list.includes(row.sku)) list.push(row.sku);
+      map.set(row.brand_as, list);
+    });
+    map.forEach((list) => list.sort((a, b) => a.localeCompare(b, 'ru')));
+    return map;
+  }, [query.data]);
 
   const updateDraft = (row: NetworkForecastMonth, patch: Partial<ForecastDraft>) => {
     const key = forecastKey(row.month, row.brand_as, row.sku);
     setDraftEdits((current) => ({
       ...(current ?? baseDraft),
-      [key]: { ...((current ?? baseDraft)[key] ?? { rub: '', units: '', investments: '', reason: '' }), ...patch },
+      [key]: { ...((current ?? baseDraft)[key] ?? EMPTY_DRAFT), ...patch },
     }));
   };
 
+  // Отправляем только введённую метрику: вторую считает бэкенд по цене
+  // контракта, и сохранённая пара однажды перестала бы сходиться сама с собой.
   const save = () => {
     const lines: NetworkForecastInput[] = Object.entries(draft).flatMap(([key, value]) => {
       const row = rowsByKey.get(key);
-      if (!row || sameDraft(value, baseDraft[key])) return [];
-      const rub = parseNumberInput(value.rub);
-      const units = parseNumberInput(value.units);
-      const investments = parseNumberInput(value.investments);
+      if (!row || row.is_derived || sameDraft(value, baseDraft[key])) return [];
+      const inUnits = row.entry_unit === 'units';
+      const owned = parseNumberInput(inUnits ? value.units : value.rub);
       return [{
         month: row.month,
         brand_as: row.brand_as,
         sku: row.sku,
-        forecast_rub: rub,
-        forecast_units: units,
-        forecast_investments_rub: investments,
-        adjustment_reason: value.reason.trim() || null,
+        forecast_rub: inUnits ? null : owned,
+        forecast_units: inUnits ? owned : null,
+        forecast_investments_rub: parseNumberInput(value.investments),
+        adjustment_reason: null,
         updated_at: row.updated_at,
       }];
     });
@@ -233,98 +275,143 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   if (query.isError || !query.data) return <Alert severity="error">Не удалось загрузить прогноз.</Alert>;
 
   const { totals } = query.data;
-  const completion = totals.completion_pct == null ? '—' : `${totals.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`;
-  const investPct = totals.plan_investments_rub > 0
-    ? (totals.investment_variance_rub / totals.plan_investments_rub) * 100
-    : null;
   const clearAffectedRows = clearMonth == null ? 0 : query.data.months.filter((row) => {
-    if (row.month !== clearMonth) return false;
+    if (row.month !== clearMonth || row.is_derived) return false;
     if (clearScope === 'rub') return row.forecast_rub != null;
     if (clearScope === 'units') return row.forecast_units != null;
     return row.forecast_rub != null || row.forecast_units != null;
   }).length;
 
-  const renderMonthCell = (row: NetworkForecastMonth | undefined) => {
-    if (!row) return <Typography color="text.disabled">—</Typography>;
-    const value = draft[forecastKey(row.month, row.brand_as, row.sku)] ?? { rub: '', units: '', investments: '', reason: '' };
-    const promoTitle = [
-      `${row.promo_count} промо`,
-      `согласовано: ${row.approved_promo_count}`,
-      `не согласовано: ${row.draft_promo_count}`,
-      `uplift: ${formatRubShort(row.promo_uplift_rub)} ₽`,
-      `инвестиции: ${formatRubShort(row.promo_investments_rub)} ₽`,
-    ].join(' · ');
+  const cellValue = (row: NetworkForecastMonth): string => {
+    const value = draft[forecastKey(row.month, row.brand_as, row.sku)] ?? EMPTY_DRAFT;
+    return row.entry_unit === 'units' ? value.units : value.rub;
+  };
 
-    if (measure === 'investments') {
-      return (
-        <Box sx={{ minWidth: 132 }}>
-          <Typography variant="caption" color="text.secondary">П {formatRubShort(row.plan_investments_rub)} ₽</Typography>
-          <Typography variant="caption" sx={{ display: 'block' }}>Ф {formatRubShort(row.fact_investments_rub)} ₽</Typography>
-          {row.is_closed ? (
-            <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600 }}>{formatRubShort(row.eac_investments_rub)} ₽</Typography>
-          ) : (
-            <TextField
-              size="small"
-              value={value.investments}
-              disabled={!canEdit}
-              placeholder={row.eac_investments_rub == null ? 'Прогноз' : formatRub(row.eac_investments_rub)}
-              onChange={(event) => updateDraft(row, { investments: event.target.value })}
-              sx={{ mt: 0.5, width: 128 }}
-              slotProps={{ htmlInput: { inputMode: 'decimal', 'aria-label': `Прогноз инвестиций ${row.brand_as} ${MONTHS[row.month - 1]}` } }}
-            />
-          )}
-        </Box>
-      );
-    }
+  const changeCell = (row: NetworkForecastMonth, next: string) =>
+    updateDraft(row, row.entry_unit === 'units' ? { units: next } : { rub: next });
 
-    const isRub = unit === 'rub';
-    const plan = isRub ? row.plan_rub : null;
-    const fact = isRub ? row.fact_rub : row.fact_units;
-    const forecast = isRub ? value.rub : value.units;
-    const system = isRub ? row.system_forecast_rub : row.system_forecast_units;
+  // Раскрытая часть строки бренда: помесячный ввод и детализация по SKU.
+  const renderDetail = (brand: string, mode: EntryMode) => {
+    const brandMonths = monthNumbers.map((month) => rowsByKey.get(forecastKey(month, brand, null)));
+    const skus = skusByBrand.get(brand) ?? [];
+
     return (
-      <Box sx={{ minWidth: 138 }}>
-        {isRub && <Typography variant="caption" color="text.secondary">П {formatRubShort(plan)} ₽</Typography>}
-        <Typography variant="caption" sx={{ display: 'block' }}>
-          Ф {fact == null ? '—' : isRub ? `${formatRubShort(fact)} ₽` : `${formatRub(fact)} уп.`}
-        </Typography>
-        {row.is_closed ? (
-          <Typography variant="body2" sx={{ mt: 0.5, fontWeight: 600 }}>
-            {fact == null ? 'Факт не загружен' : isRub ? `${formatRubShort(fact)} ₽` : `${formatRub(fact)} уп.`}
-          </Typography>
-        ) : (
-          <TextField
-            size="small"
-            value={forecast}
-            disabled={!canEdit}
-            placeholder={system == null ? 'Прогноз' : formatRub(system)}
-            helperText={system == null ? 'нет базы' : `рекомендация ${isRub ? `${formatRubShort(system)} ₽` : `${formatRub(system)} уп.`}`}
-            onChange={(event) => updateDraft(row, isRub ? { rub: event.target.value } : { units: event.target.value })}
-            sx={{ mt: 0.5, width: 138 }}
-            slotProps={{ htmlInput: { inputMode: 'decimal', 'aria-label': `Прогноз ${row.brand_as} ${MONTHS[row.month - 1]}` } }}
-          />
-        )}
-        {row.promo_count > 0 && (
-          <Tooltip title={promoTitle}>
-            <Chip
-              size="small"
-              color={row.approved_promo_count > 0 ? 'warning' : 'default'}
-              variant={row.approved_promo_count > 0 ? 'filled' : 'outlined'}
-              label={`${row.promo_count} промо`}
-              sx={{ mt: 0.5, height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 10 } }}
-            />
-          </Tooltip>
+      <Box sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1.5 }}>
+          {monthNumbers.map((month, index) => {
+            const row = brandMonths[index];
+            return (
+              <Box key={month}>
+                <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
+                  {monthLabel(month, row)}
+                </Typography>
+                {row == null ? (
+                  <Typography variant="body2" color="text.disabled">—</Typography>
+                ) : (
+                  <MonthCell
+                    row={row}
+                    value={cellValue(row)}
+                    unit={mode.unit}
+                    canEdit={canEdit}
+                    showPlan
+                    onChange={(next) => changeCell(row, next)}
+                  />
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+
+        {/* Инвестиции идут строкой под объёмом: сумма расчётная, но видеть её
+            нужно рядом с прогнозом, от которого она и считается. */}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mt: 1 }}>
+          <Typography variant="caption" color="text.secondary">Инвестиции:</Typography>
+          {monthNumbers.map((month, index) => {
+            const row = brandMonths[index];
+            if (row == null) return null;
+            return (
+              <Box key={month} sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                <Typography
+                  variant="caption"
+                  color={row.investments_source === 'override' ? 'warning.main' : 'text.secondary'}
+                >
+                  {MONTHS[row.month - 1].slice(0, 3)} {formatRubShort(row.eac_investments_rub)} ₽
+                  {' · '}{investmentsNote(row)}
+                </Typography>
+                {canEdit && !row.is_closed && row.investments_source === 'override' && (
+                  <Tooltip title="Вернуть расчёт по проценту инвестиций">
+                    <IconButton
+                      size="small"
+                      aria-label={`Сбросить переопределение инвестиций ${brand} ${MONTHS[row.month - 1]}`}
+                      onClick={() => updateDraft(row, { investments: '' })}
+                    >
+                      <ResetIcon fontSize="inherit" />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+
+        {skus.length > 0 && (
+          <Box sx={{ mt: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">
+              {mode.level === 'sku'
+                ? 'Прогноз вводится по SKU, строка бренда равна их сумме.'
+                : 'Разложение по SKU расчётное — по миксу факта. Чтобы вводить SKU, переключите режим бренда.'}
+            </Typography>
+            <Table size="small" sx={{ mt: 0.5 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ width: '34%' }}>SKU · цена</TableCell>
+                  {monthNumbers.map((month) => (
+                    <TableCell key={month}>{MONTHS[month - 1]}</TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {skus.map((sku) => {
+                  const sample = rowsByKey.get(forecastKey(monthNumbers[0], brand, sku));
+                  return (
+                    <TableRow key={sku}>
+                      <TableCell>
+                        <Typography variant="body2" noWrap title={sku}>{sku}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {sample?.contract_price == null
+                            ? 'цена не задана'
+                            : `${formatRub(sample.contract_price, 2)} ₽`}
+                        </Typography>
+                      </TableCell>
+                      {monthNumbers.map((month) => {
+                        const row = rowsByKey.get(forecastKey(month, brand, sku));
+                        if (!row) return <TableCell key={month}>—</TableCell>;
+                        return (
+                          <TableCell key={month} sx={{ minWidth: 120 }}>
+                            <MonthCell
+                              row={row}
+                              value={cellValue(row)}
+                              unit={mode.unit}
+                              canEdit={canEdit}
+                              showPlan={false}
+                              onChange={(next) => changeCell(row, next)}
+                            />
+                          </TableCell>
+                        );
+                      })}
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </Box>
         )}
       </Box>
     );
   };
 
-  const selectedSKUs = selectedBrand
-    ? Array.from(new Set(skuRows.filter((row) => row.brand_as === selectedBrand).map((row) => row.sku!))).sort()
-    : [];
-
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <ToggleButtonGroup
           size="small"
@@ -334,33 +421,40 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
             if (value == null) return;
             setQuarter(value);
             setDraftEdits(null);
-            setSelectedBrand(null);
+            setExpanded(null);
           }}
         >
           {QUARTERS.map((value) => <ToggleButton key={value} value={value}>Q{value}</ToggleButton>)}
         </ToggleButtonGroup>
+
+        {/* Переключатель показа ничего не пишет: в какой единице бренд ведут,
+            задаёт его режим, а здесь выбирается только колонка свода. */}
         <ToggleButtonGroup
           size="small"
           exclusive
-          value={measure}
-          onChange={(_, value: Measure | null) => value != null && setMeasure(value)}
+          value={displayUnit}
+          onChange={(_, value: NetworkEntryUnit | null) => value != null && setDisplayUnit(value)}
         >
-          <ToggleButton value="volume">Объём</ToggleButton>
-          <ToggleButton value="investments">Инвестиции</ToggleButton>
+          <ToggleButton value="rub">Свод в ₽</ToggleButton>
+          <ToggleButton value="units">Свод в уп.</ToggleButton>
         </ToggleButtonGroup>
-        {measure === 'volume' && (
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={unit}
-            onChange={(_, value: Unit | null) => value != null && setUnit(value)}
-          >
-            <ToggleButton value="rub">₽</ToggleButton>
-            <ToggleButton value="units">Упаковки</ToggleButton>
-          </ToggleButtonGroup>
-        )}
+
         <Box sx={{ flex: 1 }} />
         {dirty && <Typography variant="caption" color="warning.main">Есть несохранённые изменения</Typography>}
+        {canEdit && (
+          <Button
+            size="small"
+            startIcon={<ClearIcon />}
+            disabled={dirty}
+            onClick={() => {
+              setClearMonth(monthNumbers[0]);
+              setClearScope('all');
+              setClearOpen(true);
+            }}
+          >
+            Очистить месяц
+          </Button>
+        )}
         {canEdit && (
           <Button
             component="label"
@@ -374,204 +468,170 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
           </Button>
         )}
         {canEdit && (
-          <Button variant="contained" size="small" startIcon={<SaveIcon />} disabled={!dirty || saveMutation.isPending} onClick={save}>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<SaveIcon />}
+            disabled={!dirty || saveMutation.isPending}
+            onClick={save}
+          >
             Сохранить прогноз
           </Button>
         )}
       </Box>
 
       {saveMutation.isError && <Alert severity="error">{(saveMutation.error as Error).message}</Alert>}
+      {entryModeMutation.isError && <Alert severity="error">{(entryModeMutation.error as Error).message}</Alert>}
       {importPreviewMutation.isError && <Alert severity="error">{(importPreviewMutation.error as Error).message}</Alert>}
 
-      {measure === 'volume' && unit === 'units' ? (
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 1 }}>
-          <SummaryTile label="Факт на дату" value={`${formatRub(totals.fact_units)} уп.`} hint="загруженные месяцы и MTD" />
-          <SummaryTile label="Прогноз EAC" value={`${formatRub(totals.eac_units)} уп.`} hint="внесённый прогноз или системная рекомендация" />
+      {/* Итоги квартала одной полосой: четыре карточки занимали экран до того,
+          как показывалась первая цифра по брендам. */}
+      <Paper variant="outlined" sx={{ px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2.5, fontVariantNumeric: 'tabular-nums' }}>
+          {[
+            { label: 'План', value: `${formatRubShort(totals.plan_rub)} ₽` },
+            {
+              label: 'Факт',
+              value: displayUnit === 'units'
+                ? `${formatRub(totals.fact_units)} уп.`
+                : `${formatRubShort(totals.fact_rub)} ₽`,
+            },
+            {
+              label: 'EAC',
+              value: displayUnit === 'units'
+                ? `${formatRub(totals.eac_units)} уп.`
+                : `${formatRubShort(totals.eac_rub)} ₽`,
+            },
+            { label: 'К плану', value: pctLabel(totals.completion_pct), warning: totals.gap_rub < 0 },
+            {
+              label: 'Инвестиции',
+              value: `${formatRubShort(totals.eac_investments_rub)} ₽`,
+              warning: totals.investment_variance_rub > 0,
+            },
+            { label: 'Промо', value: String(totals.promo_count) },
+          ].map((tile) => (
+            <Box key={tile.label} sx={{ minWidth: 92 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{tile.label}</Typography>
+              <Typography variant="subtitle2" color={tile.warning ? 'warning.main' : 'text.primary'}>
+                {tile.value}
+              </Typography>
+            </Box>
+          ))}
         </Box>
-      ) : (
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 1 }}>
-          <SummaryTile label="План квартала" value={`${formatRubShort(totals.plan_rub)} ₽`} hint="утверждённое обязательство" />
-          <SummaryTile label="Факт на дату" value={`${formatRubShort(totals.fact_rub)} ₽`} hint="загруженные месяцы и MTD" />
-          <SummaryTile
-            label="Прогноз EAC"
-            value={`${formatRubShort(totals.eac_rub)} ₽`}
-            hint={`${completion} плана · ${formatRubShort(totals.gap_rub)} ₽`}
-            warning={totals.gap_rub < 0}
-          />
-          <SummaryTile
-            label="Инвестиции EAC"
-            value={`${formatRubShort(totals.eac_investments_rub)} ₽`}
-            hint={investPct == null ? 'нет бюджета' : `${investPct >= 0 ? '+' : ''}${investPct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% к бюджету · промо ${totals.promo_count}`}
-            warning={totals.investment_variance_rub > 0}
-          />
-        </Box>
-      )}
+      </Paper>
 
       <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
-        <Table size="small" sx={{ minWidth: 850 }}>
+        <Table size="small" sx={{ minWidth: 720 }}>
           <TableHead>
             <TableRow>
-              <TableCell>Бренд</TableCell>
-              {monthNumbers.map((month) => {
-                const sample = brandRows.find((row) => row.month === month);
-                return (
-                  <TableCell key={month}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{monthLabel(month, sample)}</Typography>
-                      {canEdit && measure === 'volume' && !sample?.is_closed && (
-                        <Tooltip title={dirty ? 'Сначала сохраните ручные изменения' : `Очистить прогноз за ${MONTHS[month - 1].toLowerCase()}`}>
-                          <span>
-                            <IconButton
-                              size="small"
-                              disabled={dirty}
-                              aria-label={`Очистить прогноз за ${MONTHS[month - 1]}`}
-                              onClick={() => {
-                                setClearScope('all');
-                                setClearMonth(month);
-                              }}
-                            >
-                              <ClearIcon fontSize="small" />
-                            </IconButton>
-                          </span>
+              <TableCell sx={{ width: '38%' }}>Бренд</TableCell>
+              <TableCell align="right">План</TableCell>
+              <TableCell align="right">Факт</TableCell>
+              <TableCell align="right">EAC Q{quarter}</TableCell>
+              <TableCell align="right">К плану</TableCell>
+              <TableCell align="right">Инвестиции</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {query.data.brands.flatMap((brandTotal) => {
+              const brand = brandTotal.brand_as;
+              const sample = rowsByKey.get(forecastKey(monthNumbers[0], brand, null));
+              const mode: EntryMode = {
+                level: sample?.entry_level === 'sku' ? 'sku' : 'brand',
+                unit: sample?.entry_unit === 'units' ? 'units' : 'rub',
+              };
+              const open = expanded === brand;
+              const promoOpen = promoDetail === brand;
+              const brandMonths = monthNumbers
+                .map((month) => rowsByKey.get(forecastKey(month, brand, null)))
+                .filter((row): row is NetworkForecastMonth => row != null);
+
+              return [
+                <TableRow key={brand} hover>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                      <IconButton
+                        size="small"
+                        aria-label={open ? `Свернуть ${brand}` : `Раскрыть ${brand}`}
+                        onClick={() => setExpanded(open ? null : brand)}
+                      >
+                        <ExpandIcon
+                          fontSize="small"
+                          sx={{ transform: open ? 'none' : 'rotate(-90deg)', transition: '.15s' }}
+                        />
+                      </IconButton>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap title={brand}>{brand}</Typography>
+                      <EntryModeChip
+                        mode={mode}
+                        disabled={!canEdit || dirty || entryModeMutation.isPending}
+                        onChange={(next) => entryModeMutation.mutate({ brand, mode: next })}
+                      />
+                      {brandTotal.promo_count > 0 && (
+                        <Tooltip title={promoSummary(brandMonths)}>
+                          <Chip
+                            size="small"
+                            variant={promoOpen ? 'filled' : 'outlined'}
+                            color={promoOpen ? 'primary' : 'default'}
+                            label={`промо ${brandTotal.promo_count}`}
+                            onClick={() => setPromoDetail(promoOpen ? null : brand)}
+                            sx={{ height: 20, cursor: 'pointer', '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
+                          />
                         </Tooltip>
                       )}
                     </Box>
                   </TableCell>
-                );
-              })}
-              <TableCell align="right">EAC Q{quarter}</TableCell>
-              <TableCell align="right">К плану</TableCell>
-              <TableCell />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {query.data.brands.map((brandTotal) => (
-              <TableRow key={brandTotal.brand_as} hover>
-                <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{brandTotal.brand_as}</TableCell>
-                {monthNumbers.map((month) => (
-                  <TableCell key={month}>
-                    {renderMonthCell(brandRows.find((row) => row.brand_as === brandTotal.brand_as && row.month === month))}
+                  <TableCell align="right">{formatRubShort(brandTotal.plan_rub)} ₽</TableCell>
+                  <TableCell align="right">
+                    {amountLabel(displayUnit === 'units' ? brandTotal.fact_units : brandTotal.fact_rub, displayUnit)}
                   </TableCell>
-                ))}
-                <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
-                  {measure === 'investments'
-                    ? `${formatRubShort(brandTotal.eac_investments_rub)} ₽`
-                    : unit === 'rub'
-                      ? `${formatRubShort(brandTotal.eac_rub)} ₽`
-                      : `${formatRub(brandTotal.eac_units)} уп.`}
-                </TableCell>
-                <TableCell align="right">
-                  {measure === 'volume' && unit === 'units' ? (
-                    <Typography variant="caption" color="text.secondary">план ведётся в ₽</Typography>
-                  ) : (
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    {amountLabel(displayUnit === 'units' ? brandTotal.eac_units : brandTotal.eac_rub, displayUnit)}
+                  </TableCell>
+                  <TableCell align="right">
                     <Typography
                       variant="body2"
-                      color={(brandTotal.completion_pct ?? 0) < 100 ? 'warning.main' : 'success.main'}
                       sx={{ fontWeight: 600 }}
+                      color={(brandTotal.completion_pct ?? 0) < 100 ? 'warning.main' : 'success.main'}
                     >
-                      {brandTotal.completion_pct == null ? '—' : `${brandTotal.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`}
+                      {pctLabel(brandTotal.completion_pct)}
                     </Typography>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Tooltip title={`Прогноз по SKU в ${unit === 'rub' ? 'рублях' : 'упаковках'}`}>
-                    <Button size="small" startIcon={<SKUIcon />} onClick={() => setSelectedBrand(brandTotal.brand_as)}>SKU</Button>
-                  </Tooltip>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                  <TableCell align="right">{formatRubShort(brandTotal.eac_investments_rub)} ₽</TableCell>
+                </TableRow>,
+                <TableRow key={`${brand}-promo`}>
+                  <TableCell colSpan={6} sx={{ p: 0, border: 0 }}>
+                    <Collapse in={promoOpen} unmountOnExit>
+                      <NetworkPromoDetail
+                        networkName={query.data.network.name}
+                        brand={brand}
+                        year={year}
+                        months={monthNumbers}
+                      />
+                    </Collapse>
+                  </TableCell>
+                </TableRow>,
+                <TableRow key={`${brand}-detail`}>
+                  <TableCell colSpan={6} sx={{ p: 0, border: 0 }}>
+                    <Collapse in={open} unmountOnExit>{renderDetail(brand, mode)}</Collapse>
+                  </TableCell>
+                </TableRow>,
+              ];
+            })}
             {query.data.brands.length === 0 && (
-              <TableRow><TableCell colSpan={7}>Сначала добавьте бренды и квартальный план.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6}>Сначала добавьте бренды и квартальный план.</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
       </Paper>
 
       <Typography variant="caption" color="text.secondary">
-        Рекомендация строится по аналогичному месяцу прошлого года, последним трём месяцам и согласованному промо-uplift. План используется только для оценки разрыва.
+        Режим бренда задаёт, что вводится: уровень (бренд или SKU) и единица (рубли или упаковки).
+        Вторая метрика пересчитывается по цене контракта, а разложение бренда по SKU строится
+        по миксу факта и потому не редактируется. Рекомендация в подсказке поля собирается из
+        аналогичного месяца прошлого года, последних трёх месяцев и согласованного промо-uplift;
+        план используется только для оценки разрыва. Прогноз инвестиций не вводится: это процент
+        бренда из квартального плана, применённый к EAC объёма, а закрытый месяц берёт факт выплат.
       </Typography>
-
-      <Drawer anchor="right" open={selectedBrand != null} onClose={() => setSelectedBrand(null)}>
-        <Box sx={{ width: { xs: '100vw', sm: 620 }, p: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <SKUIcon color="primary" />
-            <Box>
-              <Typography variant="h6">{selectedBrand}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                SKU-прогноз в {unit === 'rub' ? 'рублях' : 'упаковках'} · Q{quarter} {year}
-              </Typography>
-            </Box>
-            <Box sx={{ flex: 1 }} />
-            <IconButton onClick={() => setSelectedBrand(null)}><CloseIcon /></IconButton>
-          </Box>
-          {selectedSKUs.length === 0 ? (
-            <Alert severity="info">Добавьте SKU и контрактные цены во вкладке «Цены и SKU».</Alert>
-          ) : (
-            <Paper variant="outlined" sx={{ overflowX: 'auto' }}>
-              <Table size="small" sx={{ minWidth: 560 }}>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>SKU</TableCell>
-                    {monthNumbers.map((month) => <TableCell key={month}>{MONTHS[month - 1]}</TableCell>)}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {selectedSKUs.map((sku) => (
-                    <TableRow key={sku}>
-                      <TableCell sx={{ fontWeight: 600, minWidth: 130 }}>{sku}</TableCell>
-                      {monthNumbers.map((month) => {
-                        const row = skuRows.find((item) => item.brand_as === selectedBrand && item.sku === sku && item.month === month);
-                        if (!row) return <TableCell key={month}>—</TableCell>;
-                        const value = draft[forecastKey(month, row.brand_as, sku)] ?? { rub: '', units: '', investments: '', reason: '' };
-                        const isRub = unit === 'rub';
-                        const forecastValue = isRub ? value.rub : value.units;
-                        const units = parseNumberInput(value.units) ?? row.system_forecast_units;
-                        const rub = parseNumberInput(value.rub)
-                          ?? (units != null && row.contract_price != null ? units * row.contract_price : null);
-                        const systemRub = row.system_forecast_rub
-                          ?? (row.system_forecast_units != null && row.contract_price != null
-                            ? row.system_forecast_units * row.contract_price
-                            : null);
-                        const helper = isRub
-                          ? [
-                            systemRub == null ? null : `рек. ${formatRubShort(systemRub)} ₽`,
-                            units == null ? null : `${formatRub(units)} уп.`,
-                          ].filter(Boolean).join(' · ') || '—'
-                          : [
-                            row.system_forecast_units == null ? null : `рек. ${formatRub(row.system_forecast_units)} уп.`,
-                            rub == null ? null : `≈ ${formatRubShort(rub)} ₽`,
-                          ].filter(Boolean).join(' · ') || '—';
-                        return (
-                          <TableCell key={month} sx={{ minWidth: 135 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              Цена {row.contract_price == null ? 'не задана' : `${formatRub(row.contract_price, 2)} ₽`}
-                            </Typography>
-                            <TextField
-                              size="small"
-                              value={forecastValue}
-                              disabled={!canEdit || row.is_closed}
-                              label={isRub ? 'Прогноз, ₽' : 'Прогноз, уп.'}
-                              placeholder={isRub
-                                ? (systemRub == null ? '' : formatRub(systemRub))
-                                : (row.system_forecast_units == null ? '' : formatRub(row.system_forecast_units))}
-                              onChange={(event) => updateDraft(row, isRub
-                                ? { rub: event.target.value }
-                                : { units: event.target.value })}
-                              helperText={helper}
-                              sx={{ mt: 0.5, width: 125 }}
-                              slotProps={{ htmlInput: { inputMode: 'decimal' } }}
-                            />
-                          </TableCell>
-                        );
-                      })}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Paper>
-          )}
-        </Box>
-      </Drawer>
 
       <Dialog
         open={importDialogOpen}
@@ -586,9 +646,7 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
           {importPreview && (
             <>
-              <Typography variant="body2">
-                Файл: <strong>{importPreview.file_name}</strong>
-              </Typography>
+              <Typography variant="body2">Файл: <strong>{importPreview.file_name}</strong></Typography>
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1 }}>
                 <Paper variant="outlined" sx={{ p: 1 }}>
                   <Typography variant="caption" color="text.secondary">Готово к загрузке</Typography>
@@ -624,7 +682,8 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
               )}
               {importPreview.errors.length === 0 && (
                 <Alert severity="info">
-                  Указанные SKU будут обновлены, остальные строки прогноза сохранятся. Итоги брендов пересчитаются автоматически.
+                  Указанные SKU будут обновлены, остальные строки прогноза сохранятся.
+                  Итоги брендов пересчитаются автоматически.
                 </Alert>
               )}
             </>
@@ -644,12 +703,23 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
         </DialogActions>
       </Dialog>
 
-      <Dialog open={clearMonth != null} onClose={() => !clearMutation.isPending && setClearMonth(null)} fullWidth maxWidth="xs">
+      <Dialog open={clearOpen} onClose={() => !clearMutation.isPending && setClearOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>Очистить прогноз за месяц?</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+          <TextField
+            select
+            size="small"
+            label="Месяц"
+            value={clearMonth ?? monthNumbers[0]}
+            onChange={(event) => setClearMonth(Number(event.target.value))}
+          >
+            {monthNumbers.map((month) => (
+              <MenuItem key={month} value={month}>{MONTHS[month - 1]} {year}</MenuItem>
+            ))}
+          </TextField>
           <Alert severity="warning">
-            {clearMonth == null ? '' : `${MONTHS[clearMonth - 1]} ${year}`}: внесённые значения КАМ будут очищены.
-            После полной очистки EAC снова будет использовать системную рекомендацию. Чтобы зафиксировать нулевой прогноз, введите 0 вручную.
+            Внесённые значения КАМ будут очищены. После полной очистки EAC снова будет
+            использовать системную рекомендацию. Чтобы зафиксировать нулевой прогноз, введите 0 вручную.
           </Alert>
           <FormControl>
             <RadioGroup
@@ -662,12 +732,12 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
             </RadioGroup>
           </FormControl>
           <Typography variant="body2" color="text.secondary">
-            Будет очищено строк: {clearAffectedRows}. Факт, системная рекомендация и прогноз инвестиций не изменятся.
+            Будет очищено строк: {clearAffectedRows}. Факт, системная рекомендация и процент инвестиций не изменятся.
           </Typography>
           {clearMutation.isError && <Alert severity="error">{(clearMutation.error as Error).message}</Alert>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setClearMonth(null)} disabled={clearMutation.isPending}>Отмена</Button>
+          <Button onClick={() => setClearOpen(false)} disabled={clearMutation.isPending}>Отмена</Button>
           <Button
             color="error"
             variant="contained"

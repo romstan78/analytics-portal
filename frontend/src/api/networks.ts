@@ -14,6 +14,9 @@ import type {
   NetworkForecastImportResponse,
   NetworkForecastSaveRequest,
   NetworkForecastSaveResponse,
+  NetworkKAMsResponse,
+  NetworkEntryLevel,
+  NetworkEntryUnit,
   NetworkListResponse,
   NetworkPlanPreviewResponse,
   NetworkPlanResponse,
@@ -38,6 +41,11 @@ export const networkAPI = {
   getBrands: (): Promise<NetworkBrandsResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/brands`)
       .then(r => parseJSONResponse<NetworkBrandsResponse>(r, 'Ошибка загрузки брендов')),
+
+  // КАМы справочника для фильтра списка сетей
+  getKAMs: (): Promise<NetworkKAMsResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/kams`)
+      .then(r => parseJSONResponse<NetworkKAMsResponse>(r, 'Ошибка загрузки списка КАМ')),
 
   // Новая сеть; year открывает первый год сразу четырьмя кварталами
   create: (data: {
@@ -96,6 +104,20 @@ export const networkAPI = {
   saveForecast: (id: number, data: NetworkForecastSaveRequest): Promise<NetworkForecastSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/forecast`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkForecastSaveResponse>(r, 'Ошибка сохранения прогноза')),
+
+  // Режим ведения бренда хранится на строке плана, но переключается и отсюда:
+  // именно в прогнозе видно, что бренд удобнее вести иначе. Ответ — пересчитанный
+  // квартал, потому что смена режима меняет, какие строки считаются введёнными.
+  setEntryMode: (id: number, data: {
+    year: number;
+    quarter: number;
+    brand_as: string;
+    entry_level: NetworkEntryLevel;
+    entry_unit: NetworkEntryUnit;
+  }): Promise<NetworkForecastSaveResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/entry-mode`, {
+      method: 'POST', body: JSON.stringify(data),
+    }).then(r => parseJSONResponse<NetworkForecastSaveResponse>(r, 'Ошибка смены режима ведения')),
 
   previewForecastImport: (id: number, year: number, quarter: number, file: File): Promise<NetworkForecastImportPreview> => {
     const form = new FormData();

@@ -6,6 +6,9 @@ package models
 
 // SalesFilterOptions — справочники для панели фильтров.
 type SalesFilterOptions struct {
+	// KAM — закрепление сети за КАМом из справочника: в самих продажах
+	// колонки КАМ нет.
+	KAM         []string `json:"kam"`
 	Year        []string `json:"year"`
 	BrandName   []string `json:"brandName"`
 	ProductName []string `json:"productName"`

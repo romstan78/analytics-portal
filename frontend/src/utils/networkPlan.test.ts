@@ -7,6 +7,7 @@ import {
   deltaPct,
   formatRubShort,
   formatSignedPct,
+  isVATRateValid,
   parseNumberInput,
   periodGroupConflict,
   periodGroupKey,
@@ -69,7 +70,8 @@ describe('deltaPct / formatSignedPct', () => {
 describe('amountsOfPlan', () => {
   const plan = (patch: Partial<NetworkPlan>): NetworkPlan => ({
     id: 1, network_id: 1, year: 2026, quarter: 1, brand_as: 'Альфа', in_gross: true,
-    plan_rub: null, plan_units: null, month1_pct: 30, month2_pct: 30, month3_pct: 40,
+    plan_rub: null, plan_units: null, entry_level: 'brand', entry_unit: 'rub',
+    month1_pct: 30, month2_pct: 30, month3_pct: 40,
     fact_rub: null, forecast_rub: null,
     fact_investments_rub: null, fact_investments_rub_net: null,
     investments_pct: null, investments_rub: null, investments_rub_net: null,
@@ -173,5 +175,21 @@ describe('period groups', () => {
   it('не разрешает одному бренду участвовать в двух пересекающихся группах', () => {
     const current = [group({ start_quarter: 1, end_quarter: 3, brand_as: 'Альфа' })];
     expect(periodGroupConflict(current, group({ start_quarter: 3, end_quarter: 4, brand_as: 'Альфа' }))).toContain('Пересекается');
+  });
+});
+
+describe('isVATRateValid', () => {
+  it('принимает ставки, которые примет CK_NetworkPeriods_vat_rate', () => {
+    expect(isVATRateValid('20')).toBe(true);
+    expect(isVATRateValid('0')).toBe(true);
+    expect(isVATRateValid('99,99')).toBe(true);
+    expect(isVATRateValid(' 5.5 ')).toBe(true);
+  });
+
+  it('отклоняет пустое поле, отрицательные и 100% и выше', () => {
+    expect(isVATRateValid('')).toBe(false);
+    expect(isVATRateValid('-1')).toBe(false);
+    expect(isVATRateValid('100')).toBe(false);
+    expect(isVATRateValid('двадцать')).toBe(false);
   });
 });

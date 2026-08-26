@@ -166,12 +166,52 @@ func validateForecastValue(name string, value *float64) error {
 	return nil
 }
 
+// forecastEntryLevels — уровень ведения каждого бренда квартала. Бренда,
+// которого в плане нет, здесь тоже нет: его уровень определит профиль сети.
+func forecastEntryLevels(networkID, year, quarter int) (map[string]string, string, error) {
+	network, err := GetNetworkByID(networkID)
+	if err != nil {
+		return nil, "", err
+	}
+	plans, err := GetNetworkPlans(networkID, year)
+	if err != nil {
+		return nil, "", err
+	}
+	levels := make(map[string]string, len(plans))
+	for _, plan := range plans {
+		if plan.Quarter != quarter || plan.BrandAS == nil {
+			continue
+		}
+		level := plan.EntryLevel
+		if level == "" {
+			level = network.DefaultEntryLevel
+		}
+		if level != "sku" {
+			level = "brand"
+		}
+		levels[*plan.BrandAS] = level
+	}
+	fallback := network.DefaultEntryLevel
+	if fallback != "sku" {
+		fallback = "brand"
+	}
+	return levels, fallback, nil
+}
+
 // SaveNetworkForecastLines сохраняет переданные строки без удаления остальных:
-// брендовый прогноз и детализация SKU могут заполняться независимо.
+// внутри своего уровня бренд и его SKU заполняются независимо.
+//
+// Уровень ведения бренда при этом соблюдается: писать значение на уровне,
+// который считается расчётным, нельзя. Иначе в базе появилась бы вторая версия
+// той же величины — та самая рассинхронизация, ради которой уровень и заведён.
 func SaveNetworkForecastLines(in SaveNetworkForecastInput) error {
 	monthFrom := (in.Quarter-1)*3 + 1
 	monthTo := monthFrom + 2
 	now := time.Now()
+	entryLevels, defaultLevel, err := forecastEntryLevels(in.NetworkID, in.Year, in.Quarter)
+	if err != nil {
+		return err
+	}
 	tx, err := config.DB.Begin()
 	if err != nil {
 		return err
@@ -197,6 +237,24 @@ func SaveNetworkForecastLines(in SaveNetworkForecastInput) error {
 		}
 		if err := validateForecastValue("прогноз инвестиций", line.ForecastInvestmentsRub); err != nil {
 			return err
+		}
+
+		level, known := entryLevels[line.BrandAS]
+		if !known {
+			level = defaultLevel
+		}
+		hasSKU := line.SKU != nil && strings.TrimSpace(*line.SKU) != ""
+		if level == "sku" && !hasSKU && (line.ForecastRub != nil || line.ForecastUnits != nil) {
+			return fmt.Errorf(
+				"%s ведётся по SKU: объём вносится в SKU-строки, строка бренда считается суммой",
+				line.BrandAS,
+			)
+		}
+		if level == "brand" && hasSKU {
+			return fmt.Errorf(
+				"%s ведётся на уровне бренда: чтобы вносить SKU, переключите бренд на детализацию",
+				line.BrandAS,
+			)
 		}
 
 		var id int64

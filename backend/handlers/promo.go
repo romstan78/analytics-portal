@@ -40,8 +40,27 @@ func respondIfDedupInProgress(c *gin.Context, err error) bool {
 	return true
 }
 
+// promoVisibilityScope возвращает область видимости промо для текущего
+// пользователя и сам отвечает клиенту при ошибке. Пустой срез — ограничения нет.
+func promoVisibilityScope(c *gin.Context) ([]string, bool) {
+	username := fmt.Sprint(mustGet(c, "username"))
+	role := fmt.Sprint(mustGet(c, "role"))
+	scope, err := repository.GetPromoVisibilityScope(username, role)
+	if err != nil {
+		config.Logger.Error("promo_scope_failed", "error", err.Error(), "user", username)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось определить область видимости"})
+		return nil, false
+	}
+	return scope, true
+}
+
 func GetPromoFilters(c *gin.Context) {
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
 	params := repository.PromoFilterParams{
+		AllowedKAMs: scope,
 		YearFromStr: c.Query("yearFrom"),
 		YearToStr:   c.Query("yearTo"),
 		Months:      c.QueryArray("months"),
@@ -56,7 +75,9 @@ func GetPromoFilters(c *gin.Context) {
 	// Кэшируем только дефолтную страницу (без фильтров, кроме года/месяца)
 	hasContentFilters := len(params.Kams) > 0 || len(params.Brands) > 0 || len(params.SKUs) > 0 ||
 		len(params.Networks) > 0 || len(params.Mechanics) > 0 || len(params.Statuses) > 0
-	cacheKey := "filters:" + params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
+	// Область входит в ключ: без неё срез одного КАМа достался бы другому.
+	cacheKey := "filters:" + strings.Join(scope, "|") + ":" +
+		params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
 	if !hasContentFilters {
 		if cached, ok := config.FiltersCache.Get(cacheKey); ok {
 			c.JSON(http.StatusOK, cached)
@@ -139,7 +160,12 @@ func GetPromoData(c *gin.Context) {
 		}
 	}
 
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
 	params := repository.PromoFilterParams{
+		AllowedKAMs:   scope,
 		YearFromStr:   c.Query("yearFrom"),
 		YearToStr:     c.Query("yearTo"),
 		Months:        c.QueryArray("months"),
@@ -178,7 +204,12 @@ func GetPromoDashboard(c *gin.Context) {
 		}
 	}
 
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
 	dashboard, err := services.BuildPromoDashboard(repository.PromoFilterParams{
+		AllowedKAMs:   scope,
 		YearFromStr:   c.Query("yearFrom"),
 		YearToStr:     c.Query("yearTo"),
 		Months:        c.QueryArray("months"),
@@ -205,8 +236,19 @@ func GetPromoByID(c *gin.Context) {
 		return
 	}
 
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
+
 	row, err := repository.GetPromoByID(id)
 	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Промо не найдено"})
+		return
+	}
+	// Прямое обращение по id обходит фильтры списка, поэтому область
+	// проверяется и здесь: иначе чужое промо открывалось бы по ссылке.
+	if row.KAM != nil && !repository.KAMAllowedByScope(scope, *row.KAM) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Промо не найдено"})
 		return
 	}
@@ -751,22 +793,154 @@ func agreementNumberForRole(role, requestedRole string) (int, bool) {
 	}
 }
 
+// approvalAccess — что пользователю разрешено на странице согласования.
+// Scope пуст, если ограничения нет: так работают согласующие, заведённые до
+// появления области согласования.
+type approvalAccess struct {
+	AgreementNum int
+	Scope        []string
+}
+
+// resolveApprovalAccess определяет ступень и область согласования.
+//
+// Ступень роли agreement1/agreement2 следует из самой роли, администратор
+// обязан назвать её явно. У роли kam ступени в роли нет — она берётся из
+// области: КАМ допускается к согласованию только там, где за ним закреплены
+// чужие промо. Свои промо в область не входят и потому ему недоступны.
+func resolveApprovalAccess(c *gin.Context, requestedRole string) (approvalAccess, bool) {
+	role := fmt.Sprint(mustGet(c, "role"))
+	username := fmt.Sprint(mustGet(c, "username"))
+
+	if role == "kam" {
+		stages, err := repository.GetApprovalScopeStages(username)
+		if err != nil || len(stages) == 0 {
+			return approvalAccess{}, false
+		}
+		// Ступень определяется закреплением, а не тем, что прислал клиент:
+		// у роли kam ступени в роли нет, и интерфейс по умолчанию отправляет
+		// первую. Запрошенная ступень принимается, только если закрепление на
+		// ней есть; иначе берётся единственная имеющаяся.
+		stage := stages[0]
+		if requested, ok := approvalStageFromRole(requestedRole); ok && containsInt(stages, requested) {
+			stage = requested
+		} else if len(stages) > 1 {
+			return approvalAccess{}, false
+		}
+		scope, err := repository.GetApprovalScope(username, stage)
+		if err != nil || len(scope) == 0 {
+			return approvalAccess{}, false
+		}
+		return approvalAccess{AgreementNum: stage, Scope: scope}, true
+	}
+
+	agreementNum, ok := agreementNumberForRole(role, requestedRole)
+	if !ok {
+		return approvalAccess{}, false
+	}
+	scope, err := repository.GetApprovalScope(username, agreementNum)
+	if err != nil {
+		return approvalAccess{}, false
+	}
+	return approvalAccess{AgreementNum: agreementNum, Scope: scope}, true
+}
+
+// allowsKAM проверяет конкретного КАМа против области.
+func (a approvalAccess) allowsKAM(kam string) bool {
+	return repository.KAMAllowedByScope(a.Scope, kam)
+}
+
+func approvalStageFromRole(role string) (int, bool) {
+	switch role {
+	case "agreement1":
+		return 1, true
+	case "agreement2":
+		return 2, true
+	}
+	return 0, false
+}
+
+func containsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func mustGet(c *gin.Context, key string) any {
+	value, _ := c.Get(key)
+	return value
+}
+
+// approvalIDsInScope проверяет промо перед записью и сам отвечает клиенту при
+// отказе. Возвращает true, только если согласование разрешено по всем строкам.
+func approvalIDsInScope(c *gin.Context, access approvalAccess, ids []int) bool {
+	if len(access.Scope) == 0 {
+		return true
+	}
+	kams, err := repository.GetPromoKAMs(ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "не удалось проверить область согласования"})
+		return false
+	}
+	for _, kam := range kams {
+		if !access.allowsKAM(kam) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "промо вне области согласования"})
+			return false
+		}
+	}
+	return true
+}
+
+// GetApprovalAccess сообщает интерфейсу, показывать ли страницу согласования.
+// Доступен любому авторизованному: тому, кому согласование не положено, он
+// отвечает allowed=false, а не ошибкой.
+func GetApprovalAccess(c *gin.Context) {
+	role := fmt.Sprint(mustGet(c, "role"))
+	if role == "admin" {
+		// Администратор работает на любой ступени, но выбирает её сам.
+		c.JSON(http.StatusOK, models.PromoApprovalAccessResponse{Allowed: true})
+		return
+	}
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
+	if !ok {
+		c.JSON(http.StatusOK, models.PromoApprovalAccessResponse{Allowed: false})
+		return
+	}
+	c.JSON(http.StatusOK, models.PromoApprovalAccessResponse{
+		Allowed:      true,
+		ApprovalRole: fmt.Sprintf("agreement%d", access.AgreementNum),
+		Scoped:       len(access.Scope) > 0,
+	})
+}
+
 func GetApprovals(c *gin.Context) {
 	role, _ := c.Get("role")
 	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
+	agreementNum := access.AgreementNum
 	effectiveRole := fmt.Sprintf("agreement%d", agreementNum)
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
 
+	// Фильтр по КАМу приходит от клиента, поэтому вне области он не сужает
+	// выборку, а закрывает её: иначе подстановка чужого КАМа выдала бы
+	// пустой список вместо отказа и выглядела бы как отсутствие промо.
+	if requested := c.Query("kam"); requested != "" && !access.allowsKAM(requested) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
+		return
+	}
+
 	params := repository.ApprovalParams{
 		Role:           effectiveRole,
 		KAM:            c.Query("kam"),
+		AllowedKAMs:    access.Scope,
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		YearStr:        c.Query("year"),
 		MonthStr:       c.Query("month"),
@@ -784,13 +958,12 @@ func GetApprovals(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": results, "total": total})
+	// Действующая ступень возвращается явно: у роли kam она следует из
+	// закрепления, и интерфейс иначе подписал бы колонки чужой ступенью.
+	c.JSON(http.StatusOK, gin.H{"data": results, "total": total, "approval_role": effectiveRole})
 }
 
 func ApprovePromo(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-
 	var req struct {
 		ID           int    `json:"id"`
 		UpdatedAt    string `json:"updated_at"`
@@ -806,9 +979,15 @@ func ApprovePromo(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id и updated_at обязательны"})
 		return
 	}
-	agreementNum, ok := agreementNumberForRole(roleStr, req.ApprovalRole)
+	access, ok := resolveApprovalAccess(c, req.ApprovalRole)
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
+		return
+	}
+	agreementNum := access.AgreementNum
+	// КАМ промо берётся из базы, а не из запроса: иначе ограничение области
+	// обходилось бы подменой поля в теле запроса.
+	if !approvalIDsInScope(c, access, []int{req.ID}) {
 		return
 	}
 	field := fmt.Sprintf("agreement%d", agreementNum)
@@ -882,18 +1061,21 @@ func ApprovePromo(c *gin.Context) {
 // ─── Approval Filters ─────────────────────────────────────────────────────
 
 func GetApprovalFilters(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
-	effectiveRole := fmt.Sprintf("agreement%d", agreementNum)
+	effectiveRole := fmt.Sprintf("agreement%d", access.AgreementNum)
+	if requested := c.Query("kam"); requested != "" && !access.allowsKAM(requested) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
+		return
+	}
 
 	params := repository.ApprovalFilterParams{
 		ApprovalStatus: c.DefaultQuery("approval_status", "pending"),
 		KAM:            c.Query("kam"),
+		AllowedKAMs:    access.Scope,
 		Network:        c.Query("network_name"),
 		Brand:          c.Query("brand"),
 		MechFilter:     c.Query("mechanics"),
@@ -911,27 +1093,31 @@ func GetApprovalFilters(c *gin.Context) {
 }
 
 func GetApprovalKAMs(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
-	field := fmt.Sprintf("agreement%d", agreementNum)
+	field := fmt.Sprintf("agreement%d", access.AgreementNum)
 
 	kams, err := repository.GetApprovalKAMs(field)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": kams})
+	// Список КАМов — это и меню фильтра, и перечень тех, кого пользователь
+	// вообще может увидеть. Вне области он не должен знать даже имён.
+	allowed := make([]string, 0, len(kams))
+	for _, kam := range kams {
+		if access.allowsKAM(kam) {
+			allowed = append(allowed, kam)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": allowed})
 }
 
 func GetApprovalNetworks(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
@@ -941,8 +1127,12 @@ func GetApprovalNetworks(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
 	}
+	if !access.allowsKAM(kam) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
+		return
+	}
 
-	field := fmt.Sprintf("p.agreement%d", agreementNum)
+	field := fmt.Sprintf("p.agreement%d", access.AgreementNum)
 
 	networks, err := repository.GetApprovalNetworks(field, kam)
 	if err != nil {
@@ -953,9 +1143,7 @@ func GetApprovalNetworks(c *gin.Context) {
 }
 
 func GetApprovalBrands(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-	agreementNum, ok := agreementNumberForRole(roleStr, c.Query("approval_role"))
+	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
@@ -966,8 +1154,12 @@ func GetApprovalBrands(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"data": []string{}})
 		return
 	}
+	if !access.allowsKAM(kam) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
+		return
+	}
 
-	field := fmt.Sprintf("p.agreement%d", agreementNum)
+	field := fmt.Sprintf("p.agreement%d", access.AgreementNum)
 
 	brands, err := repository.GetApprovalBrands(field, kam, network)
 	if err != nil {
@@ -980,9 +1172,6 @@ func GetApprovalBrands(c *gin.Context) {
 // ─── Batch Approve ─────────────────────────────────────────────────────────
 
 func BatchApprovePromo(c *gin.Context) {
-	role, _ := c.Get("role")
-	roleStr := fmt.Sprint(role)
-
 	var req struct {
 		Items []struct {
 			ID        int    `json:"id"`
@@ -996,11 +1185,12 @@ func BatchApprovePromo(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
 		return
 	}
-	agreementNum, ok := agreementNumberForRole(roleStr, req.ApprovalRole)
+	access, ok := resolveApprovalAccess(c, req.ApprovalRole)
 	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
 		return
 	}
+	agreementNum := access.AgreementNum
 	if len(req.Items) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "items не может быть пустым"})
 		return
@@ -1022,6 +1212,15 @@ func BatchApprovePromo(c *gin.Context) {
 		}
 		seenIDs[item.ID] = struct{}{}
 		items = append(items, repository.BatchApproveItem{ID: item.ID, UpdatedAt: item.UpdatedAt})
+	}
+	// Пакет проверяется целиком: одна строка вне области отменяет весь запрос,
+	// иначе частичное применение оставило бы согласование в неясном состоянии.
+	batchIDs := make([]int, 0, len(items))
+	for _, item := range items {
+		batchIDs = append(batchIDs, item.ID)
+	}
+	if !approvalIDsInScope(c, access, batchIDs) {
+		return
 	}
 
 	var status string
@@ -1089,7 +1288,12 @@ func BatchApprovePromo(c *gin.Context) {
 // ─── Excel Export ────────────────────────────────────────────────────────────
 
 func ExportPromoExcel(c *gin.Context) {
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
 	params := repository.PromoFilterParams{
+		AllowedKAMs: scope,
 		YearFromStr: c.Query("yearFrom"),
 		YearToStr:   c.Query("yearTo"),
 		Months:      c.QueryArray("months"),

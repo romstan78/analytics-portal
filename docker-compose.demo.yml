@@ -1,0 +1,97 @@
+name: my_project_demo
+
+x-demo-backend-environment: &demo-backend-environment
+  DB_SERVER: mssql_db
+  DB_PORT: "1433"
+  DB_USER: sa
+  DB_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
+  DB_NAME: ${DEMO_DB_NAME:-local_project_demo_db}
+  DB_AUTO_CREATE: "true"
+  DB_STARTUP_TIMEOUT_SECONDS: "120"
+  DB_ENCRYPT: "true"
+  DB_TRUST_SERVER_CERT: "true"
+  APP_ENV: development
+  JWT_SECRET: ${JWT_SECRET:?Укажите JWT_SECRET в .env}
+  CORS_ORIGINS: http://localhost:${DEMO_FRONTEND_PORT:-5174}
+  TRUSTED_PROXIES: ""
+  PORT: "8080"
+
+x-demo-backend-service: &demo-backend-service
+  build:
+    context: ./backend
+  image: analytics-portal-backend:local
+  environment: *demo-backend-environment
+  depends_on:
+    mssql_db:
+      condition: service_healthy
+
+services:
+  mssql_db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: ${MSSQL_PLATFORM:-linux/amd64}
+    environment:
+      ACCEPT_EULA: Y
+      MSSQL_PID: ${MSSQL_PID:-Developer}
+      MSSQL_SA_PASSWORD: ${SA_PASSWORD:?Укажите SA_PASSWORD в .env}
+    ports:
+      - "127.0.0.1:${DEMO_MSSQL_PORT:-1434}:1433"
+    volumes:
+      - demo_mssql_data_volume:/var/opt/mssql
+      - demo_mssql_backups:/var/opt/mssql/backup
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  backend:
+    <<: *demo-backend-service
+    ports:
+      - "127.0.0.1:${DEMO_BACKEND_PORT:-8081}:8080"
+    volumes:
+      - demo_backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: http://localhost:${DEMO_BACKEND_PORT:-8081}
+    image: analytics-portal-frontend:local
+    ports:
+      - "127.0.0.1:${DEMO_FRONTEND_PORT:-5174}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  bootstrap-user:
+    <<: *demo-backend-service
+    profiles: ["tools"]
+    entrypoint: ["/app/bootstrap-user"]
+    environment:
+      <<: *demo-backend-environment
+      BOOTSTRAP_USERNAME: ${DEMO_BOOTSTRAP_USERNAME:-demo_admin}
+      BOOTSTRAP_PASSWORD: ${DEMO_BOOTSTRAP_PASSWORD:-}
+      BOOTSTRAP_ROLE: ${DEMO_BOOTSTRAP_ROLE:-admin}
+
+volumes:
+  demo_mssql_data_volume:
+    name: my_project_demo_mssql_data_volume
+  demo_mssql_backups:
+    name: my_project_demo_mssql_backups
+  demo_backend_logs:
+    name: my_project_demo_backend_logs
