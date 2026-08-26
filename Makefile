@@ -1,5 +1,6 @@
 .PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod \
-	types types-check
+	types types-check demo-db-init demo-db-load demo-db-reset demo-up demo-down \
+	demo-bootstrap-user
 
 # Полный стек, включая SQL Server на постоянном томе mssql_data_volume.
 up:
@@ -17,6 +18,26 @@ bootstrap-user:
 seed-dev:
 	docker compose --profile tools run --rm seed-dev
 
+# Изолированный демонстрационный контур: отдельные контейнеры, порты и тома.
+# Исходный my_project_mssql_data_volume эти команды не используют.
+demo-db-init:
+	docker compose -f docker-compose.demo.yml up -d --build mssql_db backend
+
+demo-db-load:
+	python3 sync_script/create_demo_promo_db.py
+
+demo-db-reset:
+	python3 sync_script/create_demo_promo_db.py --replace --confirm RESET_DEMO_PROMO_DB
+
+demo-up:
+	docker compose -f docker-compose.demo.yml up -d --build
+
+demo-down:
+	docker compose -f docker-compose.demo.yml down
+
+demo-bootstrap-user:
+	docker compose -f docker-compose.demo.yml --profile tools run --rm bootstrap-user
+
 # Типы фронтенда генерируются из Go-структур: контракт API описан один раз.
 types:
 	cd backend && go run ./cmd/tsgen
@@ -33,7 +54,7 @@ types-check:
 test: types-check
 	cd backend && go vet ./... && go test ./config ./middleware ./handlers ./repository ./services
 	cd frontend && npm run lint && npm run test:unit && npm run build
-	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py test_import_network_facts.py
+	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py test_import_network_facts.py test_create_demo_promo_db.py
 
 test-e2e:
 	cd frontend && npm run test:e2e
