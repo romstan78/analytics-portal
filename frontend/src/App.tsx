@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { createTheme, ThemeProvider, CssBaseline, Box, Typography, Button, CircularProgress } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 // Подключает стили MuiDataGrid к типу темы MUI.
 import type {} from '@mui/x-data-grid/themeAugmentation';
+import ErrorBoundary from './components/ErrorBoundary';
 import { getToken, logout } from './api/auth';
 import type { SessionData } from './api/auth';
 
@@ -149,6 +151,8 @@ interface AuthState {
 }
 
 export default function App() {
+  const queryClient = useQueryClient();
+  const location = useLocation();
   const [auth, setAuth] = useState<AuthState>(() => ({
     token: getToken(),
     username: localStorage.getItem('username'),
@@ -168,20 +172,33 @@ export default function App() {
     setAuth({ token: null, username: null, role: null });
   };
 
-  // Слушаем принудительный разлогин из api/promo.ts
+  // Слушаем разлогин: и кнопкой, и принудительный из api/promo.ts — logout()
+  // в обоих случаях шлёт это событие.
+  //
+  // Кэш запросов чистится здесь же. Он живёт в QueryClient вне дерева и смену
+  // пользователя переживает, а ключи запросов пользователя не содержат, поэтому
+  // без очистки следующий вошедший получает списки предыдущего: админ после
+  // КАМа видит его сети, и наоборот.
   useEffect(() => {
-    const onForceLogout = () => setAuth({ token: null, username: null, role: null });
+    const onForceLogout = () => {
+      queryClient.clear();
+      setAuth({ token: null, username: null, role: null });
+    };
     window.addEventListener('auth:logout', onForceLogout);
     return () => window.removeEventListener('auth:logout', onForceLogout);
-  }, []);
+  }, [queryClient]);
 
   if (!auth.token) {
     return (
       <ThemeProvider theme={modernTheme}>
         <CssBaseline />
-        <Suspense fallback={<PageLoader />}>
-          <Login onLogin={handleLogin} />
-        </Suspense>
+        {/* Граница снаружи Suspense: так она ловит и падение отрисовки, и
+            несостоявшуюся загрузку ленивого чанка. */}
+        <ErrorBoundary>
+          <Suspense fallback={<PageLoader />}>
+            <Login onLogin={handleLogin} />
+          </Suspense>
+        </ErrorBoundary>
       </ThemeProvider>
     );
   }
@@ -190,17 +207,21 @@ export default function App() {
     <ThemeProvider theme={modernTheme}>
       <CssBaseline />
       <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
-        <Suspense fallback={<PageLoader />}>
-          <Routes>
-            <Route path="/" element={<Home onLogout={handleLogout} />} />
-            <Route path="/internet-sales" element={<InternetSales />} />
-            <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
-            <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
-            <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
-            <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
-            <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
-          </Routes>
-        </Suspense>
+        {/* Ключ сброса — путь: уход с упавшего экрана обязан показать новый,
+            а не оставить сообщение об ошибке предыдущего. */}
+        <ErrorBoundary resetKey={location.pathname}>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/" element={<Home onLogout={handleLogout} />} />
+              <Route path="/internet-sales" element={<InternetSales />} />
+              <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
+              <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
+              <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
+              <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
+              <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
       </Box>
     </ThemeProvider>
   );

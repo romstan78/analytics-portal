@@ -583,6 +583,137 @@ export interface NetworkPricesSaveResponse {
   data: NetworkPricesResponse;
 }
 
+export interface NetworkDashboardMetrics {
+  networkCount: number;
+  brandCount: number;
+  planRub: number;
+  factRub: number;
+  planUnits: number;
+  factUnits: number;
+  eacUnits: number;
+  eacRub: number;
+  completionPct: number | null;
+  eacCompletionPct: number | null;
+  gapRub: number;
+  planInvestmentsRub: number;
+  planInvestmentsRubNet: number;
+  factInvestmentsRub: number;
+  factInvestmentsRubNet: number;
+  eacInvestmentsRub: number;
+  eacInvestmentsRubNet: number;
+  investmentVarianceRub: number;
+  effectiveInvestmentsPct: number | null;
+  undistributedRub: number | null;
+  closedCells: number;
+  closedCellsWithFact: number;
+  factCoveragePct: number | null;
+  openCellsWithoutForecast: number;
+  prevPlanRub: number | null;
+  prevFactRub: number | null;
+  prevFactUnits: number | null;
+  factYoyPct: number | null;
+  planYoyPct: number | null;
+  promoCount: number;
+  promoOnlineCount: number;
+  promoOfflineCount: number;
+  promoInvestmentsRub: number;
+}
+
+export interface NetworkDashboardPromoTag {
+  code: string;
+  mechanics: string;
+  channel: string;
+  count: number;
+  planRub: number;
+}
+
+export interface NetworkDashboardPeriodPoint {
+  year: number;
+  quarter: number;
+  metrics: NetworkDashboardMetrics;
+}
+
+export interface NetworkDashboardMonthPoint {
+  year: number;
+  month: number;
+  quarter: number;
+  planRub: number;
+  planUnits: number;
+  factRub: number;
+  factUnits: number;
+  eacRub: number;
+  eacUnits: number;
+  prevFactRub: number | null;
+  prevFactUnits: number | null;
+  promoCount: number;
+  promoOnlineCount: number;
+  promoOfflineCount: number;
+  closed: boolean;
+  cellsWithoutForecast: number;
+}
+
+export interface NetworkDashboardBreakdown {
+  name: string;
+  networkId: number | null;
+  kam: string | null;
+  metrics: NetworkDashboardMetrics;
+}
+
+export interface NetworkDashboardCell {
+  networkId: number;
+  name: string;
+  quarter: number;
+  metrics: NetworkDashboardMetrics;
+  promoTags: NetworkDashboardPromoTag[];
+}
+
+export interface NetworkDashboardBrandQuarter {
+  brand: string;
+  quarter: number;
+  metrics: NetworkDashboardMetrics;
+  promoTags: NetworkDashboardPromoTag[];
+}
+
+export interface NetworkDashboardBrandMonth {
+  brand: string;
+  month: number;
+  promoCount: number;
+  promoOnlineCount: number;
+  promoOfflineCount: number;
+  promoInvestmentsRub: number;
+  promoTags: NetworkDashboardPromoTag[];
+}
+
+export interface NetworkDashboardSKU {
+  brand: string;
+  sku: string;
+  factRub: number;
+  factUnits: number;
+  eacRub: number;
+  eacUnits: number;
+  factInvestmentsRub: number;
+  prevFactRub: number | null;
+  prevFactUnits: number | null;
+  factYoyPct: number | null;
+  shareOfBrandPct: number | null;
+}
+
+export interface NetworkDashboardResponse {
+  year: number;
+  selectedQuarters: number[];
+  availableYears: number[];
+  summary: NetworkDashboardMetrics;
+  quarters: NetworkDashboardPeriodPoint[];
+  months: NetworkDashboardMonthPoint[];
+  networks: NetworkDashboardBreakdown[];
+  brands: NetworkDashboardBreakdown[];
+  kams: NetworkDashboardBreakdown[];
+  networkQuarters: NetworkDashboardCell[];
+  brandQuarters: NetworkDashboardBrandQuarter[];
+  brandMonths: NetworkDashboardBrandMonth[];
+  skus: NetworkDashboardSKU[];
+}
+
 export interface NetworkPlanInput {
   quarter: number;
   brand_as: string | null;

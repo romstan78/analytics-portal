@@ -296,31 +296,14 @@ func networkVATSettings(input networkInput, fallback models.Network) (bool, floa
 	return vatIncluded, vatRate, nil
 }
 
-// networkPeriodsWithDefaults возвращает все четыре квартала. Сохранённые
-// настройки не меняются, а ещё не открытые кварталы получают значения по
-// умолчанию из карточки сети.
+// networkPeriodsWithDefaults возвращает все четыре квартала. Правило живёт в
+// services: витрина реестра достраивает кварталы тем же способом.
 func networkPeriodsWithDefaults(
 	network models.Network,
 	year int,
 	persisted []models.NetworkPeriod,
 ) []models.NetworkPeriod {
-	byQuarter := make(map[int]models.NetworkPeriod, len(persisted))
-	for _, period := range persisted {
-		byQuarter[period.Quarter] = period
-	}
-	periods := make([]models.NetworkPeriod, 0, 4)
-	for quarter := 1; quarter <= 4; quarter++ {
-		period := byQuarter[quarter]
-		period.NetworkID = network.ID
-		period.Year = year
-		period.Quarter = quarter
-		if period.ID == 0 {
-			period.VATIncluded = network.VATIncluded
-			period.VATRate = network.VATRate
-		}
-		periods = append(periods, period)
-	}
-	return periods
+	return services.NetworkPeriodsWithDefaults(network, year, persisted)
 }
 
 type networkPeriodInput struct {

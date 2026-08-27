@@ -178,6 +178,8 @@ func main() {
 		api.GET("/networks", handlers.GetNetworks)
 		api.GET("/networks/brands", handlers.GetNetworkBrands)
 		api.GET("/networks/kams", handlers.GetNetworkKAMs)
+		// Витрина реестра: собственная область видимости внутри обработчика.
+		api.GET("/networks/dashboard", handlers.GetNetworkDashboard)
 		api.GET("/networks/:id/plan", handlers.NetworkAccessRequired(), handlers.GetNetworkPlan)
 		api.GET("/networks/:id/forecast", handlers.NetworkAccessRequired(), handlers.GetNetworkForecast)
 		api.GET("/networks/:id/prices", handlers.NetworkAccessRequired(), handlers.GetNetworkPrices)

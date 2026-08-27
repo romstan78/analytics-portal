@@ -34,7 +34,7 @@ const blocks: HomeBlock[] = [
     title: 'Реестр сетей',
     path: '/network-registry',
     icon: <ListAltIcon sx={{ fontSize: 48 }} />,
-    desc: 'План-Факт-Прогноз по аптечным сетям',
+    desc: 'Итоги по периодам, план-факт-прогноз и риски',
     color: '#10b981',
     ready: true,
   },
