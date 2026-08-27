@@ -29,18 +29,20 @@ SKU_BRANDS = {
 
 
 def make_shipments(networks, years=(2025, 2026)):
+    """Факт по годам заведомо разный: иначе план года не отличить от плана соседнего."""
     rows = []
     for network in networks:
         for sku in SKU_BRANDS:
             for year in years:
+                scale = Decimal("1") + Decimal(year - min(years)) / Decimal("2")
                 for month in range(1, 13):
                     rows.append({
                         "networkName": network,
                         "productName": sku,
                         "year": year,
                         "month": month,
-                        "units": Decimal("1000") + Decimal(month * 10),
-                        "rub": Decimal("500000") + Decimal(month * 1000),
+                        "units": (Decimal("1000") + Decimal(month * 10)) * scale,
+                        "rub": (Decimal("500000") + Decimal(month * 1000)) * scale,
                     })
     return rows
 
@@ -159,26 +161,52 @@ class PlanRowTests(unittest.TestCase):
         )
         self.rows = build_plan_rows(
             self.synthetic, self.quarterly, self.network_ids, self.profiles, {},
-            2026, (2026, 2027),
+            2026, (2025, 2026, 2027),
         )
 
-    def test_both_plan_years_are_present(self):
+    def test_every_plan_year_is_present(self):
         years = {row[1] for row in self.rows}
-        self.assertEqual(years, {2026, 2027})
+        self.assertEqual(years, {2025, 2026, 2027})
 
     def test_plan_is_missed_and_beaten(self):
         # Обе стороны обязаны быть: иначе форма «план / факт» выглядит нарисованной.
-        above = below = 0
-        for row in self.rows:
-            if row[1] != 2026 or row[3] is None:
+        for year in (2025, 2026):
+            above = below = 0
+            for row in self.rows:
+                if row[1] != year or row[3] is None:
+                    continue
+                fact = self.quarterly[(row[0], row[3], year, row[2])]["rub"]
+                if fact > row[4]:
+                    above += 1
+                else:
+                    below += 1
+            with self.subTest(year=year):
+                self.assertGreater(above, 0)
+                self.assertGreater(below, 0)
+
+    def test_year_with_fact_plans_from_its_own_year(self):
+        # План 2025-го обязан идти от факта 2025-го, а не от последнего года:
+        # иначе закрытый год сравнивался бы с чужим объёмом.
+        plans = {(row[0], row[2], row[3]): row[4] for row in self.rows if row[1] == 2025}
+        self.assertTrue(plans)
+        for (network_id, quarter, brand), plan_rub in plans.items():
+            if brand is None:
                 continue
-            fact = self.quarterly[(row[0], row[3], 2026, row[2])]["rub"]
-            if fact > row[4]:
-                above += 1
-            else:
-                below += 1
-        self.assertGreater(above, 0)
-        self.assertGreater(below, 0)
+            fact = self.quarterly[(network_id, brand, 2025, quarter)]["rub"]
+            ratio = float(plan_rub) / float(fact)
+            self.assertGreater(ratio, 1 / 1.15)
+            self.assertLess(ratio, 1 / 0.87)
+
+    def test_year_without_fact_grows_from_the_last_closed_year(self):
+        plans = {(row[0], row[2], row[3]): row[4] for row in self.rows if row[1] == 2027}
+        self.assertTrue(plans)
+        for (network_id, quarter, brand), plan_rub in plans.items():
+            if brand is None:
+                continue
+            fact = self.quarterly[(network_id, brand, 2026, quarter)]["rub"]
+            ratio = float(plan_rub) / float(fact)
+            self.assertGreater(ratio, 0.95)
+            self.assertLess(ratio, 1.19)
 
     def test_gross_networks_get_a_total_row(self):
         gross_networks = {row[0] for row in self.rows if row[3] is None}
