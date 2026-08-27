@@ -42,6 +42,7 @@ import {
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
 import NetworkDashboardView from '../components/NetworkDashboardView';
+import NetworkDetailView from '../components/NetworkDetailView';
 import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkVATEditor from '../components/NetworkVATEditor';
@@ -229,11 +230,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const [selectedId, setSelectedId] = useState<number | null>(() => paramNetworkID(searchParams));
   const [year, setYear] = useState(() => paramYear(searchParams));
   const [tab, setTab] = useState(0);
-  // Реестр открывается итогами: сначала общая картина, потом конкретная сеть.
-  // Прямая ссылка на карточку сразу переключает в режим сети.
-  const [view, setView] = useState<RegistryView>(() => (
-    paramNetworkID(searchParams) != null ? 'networks' : 'dashboard'
-  ));
+  // Реестр открывается списком сетей: работа идёт по конкретной сети, а итоги
+  // смотрят отдельным переключением.
+  const [view, setView] = useState<RegistryView>('networks');
   const [quarters, setQuarters] = useState<number[]>(ALL_QUARTERS);
   // Год витрины отделён от года карточки: карточка открывается на плановом
   // горизонте, а итоги — на последнем году, где есть данные. План заводят
@@ -243,6 +242,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   // Список лет приходит в самом ответе и от запрошенного года не зависит,
   // поэтому он хранится отдельно и переживает смену запроса.
   const [dashboardYears, setDashboardYears] = useState<number[]>([]);
+  // Сети витрины: пустой набор — весь доступный портфель. Набор, а не одна
+  // сеть, потому что рядом сравнивают и две-три.
+  const [dashboardNetworkIds, setDashboardNetworkIds] = useState<number[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState<{ quarter: number | null; brand: string | null } | null>(null);
   const [commentText, setCommentText] = useState('');
@@ -279,18 +281,32 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   );
 
   const dashboardQuery = useQuery({
-    queryKey: ['networkDashboard', effectiveDashboardYear, quarters.join(','), kam],
+    queryKey: [
+      'networkDashboard', effectiveDashboardYear, quarters.join(','), kam,
+      dashboardNetworkIds.join(','),
+    ],
     queryFn: async () => {
       const response = await networkAPI.getDashboard({
         year: effectiveDashboardYear,
         quarters,
         kam: kam ? [kam] : undefined,
+        networkIds: dashboardNetworkIds,
       });
       setDashboardYears(response.availableYears);
       return response;
     },
     enabled: view === 'dashboard',
     placeholderData: (previous) => previous,
+  });
+
+  // Сети для фильтра витрины читаются отдельно от списка слева: тот сужается
+  // поиском, а в фильтре обязаны остаться все сети области — иначе, выбрав
+  // одну, вернуться к остальным было бы не через что.
+  const dashboardNetworkOptions = useQuery({
+    queryKey: ['networkDashboardOptions', kam],
+    queryFn: () => networkAPI.getNetworks({ kam }),
+    enabled: view === 'dashboard',
+    staleTime: 30 * 60 * 1000,
   });
 
   const planQuery = useQuery({
@@ -399,6 +415,23 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     return [...options].sort((a, b) => a - b);
   }, [dashboardYears, effectiveDashboardYear]);
 
+  const networkFilterOptions = useMemo(
+    () => (dashboardNetworkOptions.data?.data ?? []).map((item) => ({ label: item.name, value: item.id })),
+    [dashboardNetworkOptions.data],
+  );
+
+  // Смена КАМа снимает выбранные сети: они остались у прежнего, а сервер
+  // пересекает оба фильтра — витрина опустела бы вместо портфеля выбранного.
+  const changeKam = (value: string) => {
+    setKam(value);
+    setDashboardNetworkIds([]);
+  };
+
+  // Клик по сети на витрине проваливает в разбор, а не в карточку: карточка
+  // открывается из разбора отдельной кнопкой. Фильтр и есть состояние
+  // проваливания — поэтому назад ведут те же крошки, что его снимают.
+  const drillIntoNetwork = (networkId: number) => setDashboardNetworkIds([networkId]);
+
   // Переход из витрины в карточку: сеть открывается сразу на «Плане и факте»,
   // на том же году и без ухода со страницы.
   const openNetworkFromDashboard = (networkId: number) => {
@@ -474,8 +507,8 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
           value={view}
           onChange={(_, value) => value && setView(value as RegistryView)}
         >
-          <ToggleButton value="dashboard">Итоги</ToggleButton>
           <ToggleButton value="networks">Сети</ToggleButton>
+          <ToggleButton value="dashboard">Итоги</ToggleButton>
         </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
         {canEdit && view === 'networks' && (
@@ -560,7 +593,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 select
                 label="КАМ"
                 value={kam}
-                onChange={(e) => setKam(e.target.value)}
+                onChange={(e) => changeKam(e.target.value)}
                 sx={{ width: 220 }}
               >
                 <MenuItem value="">Все КАМ</MenuItem>
@@ -569,17 +602,75 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 ))}
               </TextField>
             )}
+            {/* Сети выбираются набором: разбирают и одну, и пару рядом.
+                Пустой выбор — весь портфель области. */}
+            <Autocomplete<{ label: string; value: number }, true, false, false>
+              multiple
+              disableCloseOnSelect
+              limitTags={1}
+              size="small"
+              options={networkFilterOptions}
+              loading={dashboardNetworkOptions.isLoading}
+              getOptionLabel={(option) => option.label}
+              isOptionEqualToValue={(option, value) => option.value === value?.value}
+              value={networkFilterOptions.filter((option) => dashboardNetworkIds.includes(option.value))}
+              onChange={(_, selected) => setDashboardNetworkIds(selected.map((option) => option.value))}
+              renderOption={(props, option, { selected }) => {
+                const { key, ...rest } = props;
+                return (
+                  <li key={key} {...rest} style={{ padding: '2px 8px' }}>
+                    <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
+                    <ListItemText
+                      primary={option.label}
+                      slotProps={{ primary: { sx: { fontSize: 13 } } }}
+                    />
+                  </li>
+                );
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Сеть"
+                  placeholder={dashboardNetworkIds.length === 0 ? 'Все сети' : undefined}
+                  slotProps={{
+                    ...params.slotProps,
+                    inputLabel: { ...params.slotProps.inputLabel, shrink: true },
+                  }}
+                />
+              )}
+              slotProps={{ paper: { sx: { minWidth: 320 } } }}
+              sx={{ minWidth: 260, maxWidth: 380 }}
+            />
+            {/* На одной сети возврат уже есть в крошках разбора, и вторая
+                такая же кнопка рядом была бы шумом. */}
+            {dashboardNetworkIds.length > 1 && (
+              <Button size="small" onClick={() => setDashboardNetworkIds([])}>Все сети</Button>
+            )}
             {dashboardQuery.isFetching && <CircularProgress size={16} />}
           </Stack>
 
-          <NetworkDashboardView
-            data={dashboardQuery.data ?? null}
-            loading={dashboardQuery.isLoading}
-            error={dashboardQuery.isError
-              ? (dashboardQuery.error as { message?: string })?.message ?? 'Не удалось загрузить витрину'
-              : null}
-            onOpenNetwork={openNetworkFromDashboard}
-          />
+          {dashboardNetworkIds.length === 1 ? (
+            <NetworkDetailView
+              data={dashboardQuery.data ?? null}
+              loading={dashboardQuery.isLoading}
+              error={dashboardQuery.isError
+                ? (dashboardQuery.error as { message?: string })?.message ?? 'Не удалось загрузить разбор сети'
+                : null}
+              onBackToAll={() => changeKam('')}
+              onBackToKAM={kam ? () => setDashboardNetworkIds([]) : undefined}
+              kamCrumb={kam || undefined}
+              onOpenCard={openNetworkFromDashboard}
+            />
+          ) : (
+            <NetworkDashboardView
+              data={dashboardQuery.data ?? null}
+              loading={dashboardQuery.isLoading}
+              error={dashboardQuery.isError
+                ? (dashboardQuery.error as { message?: string })?.message ?? 'Не удалось загрузить витрину'
+                : null}
+              onOpenNetwork={drillIntoNetwork}
+            />
+          )}
         </>
       )}
 
@@ -616,7 +707,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
             size="small"
             label="КАМ"
             value={kam}
-            onChange={(e) => setKam(e.target.value)}
+            onChange={(e) => changeKam(e.target.value)}
             sx={{ mt: 1.5 }}
           >
             <MenuItem value="">Все КАМ</MenuItem>

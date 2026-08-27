@@ -53,6 +53,9 @@ export type {
   NetworkDashboardMonthPoint,
   NetworkDashboardBreakdown,
   NetworkDashboardCell,
+  NetworkDashboardBrandQuarter,
+  NetworkDashboardBrandMonth,
+  NetworkDashboardSKU,
   NetworkDashboardResponse,
 } from './api.generated';
 

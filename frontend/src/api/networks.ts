@@ -56,11 +56,15 @@ export const networkAPI = {
     // сервер понимает как весь год.
     quarters?: number[];
     kam?: string[];
+    // Сети — тоже набор: разбирают и одну сеть, и пару рядом. Пустой список
+    // означает весь доступный портфель, а не пустую витрину.
+    networkIds?: number[];
   }): Promise<NetworkDashboardResponse> => {
     const query = new URLSearchParams();
     query.set('year', String(params.year));
     (params.quarters ?? []).forEach((quarter) => query.append('quarter', String(quarter)));
     (params.kam ?? []).forEach((kam) => query.append('kam', kam));
+    (params.networkIds ?? []).forEach((id) => query.append('network_id', String(id)));
     return fetchWithAuth(`${API_BASE}/api/networks/dashboard?${query.toString()}`)
       .then(r => parseJSONResponse<NetworkDashboardResponse>(r, 'Ошибка загрузки витрины реестра'));
   },

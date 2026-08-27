@@ -1,6 +1,8 @@
 package services
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +60,12 @@ func dashboardFact(networkID, month int, brand string, rub, investments float64)
 		SKU:     models.PtrString("SKU-1"),
 		FactRub: models.PtrFloat(rub), FactInvestmentsRub: models.PtrFloat(investments),
 	}
+}
+
+func skuFact(networkID, month int, brand, sku string, rub, investments float64) models.NetworkMonthlyFact {
+	fact := dashboardFact(networkID, month, brand, rub, investments)
+	fact.SKU = models.PtrString(sku)
+	return fact
 }
 
 func dashboardFactUnits(networkID, month int, brand string, rub, units float64) models.NetworkMonthlyFact {
@@ -775,5 +783,452 @@ func TestNormalizedQuartersDefaultsToWholeYear(t *testing.T) {
 	months := messy.Months()
 	if len(months) != 6 || months[0] != 1 || months[5] != 9 {
 		t.Errorf("месяцы = %v, ожидалось [1 2 3 7 8 9]", months)
+	}
+}
+
+// ─── Разбор одной сети ──────────────────────────────────────────────────────
+//
+// Разрезы «бренд × квартал» и промо-календарь заполняются только когда в
+// области ровно одна сеть: на портфеле это произведение размерностей.
+
+func TestBrandQuartersOnlyForSingleNetworkScope(t *testing.T) {
+	twoNetworks := dashboardCase{
+		networks: []models.Network{
+			dashboardNetwork(1, "Аптека Плюс", "Иванов"),
+			dashboardNetwork(2, "Аптека Минус", "Петров"),
+		},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+			{NetworkID: 2, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(2000)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 900, 90),
+			dashboardFact(2, 1, "Альфа", 1800, 180),
+		},
+	}
+
+	got := AggregateNetworkDashboard(twoNetworks.data(), dashboardFilter(1), dashboardNow)
+	if len(got.BrandQuarters) != 0 {
+		t.Fatalf("на портфеле разрез отдан: %d строк, ожидалось 0", len(got.BrandQuarters))
+	}
+}
+
+func TestBrandQuartersSplitBrandByQuarter(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000), InvestmentsPct: models.PtrFloat(10)},
+			{NetworkID: 1, Year: 2026, Quarter: 2, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(2000), InvestmentsPct: models.PtrFloat(10)},
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Бета"),
+				PlanRub: models.PtrFloat(500), InvestmentsPct: models.PtrFloat(10)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 400, 40),
+			dashboardFact(1, 2, "Альфа", 400, 40),
+			dashboardFact(1, 4, "Альфа", 900, 90),
+			dashboardFact(1, 1, "Бета", 600, 60),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1, 2), dashboardNow)
+
+	if len(got.BrandQuarters) != 3 {
+		t.Fatalf("строк разреза = %d, ожидалось 3", len(got.BrandQuarters))
+	}
+	// Порядок устойчив: сначала бренд, потом квартал.
+	if got.BrandQuarters[0].Brand != "Альфа" || got.BrandQuarters[0].Quarter != 1 {
+		t.Errorf("первая строка = %s Q%d, ожидалось Альфа Q1",
+			got.BrandQuarters[0].Brand, got.BrandQuarters[0].Quarter)
+	}
+	if got.BrandQuarters[2].Brand != "Бета" {
+		t.Errorf("последняя строка = %s, ожидался Бета", got.BrandQuarters[2].Brand)
+	}
+
+	// Кварталы одного бренда не смешиваются между собой.
+	alphaQ1 := got.BrandQuarters[0]
+	alphaQ2 := got.BrandQuarters[1]
+	if alphaQ1.Metrics.PlanRub != 1000 || alphaQ2.Metrics.PlanRub != 2000 {
+		t.Errorf("планы по кварталам = %v и %v, ожидались 1000 и 2000",
+			alphaQ1.Metrics.PlanRub, alphaQ2.Metrics.PlanRub)
+	}
+	if alphaQ1.Metrics.FactRub != 800 || alphaQ2.Metrics.FactRub != 900 {
+		t.Errorf("факт по кварталам = %v и %v, ожидались 800 и 900",
+			alphaQ1.Metrics.FactRub, alphaQ2.Metrics.FactRub)
+	}
+}
+
+// Разрез обязан сходиться с разрезом брендов: это те же строки плана, просто
+// не свёрнутые по кварталам. Расхождение здесь означало бы вторую арифметику.
+func TestBrandQuartersSumUpToBrandBreakdown(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000), InvestmentsPct: models.PtrFloat(10)},
+			{NetworkID: 1, Year: 2026, Quarter: 2, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(2000), InvestmentsPct: models.PtrFloat(10)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 400, 40),
+			dashboardFact(1, 2, "Альфа", 400, 40),
+			dashboardFact(1, 4, "Альфа", 900, 90),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1, 2), dashboardNow)
+
+	var brand *models.NetworkDashboardBreakdown
+	for index := range got.Brands {
+		if got.Brands[index].Name == "Альфа" {
+			brand = &got.Brands[index]
+		}
+	}
+	if brand == nil {
+		t.Fatal("в разрезе брендов нет Альфы")
+	}
+
+	var planSum, factSum, eacSum float64
+	for _, row := range got.BrandQuarters {
+		if row.Brand != "Альфа" {
+			continue
+		}
+		planSum += row.Metrics.PlanRub
+		factSum += row.Metrics.FactRub
+		eacSum += row.Metrics.EACRub
+	}
+	if planSum != brand.Metrics.PlanRub {
+		t.Errorf("сумма планов по кварталам = %v, у бренда %v", planSum, brand.Metrics.PlanRub)
+	}
+	if factSum != brand.Metrics.FactRub {
+		t.Errorf("сумма факта по кварталам = %v, у бренда %v", factSum, brand.Metrics.FactRub)
+	}
+	if eacSum != brand.Metrics.EACRub {
+		t.Errorf("сумма EAC по кварталам = %v, у бренда %v", eacSum, brand.Metrics.EACRub)
+	}
+}
+
+func TestBrandMonthsCarryPromoCalendar(t *testing.T) {
+	discount := "Скидка 20%"
+	offline := "оффлайн"
+	online := "онлайн"
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{dashboardFact(1, 1, "Альфа", 900, 90)},
+		promos: []repository.NetworkDashboardPromoRow{
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				Mechanics: &discount, Channel: &offline, PromoCount: 2, PlanRub: 200, InvestRub: 20},
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				Mechanics: &discount, Channel: &online, PromoCount: 1, PlanRub: 100, InvestRub: 10},
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 3, BrandAS: brandPtr("Бета"),
+				Mechanics: &discount, Channel: &offline, PromoCount: 1, PlanRub: 50, InvestRub: 5},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.BrandMonths) != 2 {
+		t.Fatalf("ячеек календаря = %d, ожидалось 2", len(got.BrandMonths))
+	}
+	alpha := got.BrandMonths[0]
+	if alpha.Brand != "Альфа" || alpha.Month != 2 {
+		t.Fatalf("первая ячейка = %s месяц %d, ожидалась Альфа месяц 2", alpha.Brand, alpha.Month)
+	}
+	if alpha.PromoCount != 3 || alpha.PromoOnlineCount != 1 || alpha.PromoOfflineCount != 2 {
+		t.Errorf("счётчики = %d всего, %d онлайн, %d оффлайн; ожидались 3, 1, 2",
+			alpha.PromoCount, alpha.PromoOnlineCount, alpha.PromoOfflineCount)
+	}
+	if alpha.PromoInvestmentsRub != 30 {
+		t.Errorf("инвестиции промо = %v, ожидалось 30", alpha.PromoInvestmentsRub)
+	}
+	// Метки склеены по коду и каналу: одна механика в двух каналах — две метки.
+	if len(alpha.PromoTags) != 2 {
+		t.Errorf("меток = %d, ожидалось 2", len(alpha.PromoTags))
+	}
+
+	// Промо-календарь не выдумывает бренд там, где его в плане нет: строка
+	// «Беты» приходит из промо и обязана дойти до календаря как есть.
+	if got.BrandMonths[1].Brand != "Бета" || got.BrandMonths[1].PromoCount != 1 {
+		t.Errorf("вторая ячейка = %s ×%d, ожидалась Бета ×1",
+			got.BrandMonths[1].Brand, got.BrandMonths[1].PromoCount)
+	}
+}
+
+// Промо, пришедшее без бренда, не должно оседать в календаре под пустым
+// именем: в разрезе по месяцам оно по-прежнему учтено.
+func TestBrandMonthsSkipPromoWithoutBrand(t *testing.T) {
+	discount := "Скидка 20%"
+	offline := "оффлайн"
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{dashboardFact(1, 1, "Альфа", 900, 90)},
+		promos: []repository.NetworkDashboardPromoRow{
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: nil,
+				Mechanics: &discount, Channel: &offline, PromoCount: 4, PlanRub: 400},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.BrandMonths) != 0 {
+		t.Fatalf("ячеек календаря = %d, ожидалось 0", len(got.BrandMonths))
+	}
+	var monthPromo int
+	for _, point := range got.Months {
+		monthPromo += point.PromoCount
+	}
+	if monthPromo != 4 {
+		t.Errorf("промо в месячном ряду = %d, ожидалось 4", monthPromo)
+	}
+}
+
+// Ячейка без промо обязана нести пустой список меток, а не nil: nil уходит в
+// JSON как null, сгенерированный тип обещает клиенту массив, и первое же
+// обращение к длине роняет экран разбора.
+func TestPromoTagsAreNeverNil(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{dashboardFact(1, 1, "Альфа", 900, 90)},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	for _, cell := range got.NetworkQuarters {
+		if cell.PromoTags == nil {
+			t.Errorf("ячейка %s Q%d без меток отдана как nil", cell.Name, cell.Quarter)
+		}
+	}
+	if len(got.BrandQuarters) == 0 {
+		t.Fatal("разрез «бренд × квартал» пуст")
+	}
+	for _, row := range got.BrandQuarters {
+		if row.PromoTags == nil {
+			t.Errorf("строка %s Q%d без меток отдана как nil", row.Brand, row.Quarter)
+		}
+	}
+
+	// И то же самое в JSON: проверяется не поле, а то, что увидит клиент.
+	encoded, err := json.Marshal(got.BrandQuarters[0])
+	if err != nil {
+		t.Fatalf("сериализация: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"promoTags":[]`) {
+		t.Errorf("в JSON нет пустого списка меток: %s", encoded)
+	}
+}
+
+// Промо без механики не даёт меток, но счётчики промо обязаны остаться:
+// ровно на этой паре ячейка и получала nil.
+func TestPromoWithoutMechanicsKeepsCountsAndEmptyTags(t *testing.T) {
+	offline := "оффлайн"
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{dashboardFact(1, 1, "Альфа", 900, 90)},
+		promos: []repository.NetworkDashboardPromoRow{{
+			NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+			Mechanics: nil, Channel: &offline, PromoCount: 2, PlanRub: 200,
+		}},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.BrandMonths) != 1 {
+		t.Fatalf("ячеек календаря = %d, ожидалась 1", len(got.BrandMonths))
+	}
+	cell := got.BrandMonths[0]
+	if cell.PromoCount != 2 {
+		t.Errorf("промо = %d, ожидалось 2", cell.PromoCount)
+	}
+	if cell.PromoTags == nil {
+		t.Fatal("метки отданы как nil")
+	}
+	if len(cell.PromoTags) != 0 {
+		t.Errorf("меток = %d, ожидалось 0: механики у промо не было", len(cell.PromoTags))
+	}
+}
+
+// ─── SKU внутри бренда ──────────────────────────────────────────────────────
+
+func TestSKUsCarryFactWithoutPlan(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000), InvestmentsPct: models.PtrFloat(10)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			skuFact(1, 1, "Альфа", "SKU-A", 600, 60),
+			skuFact(1, 2, "Альфа", "SKU-B", 200, 20),
+			skuFact(1, 3, "Альфа", "SKU-A", 100, 10),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.SKUs) != 2 {
+		t.Fatalf("строк SKU = %d, ожидалось 2", len(got.SKUs))
+	}
+	// Внутри бренда — по убыванию ожидаемого объёма.
+	if got.SKUs[0].SKU != "SKU-A" || got.SKUs[0].FactRub != 700 {
+		t.Errorf("первая строка = %s на %v, ожидался SKU-A на 700", got.SKUs[0].SKU, got.SKUs[0].FactRub)
+	}
+	if got.SKUs[1].SKU != "SKU-B" || got.SKUs[1].FactRub != 200 {
+		t.Errorf("вторая строка = %s на %v, ожидался SKU-B на 200", got.SKUs[1].SKU, got.SKUs[1].FactRub)
+	}
+
+	// Квартал закрыт целиком: сумма SKU обязана сойтись с брендом.
+	var factSum float64
+	for _, row := range got.SKUs {
+		factSum += row.FactRub
+	}
+	var brandFact float64
+	for _, brand := range got.Brands {
+		if brand.Name == "Альфа" {
+			brandFact = brand.Metrics.FactRub
+		}
+	}
+	if factSum != brandFact {
+		t.Errorf("сумма SKU = %v, у бренда %v", factSum, brandFact)
+	}
+
+	// Доли складываются в сто процентов: весь объём бренда объяснён SKU.
+	var shareSum float64
+	for _, row := range got.SKUs {
+		if row.ShareOfBrandPct == nil {
+			t.Fatalf("у %s нет доли бренда", row.SKU)
+		}
+		shareSum += *row.ShareOfBrandPct
+	}
+	if shareSum < 99.9 || shareSum > 100.1 {
+		t.Errorf("сумма долей = %v, ожидалось 100", shareSum)
+	}
+}
+
+// Прошлый год для SKU читается из факта, минуя строки плана: год с отгрузками
+// без заведённых планов — обычное дело, и сравнение там нужнее всего.
+func TestSKUsCompareWithPrevYearWithoutPrevPlans(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{skuFact(1, 1, "Альфа", "SKU-A", 800, 80)},
+		// Планов за прошлый год нет вовсе — только отгрузки.
+		prevFacts: []models.NetworkMonthlyFact{{
+			NetworkID: 1, Year: 2025, Month: 1, BrandAS: "Альфа",
+			SKU: models.PtrString("SKU-A"), FactRub: models.PtrFloat(400),
+		}},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.SKUs) != 1 {
+		t.Fatalf("строк SKU = %d, ожидалась 1", len(got.SKUs))
+	}
+	row := got.SKUs[0]
+	if row.PrevFactRub == nil || *row.PrevFactRub != 400 {
+		t.Fatalf("прошлый год = %v, ожидалось 400", row.PrevFactRub)
+	}
+	if row.FactYoYPct == nil || *row.FactYoYPct != 100 {
+		t.Errorf("прирост = %v, ожидалось 100", row.FactYoYPct)
+	}
+}
+
+// SKU бренда, которого нет в плане, в разрез не попадают: такого бренда нет
+// и в разрезе брендов, и строки повисли бы ни при чём.
+func TestSKUsSkipBrandsWithoutPlan(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			skuFact(1, 1, "Альфа", "SKU-A", 800, 80),
+			skuFact(1, 1, "Незапланированный", "SKU-X", 500, 50),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	for _, row := range got.SKUs {
+		if row.Brand != "Альфа" {
+			t.Errorf("в разрезе есть SKU бренда %s вне плана", row.Brand)
+		}
+	}
+}
+
+func TestSKUsOnlyForSingleNetworkScope(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{
+			dashboardNetwork(1, "Аптека Плюс", "Иванов"),
+			dashboardNetwork(2, "Аптека Минус", "Петров"),
+		},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+			{NetworkID: 2, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(2000)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			skuFact(1, 1, "Альфа", "SKU-A", 800, 80),
+			skuFact(2, 1, "Альфа", "SKU-A", 1600, 160),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.SKUs) != 0 {
+		t.Fatalf("на портфеле разрез SKU отдан: %d строк, ожидалось 0", len(got.SKUs))
+	}
+}
+
+// Открытый месяц без SKU-строки прогноза не достраивается: сумма SKU честно
+// не дотягивает до бренда, у которого свой официальный прогноз.
+func TestSKUEACIgnoresBrandLevelForecast(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 2, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000)},
+		},
+		facts: []models.NetworkMonthlyFact{skuFact(1, 4, "Альфа", "SKU-A", 300, 30)},
+		// Май и июнь открыты; официальный прогноз заведён на бренде, без SKU.
+		forecasts: []models.NetworkForecastLine{
+			{NetworkID: 1, Year: 2026, Month: 5, BrandAS: "Альфа", ForecastRub: models.PtrFloat(400)},
+			{NetworkID: 1, Year: 2026, Month: 6, BrandAS: "Альфа", ForecastRub: models.PtrFloat(500)},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(2), dashboardNow)
+
+	if len(got.SKUs) != 1 {
+		t.Fatalf("строк SKU = %d, ожидалась 1", len(got.SKUs))
+	}
+	// У SKU только апрельский факт: брендовый прогноз ему не принадлежит.
+	if got.SKUs[0].EACRub != 300 {
+		t.Errorf("EAC SKU = %v, ожидалось 300", got.SKUs[0].EACRub)
+	}
+	var brandEAC float64
+	for _, brand := range got.Brands {
+		if brand.Name == "Альфа" {
+			brandEAC = brand.Metrics.EACRub
+		}
+	}
+	if brandEAC != 1200 {
+		t.Fatalf("EAC бренда = %v, ожидалось 1200", brandEAC)
+	}
+	// Доля показывает ровно ту часть, что объяснена SKU.
+	if got.SKUs[0].ShareOfBrandPct == nil || *got.SKUs[0].ShareOfBrandPct != 25 {
+		t.Errorf("доля = %v, ожидалось 25", got.SKUs[0].ShareOfBrandPct)
 	}
 }

@@ -667,6 +667,37 @@ export interface NetworkDashboardCell {
   promoTags: NetworkDashboardPromoTag[];
 }
 
+export interface NetworkDashboardBrandQuarter {
+  brand: string;
+  quarter: number;
+  metrics: NetworkDashboardMetrics;
+  promoTags: NetworkDashboardPromoTag[];
+}
+
+export interface NetworkDashboardBrandMonth {
+  brand: string;
+  month: number;
+  promoCount: number;
+  promoOnlineCount: number;
+  promoOfflineCount: number;
+  promoInvestmentsRub: number;
+  promoTags: NetworkDashboardPromoTag[];
+}
+
+export interface NetworkDashboardSKU {
+  brand: string;
+  sku: string;
+  factRub: number;
+  factUnits: number;
+  eacRub: number;
+  eacUnits: number;
+  factInvestmentsRub: number;
+  prevFactRub: number | null;
+  prevFactUnits: number | null;
+  factYoyPct: number | null;
+  shareOfBrandPct: number | null;
+}
+
 export interface NetworkDashboardResponse {
   year: number;
   selectedQuarters: number[];
@@ -678,6 +709,9 @@ export interface NetworkDashboardResponse {
   brands: NetworkDashboardBreakdown[];
   kams: NetworkDashboardBreakdown[];
   networkQuarters: NetworkDashboardCell[];
+  brandQuarters: NetworkDashboardBrandQuarter[];
+  brandMonths: NetworkDashboardBrandMonth[];
+  skus: NetworkDashboardSKU[];
 }
 
 export interface NetworkPlanInput {

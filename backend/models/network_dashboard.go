@@ -148,6 +148,60 @@ type NetworkDashboardCell struct {
 	PromoTags []NetworkDashboardPromoTag `json:"promoTags"`
 }
 
+// NetworkDashboardBrandQuarter — ячейка «бренд × квартал».
+//
+// Плановым объёмом здесь, как и в разрезе брендов, берётся собственный план
+// бренда: нераспределённый остаток валового пула в бренды не попадает.
+type NetworkDashboardBrandQuarter struct {
+	Brand     string                     `json:"brand"`
+	Quarter   int                        `json:"quarter"`
+	Metrics   NetworkDashboardMetrics    `json:"metrics"`
+	PromoTags []NetworkDashboardPromoTag `json:"promoTags"`
+}
+
+// NetworkDashboardSKU — строка SKU внутри бренда.
+//
+// Плана здесь нет и быть не может: в реестре план заводится брендом. Доля
+// бренда, выданная за план SKU, была бы вычисленным под видом измеренного,
+// поэтому в разрезе только факт, прогноз и прошлый год.
+//
+// SKU объясняют бренд снизу и заполняются постепенно, поэтому их сумма
+// вправе быть меньше итога бренда: официальный прогноз ведётся на бренде.
+type NetworkDashboardSKU struct {
+	Brand string `json:"brand"`
+	SKU   string `json:"sku"`
+
+	FactRub            float64 `json:"factRub"`
+	FactUnits          float64 `json:"factUnits"`
+	EACRub             float64 `json:"eacRub"`
+	EACUnits           float64 `json:"eacUnits"`
+	FactInvestmentsRub float64 `json:"factInvestmentsRub"`
+
+	// Прошлый год, тот же диапазон кварталов. nil означает, что сопоставимого
+	// периода не было вовсе, — это не то же самое, что ноль продаж.
+	PrevFactRub   *float64 `json:"prevFactRub"`
+	PrevFactUnits *float64 `json:"prevFactUnits"`
+	FactYoYPct    *float64 `json:"factYoyPct"`
+
+	// Доля в ожидаемом объёме бренда. nil — у бренда нет объёма, и доля
+	// не определена.
+	ShareOfBrandPct *float64 `json:"shareOfBrandPct"`
+}
+
+// NetworkDashboardBrandMonth — промо бренда в месяце, из которых собирается
+// промо-календарь. Объёма здесь нет намеренно: план ведётся кварталом, и
+// раскладывать его по брендам и месяцам значило бы показывать вычисленное
+// как измеренное.
+type NetworkDashboardBrandMonth struct {
+	Brand               string                     `json:"brand"`
+	Month               int                        `json:"month"`
+	PromoCount          int                        `json:"promoCount"`
+	PromoOnlineCount    int                        `json:"promoOnlineCount"`
+	PromoOfflineCount   int                        `json:"promoOfflineCount"`
+	PromoInvestmentsRub float64                    `json:"promoInvestmentsRub"`
+	PromoTags           []NetworkDashboardPromoTag `json:"promoTags"`
+}
+
 // NetworkDashboardResponse — полный ответ /api/networks/dashboard.
 type NetworkDashboardResponse struct {
 	Year int `json:"year"`
@@ -163,4 +217,11 @@ type NetworkDashboardResponse struct {
 	Brands          []NetworkDashboardBreakdown   `json:"brands"`
 	KAMs            []NetworkDashboardBreakdown   `json:"kams"`
 	NetworkQuarters []NetworkDashboardCell        `json:"networkQuarters"`
+
+	// Разрезы разбора одной сети. Заполняются, только когда в области ровно
+	// одна сеть: на портфеле это произведение брендов на кварталы на сети, и
+	// ответ вырос бы в разы ради данных, которые никто не смотрит.
+	BrandQuarters []NetworkDashboardBrandQuarter `json:"brandQuarters"`
+	BrandMonths   []NetworkDashboardBrandMonth   `json:"brandMonths"`
+	SKUs          []NetworkDashboardSKU          `json:"skus"`
 }

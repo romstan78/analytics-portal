@@ -41,7 +41,40 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { formatPct, formatRub, formatRubShort, pluralRu } from '../utils/networkPlan';
+import { formatRubShort, pluralRu } from '../utils/networkPlan';
+import {
+  BORDER,
+  CHANNEL_COLOR,
+  DIMENSION_COLUMN,
+  DIMENSION_LABEL,
+  GRID,
+  INK_MUTED,
+  MONTH_LABELS,
+  NEUTRAL,
+  NUMERIC_CELL,
+  POLARITY_NEGATIVE,
+  POLARITY_POSITIVE,
+  QUARTERS,
+  SERIES_EAC,
+  SERIES_FACT,
+  SERIES_PLAN,
+  SERIES_PREV,
+  amount,
+  amountFull,
+  completionColor,
+  completionOf,
+  eacCompletionOf,
+  growthLabel,
+  growthOf,
+  metricEAC,
+  metricFact,
+  metricPlan,
+  metricPrevFact,
+  pctLabel,
+  signedShort,
+} from '../utils/networkDashboard';
+import type { Dimension, Grain, Unit } from '../utils/networkDashboard';
+import { ChartPaper, KpiCard, PromoTags, SeriesLegend } from './NetworkDashboardParts';
 import type {
   NetworkDashboardBreakdown,
   NetworkDashboardMetrics,
@@ -50,239 +83,11 @@ import type {
   NetworkDashboardResponse,
 } from '../types/network';
 
-// Палитра серий проверена валидатором на разделимость при дальтонизме:
-// худшая соседняя пара ΔE 9,2 (протанопия) при пороге 8.
-const SERIES_PLAN = '#6366f1';
-const SERIES_FACT = '#149174';
-const SERIES_EAC = '#c57a24';
-const SERIES_PREV = '#8793a5';
-const NEUTRAL = '#8793a5';
-const GRID = '#e9edf2';
-const BORDER = '#dfe5ee';
-const INK_MUTED = '#64748b';
-
-// Полярность отклонения: тёплый и холодный полюс с нейтралью в нуле.
-const POLARITY_POSITIVE = SERIES_FACT;
-const POLARITY_NEGATIVE = '#d15d50';
-
-// Канал промо: онлайн и оффлайн различаются не только подписью, чтобы метку
-// можно было прочитать боковым зрением.
-const CHANNEL_COLOR: Record<string, string> = {
-  'онлайн': '#3b7ea1',
-  'оффлайн': '#7a6ea8',
-  'не указан': NEUTRAL,
-};
-
-type Dimension = 'networks' | 'brands' | 'kams';
-type Unit = 'rub' | 'units';
-type Grain = 'quarter' | 'month';
-
-const MONTH_LABELS = [
-  'Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн',
-  'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек',
-];
-
-const DIMENSION_LABEL: Record<Dimension, string> = {
-  networks: 'Сети',
-  brands: 'Бренды',
-  kams: 'КАМы',
-};
-
-// Заголовок первой колонки таблицы: русское единственное число не получается
-// отсечением окончания, поэтому оно задано явно.
-const DIMENSION_COLUMN: Record<Dimension, string> = {
-  networks: 'Сеть',
-  brands: 'Бренд',
-  kams: 'КАМ',
-};
-
-const QUARTERS = [1, 2, 3, 4];
-
-// Суммы вроде «3,7 млрд» рвутся по пробелу на две строки, и высота строк
-// таблицы начинает скакать. Числовые ячейки не переносятся.
-const NUMERIC_CELL = { whiteSpace: 'nowrap' } as const;
-
 interface NetworkDashboardViewProps {
   data: NetworkDashboardResponse | null;
   loading: boolean;
   error: string | null;
   onOpenNetwork: (networkId: number) => void;
-}
-
-function pctLabel(value: number | null): string {
-  return value == null ? '—' : `${formatPct(value)} %`;
-}
-
-// Прирост к прошлому году: знак несёт смысл, поэтому он всегда виден.
-function growthLabel(value: number | null): string {
-  if (value == null) return '—';
-  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
-  return `${sign}${Math.abs(value).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`;
-}
-
-function signedShort(value: number): string {
-  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
-  return `${sign}${formatRubShort(Math.abs(value))}`;
-}
-
-// Единицы меняют не только числа, но и подписи: «₽» рядом с упаковками врал бы.
-function amount(value: number, unit: Unit): string {
-  return unit === 'rub' ? `${formatRubShort(value)} ₽` : `${formatRubShort(value)} уп.`;
-}
-
-function amountFull(value: number, unit: Unit): string {
-  return unit === 'rub' ? `${formatRub(value)} ₽` : `${formatRub(value)} уп.`;
-}
-
-function metricPlan(metrics: NetworkDashboardMetrics, unit: Unit): number {
-  return unit === 'rub' ? metrics.planRub : metrics.planUnits;
-}
-function metricFact(metrics: NetworkDashboardMetrics, unit: Unit): number {
-  return unit === 'rub' ? metrics.factRub : metrics.factUnits;
-}
-function metricEAC(metrics: NetworkDashboardMetrics, unit: Unit): number {
-  return unit === 'rub' ? metrics.eacRub : metrics.eacUnits;
-}
-function metricPrevFact(metrics: NetworkDashboardMetrics, unit: Unit): number | null {
-  return unit === 'rub' ? metrics.prevFactRub : metrics.prevFactUnits;
-}
-
-// Проценты в рублях берём с сервера как есть — он их и считает. Для упаковок
-// сервер процентов не отдаёт, поэтому они выводятся здесь из тех же сумм по той
-// же формуле. Пересчитывать заодно и рублёвые нельзя: две реализации одного
-// процента однажды разойдутся в последнем знаке.
-function ratioPct(value: number, base: number): number | null {
-  if (base === 0) return null;
-  return Math.round((value / base) * 10000) / 100;
-}
-
-function completionOf(metrics: NetworkDashboardMetrics, unit: Unit): number | null {
-  return unit === 'rub' ? metrics.completionPct : ratioPct(metrics.factUnits, metrics.planUnits);
-}
-
-function eacCompletionOf(metrics: NetworkDashboardMetrics, unit: Unit): number | null {
-  return unit === 'rub' ? metrics.eacCompletionPct : ratioPct(metrics.eacUnits, metrics.planUnits);
-}
-
-function growthOf(metrics: NetworkDashboardMetrics, unit: Unit): number | null {
-  if (unit === 'rub') return metrics.factYoyPct;
-  const prev = metrics.prevFactUnits;
-  if (prev == null || prev === 0) return null;
-  return Math.round(((metrics.factUnits - prev) / prev) * 10000) / 100;
-}
-
-// Спарклайн в карточке: форма ряда без осей и подписей — она отвечает на
-// вопрос «как шло», а точные числа стоят рядом цифрами.
-function Sparkline({ values, color }: { values: number[]; color: string }) {
-  const points = useMemo(() => values.map((value, index) => ({ index, value })), [values]);
-  if (points.length < 2) return null;
-  return (
-    <Box sx={{ height: 34, mt: 0.5, mx: -0.5 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={points} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
-          <defs>
-            <linearGradient id={`spark-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-              <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <Area
-            dataKey="value"
-            stroke={color}
-            strokeWidth={2}
-            fill={`url(#spark-${color.replace('#', '')})`}
-            isAnimationActive={false}
-            dot={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Box>
-  );
-}
-
-function KpiCard({
-  label, primary, secondary, hint, accent, trend, growth,
-}: {
-  label: string;
-  primary: string;
-  secondary?: string;
-  hint?: string;
-  accent: string;
-  trend?: number[];
-  growth?: number | null;
-}) {
-  return (
-    <Paper
-      variant="outlined"
-      sx={{
-        p: 1.6, height: '100%', borderRadius: 3, borderColor: BORDER,
-        borderTop: `3px solid ${accent}`, display: 'flex', flexDirection: 'column',
-      }}
-    >
-      <Stack direction="row" sx={{ alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 650 }}>{label}</Typography>
-        {growth != null && (
-          <Typography
-            variant="caption"
-            sx={{ fontWeight: 750, color: growth >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE }}
-          >
-            {growthLabel(growth)}
-          </Typography>
-        )}
-      </Stack>
-      <Typography variant="h6" sx={{ mt: 0.35, fontWeight: 780, lineHeight: 1.2 }}>{primary}</Typography>
-      {secondary && <Typography variant="body2" sx={{ mt: 0.45, fontWeight: 600 }}>{secondary}</Typography>}
-      {hint && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35 }}>{hint}</Typography>}
-      <Box sx={{ flex: 1 }} />
-      {trend && trend.length > 1 && <Sparkline values={trend} color={accent} />}
-    </Paper>
-  );
-}
-
-function ChartPaper({
-  title, subtitle, action, legend, height = 300, children,
-}: {
-  title: string;
-  subtitle: string;
-  action?: React.ReactNode;
-  legend?: React.ReactNode;
-  height?: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <Paper variant="outlined" sx={{ p: 1.6, height: '100%', borderRadius: 3, borderColor: BORDER }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'flex-start' } }}>
-        <Box>
-          <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>{title}</Typography>
-          <Typography variant="caption" color="text.secondary">{subtitle}</Typography>
-          {legend}
-        </Box>
-        {action}
-      </Stack>
-      <Box sx={{ height, mt: 0.75 }}>{children}</Box>
-    </Paper>
-  );
-}
-
-// Своя легенда вместо recharts: там порядок элементов обратен порядку серий
-// и подписи не совпадают с тем, что читается слева направо.
-function SeriesLegend({ items }: { items: Array<{ label: string; color: string; dashed?: boolean }> }) {
-  return (
-    <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', mt: 0.75 }}>
-      {items.map((item) => (
-        <Stack key={item.label} direction="row" spacing={0.6} sx={{ alignItems: 'center' }}>
-          <Box
-            sx={{
-              width: 12, height: item.dashed ? 0 : 10, borderRadius: 0.5,
-              bgcolor: item.dashed ? 'transparent' : item.color,
-              borderTop: item.dashed ? `2px dashed ${item.color}` : 'none',
-            }}
-          />
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>{item.label}</Typography>
-        </Stack>
-      ))}
-    </Stack>
-  );
 }
 
 // TrendPoint — точка тренда любой гранулярности. Метрики есть только у
@@ -394,52 +199,13 @@ function BreakdownTooltip({ active, payload, unit }: {
   );
 }
 
-// Цвет ячейки выполнения — полярность вокруг 100%: план либо выполнен, либо нет.
-function completionColor(value: number | null): { bgcolor: string; color: string } {
-  if (value == null) return { bgcolor: '#f3f5f8', color: '#9aa4b2' };
-  if (value >= 100) return { bgcolor: '#d7f1e8', color: '#116b54' };
-  if (value >= 90) return { bgcolor: '#fff0c7', color: '#8a5a12' };
-  return { bgcolor: '#f8d8d4', color: '#9a3d34' };
-}
-
-// Метки промо: короткий код механики, цветом — канал. Полное название и
-// количество остаются в подсказке, чтобы плитка не разрасталась.
-function PromoTags({ tags }: { tags: NetworkDashboardPromoTag[] }) {
-  if (tags.length === 0) return null;
-  const shown = tags.slice(0, 3);
-  const rest = tags.length - shown.length;
-  return (
-    <Stack direction="row" spacing={0.3} useFlexGap sx={{ flexWrap: 'wrap', justifyContent: 'center', mt: 0.3 }}>
-      {shown.map((tag) => (
-        <MuiTooltip
-          key={`${tag.code}|${tag.channel}`}
-          arrow
-          title={`${tag.mechanics} · ${tag.channel} · ${tag.count} ${pluralRu(tag.count, 'промо', 'промо', 'промо')}`}
-        >
-          <Box
-            component="span"
-            sx={{
-              fontSize: 9, fontWeight: 700, lineHeight: 1.5, px: 0.4, borderRadius: 0.5,
-              color: '#fff', bgcolor: CHANNEL_COLOR[tag.channel] ?? NEUTRAL, whiteSpace: 'nowrap',
-            }}
-          >
-            {tag.code}
-          </Box>
-        </MuiTooltip>
-      ))}
-      {rest > 0 && (
-        <Box component="span" sx={{ fontSize: 9, fontWeight: 700, lineHeight: 1.5, color: INK_MUTED }}>
-          +{rest}
-        </Box>
-      )}
-    </Stack>
-  );
-}
-
 export default function NetworkDashboardView({
   data, loading, error, onOpenNetwork,
 }: NetworkDashboardViewProps) {
-  const [dimension, setDimension] = useState<Dimension>('networks');
+  // null — разрез не выбирали руками: тогда он следует из области. На одной
+  // сети «Сети» и «КАМы» вырождаются в строку самой себя, поэтому там разрез
+  // открывается брендами — единственным содержательным внутри сети.
+  const [dimensionChoice, setDimensionChoice] = useState<Dimension | null>(null);
   const [unit, setUnit] = useState<Unit>('rub');
   // null — гранулярность не выбирали руками: тогда она следует из ширины
   // периода. На одном квартале четыре точки вырождаются в одну, поэтому
@@ -447,6 +213,9 @@ export default function NetworkDashboardView({
   const [grainChoice, setGrainChoice] = useState<Grain | null>(null);
   const [showValues, setShowValues] = useState(false);
   const [showPromo, setShowPromo] = useState(true);
+
+  const singleNetwork = data?.networks.length === 1;
+  const dimension: Dimension = dimensionChoice ?? (singleNetwork ? 'brands' : 'networks');
 
   const breakdown: NetworkDashboardBreakdown[] = useMemo(() => {
     if (!data) return [];
@@ -712,7 +481,7 @@ export default function NetworkDashboardView({
             subtitle="Разрыв между прогнозом итога и обязательством. Нажмите на столбец сети, чтобы открыть её карточку."
             height={340}
             action={
-              <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimension(value)}>
+              <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimensionChoice(value)}>
                 {(Object.keys(DIMENSION_LABEL) as Dimension[]).map((key) => (
                   <ToggleButton key={key} value={key}>{DIMENSION_LABEL[key]}</ToggleButton>
                 ))}
@@ -862,7 +631,7 @@ export default function NetworkDashboardView({
               Инвестиции показаны в базе без НДС: сети работают с разными ставками, в валовой базе их суммы несопоставимы.
             </Typography>
           </Box>
-          <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimension(value)}>
+          <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimensionChoice(value)}>
             {(Object.keys(DIMENSION_LABEL) as Dimension[]).map((key) => (
               <ToggleButton key={key} value={key}>{DIMENSION_LABEL[key]}</ToggleButton>
             ))}
