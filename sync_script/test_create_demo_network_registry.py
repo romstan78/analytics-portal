@@ -1,7 +1,9 @@
 import unittest
 from decimal import Decimal
 
+import import_network_facts
 from create_demo_promo_db import StableSynthetic
+import create_demo_network_registry
 from create_demo_network_registry import (
     MONTH_DISTRIBUTIONS,
     build_fact_rows,
@@ -9,6 +11,7 @@ from create_demo_network_registry import (
     build_plan_rows,
     quarter_of,
     require_demo_target,
+    rollup_quarters,
 )
 
 
@@ -45,6 +48,38 @@ def make_shipments(networks, years=(2025, 2026)):
                         "rub": (Decimal("500000") + Decimal(month * 1000)) * scale,
                     })
     return rows
+
+
+def build_registry(fact_year=2026, plan_years=(2025, 2026, 2027), fact_years=(2025, 2026)):
+    """Полный набор строк реестра: карточки, профили, факт и планы."""
+    synthetic = StableSynthetic(SALT)
+    network_rows = build_network_rows(synthetic, GEO_ROWS)
+    network_ids = {row[0]: index for index, row in enumerate(network_rows, start=1)}
+    profiles = {
+        row[0]: {
+            "vat_included": row[8], "vat_rate": row[9],
+            "month1_pct": row[4], "month2_pct": row[5], "month3_pct": row[6],
+            "default_entry_level": row[10], "default_entry_unit": row[11],
+        }
+        for row in network_rows
+    }
+    shipments = make_shipments([row["network_name"] for row in GEO_ROWS], fact_years)
+    fact_rows, quarterly = build_fact_rows(synthetic, shipments, network_ids, SKU_BRANDS, {})
+    plan_rows = build_plan_rows(
+        synthetic, quarterly, network_ids, profiles, {}, fact_year, plan_years,
+    )
+    return network_ids, profiles, fact_rows, quarterly, plan_rows
+
+
+class RecordingCursor:
+    """Курсор-заглушка: запоминает, что и с какими параметрами исполнено."""
+
+    def __init__(self):
+        self.fast_executemany = None
+        self.calls = []
+
+    def executemany(self, query, values):
+        self.calls.append((query, list(values)))
 
 
 class TargetSafetyTests(unittest.TestCase):
@@ -144,25 +179,7 @@ class FactRowTests(unittest.TestCase):
 
 class PlanRowTests(unittest.TestCase):
     def setUp(self):
-        self.synthetic = StableSynthetic(SALT)
-        networks = [row["network_name"] for row in GEO_ROWS]
-        network_rows = build_network_rows(self.synthetic, networks and GEO_ROWS)
-        self.network_ids = {row[0]: index for index, row in enumerate(network_rows, start=1)}
-        self.profiles = {
-            row[0]: {
-                "vat_included": row[8], "vat_rate": row[9],
-                "month1_pct": row[4], "month2_pct": row[5], "month3_pct": row[6],
-                "default_entry_level": row[10], "default_entry_unit": row[11],
-            }
-            for row in network_rows
-        }
-        _, self.quarterly = build_fact_rows(
-            self.synthetic, make_shipments(networks), self.network_ids, SKU_BRANDS, {},
-        )
-        self.rows = build_plan_rows(
-            self.synthetic, self.quarterly, self.network_ids, self.profiles, {},
-            2026, (2025, 2026, 2027),
-        )
+        self.network_ids, self.profiles, _, self.quarterly, self.rows = build_registry()
 
     def test_every_plan_year_is_present(self):
         years = {row[1] for row in self.rows}
@@ -228,6 +245,68 @@ class PlanRowTests(unittest.TestCase):
     def test_plan_rows_are_unique_per_quarter_and_brand(self):
         keys = [(row[0], row[1], row[2], row[3]) for row in self.rows]
         self.assertEqual(len(keys), len(set(keys)), "нарушен UQ_NetworkPlans_row")
+
+
+class RollupTests(unittest.TestCase):
+    def setUp(self):
+        _, _, _, self.quarterly, self.plan_rows = build_registry()
+        self.cursor = RecordingCursor()
+        self.rolled = rollup_quarters(self.cursor, self.quarterly, (2025, 2026, 2027))
+        self.params = [row for _, batch in self.cursor.calls for row in batch]
+
+    def test_uses_the_production_rollup_verbatim(self):
+        # Свод обязан быть тем же запросом, иначе демо и продакшн разойдутся в том,
+        # как квартальный факт собирается из строк SKU.
+        self.assertIs(create_demo_network_registry.ROLLUP_SQL, import_network_facts.ROLLUP_SQL)
+        self.assertTrue(self.cursor.calls, "свод не выполнен ни разу")
+        for query, _ in self.cursor.calls:
+            self.assertEqual(query, import_network_facts.ROLLUP_SQL)
+
+    def test_binds_month_range_and_quarter_of_the_same_key(self):
+        for network_id, year, month_from, month_to, brand, *merge in self.params:
+            quarter = merge[2]
+            self.assertEqual((month_from, month_to), ((quarter - 1) * 3 + 1, quarter * 3))
+            self.assertEqual(quarter_of(month_from), quarter)
+            self.assertEqual(quarter_of(month_to), quarter)
+            # Вторая половина параметров адресует ту же строку плана.
+            self.assertEqual(merge, [network_id, year, quarter, brand])
+
+    def test_both_closed_years_are_rolled_up(self):
+        # Планы ведутся на оба закрытых года, и факт обязан дойти до каждого:
+        # год с планом, но без квартального факта — та самая пустая вкладка.
+        self.assertEqual({row[1] for row in self.params}, {2025, 2026})
+        self.assertEqual(self.rolled, len(self.params))
+
+    def test_year_without_plans_is_skipped(self):
+        # Свод адресует только плановые годы: квартал без строки плана MERGE
+        # завёл бы сам, и в реестре появился бы лишний год.
+        cursor = RecordingCursor()
+        rolled = rollup_quarters(cursor, self.quarterly, (2026, 2027))
+        params = [row for _, batch in cursor.calls for row in batch]
+        self.assertTrue(any(key[2] == 2025 for key in self.quarterly))
+        self.assertEqual({row[1] for row in params}, {2026})
+        self.assertEqual(rolled, len(params))
+
+    def test_every_brand_plan_of_a_closed_year_gets_a_fact(self):
+        # Совпадение множеств означает, что MERGE всегда попадает в существующую
+        # строку: ни один план не остаётся без факта и ни одна строка не заводится.
+        plan_keys = {
+            (row[0], row[1], row[2], row[3])
+            for row in self.plan_rows if row[1] in (2025, 2026) and row[3] is not None
+        }
+        rollup_keys = {(row[5], row[6], row[7], row[8]) for row in self.params}
+        self.assertEqual(rollup_keys, plan_keys)
+
+    def test_gross_total_row_is_left_without_fact(self):
+        # У строки общего объёма brand_as IS NULL, и свод её не адресует:
+        # факт по контракту в целом из отгрузок брендов не складывается.
+        self.assertTrue(any(row[3] is None for row in self.plan_rows))
+        self.assertTrue(all(row[4] is not None for row in self.params))
+
+    def test_is_deterministic(self):
+        cursor = RecordingCursor()
+        rollup_quarters(cursor, self.quarterly, (2025, 2026, 2027))
+        self.assertEqual(cursor.calls, self.cursor.calls)
 
 
 if __name__ == "__main__":
