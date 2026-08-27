@@ -7,6 +7,7 @@ import type {
   NetworkAuditResponse,
   NetworkBrandsResponse,
   NetworkCommentsResponse,
+  NetworkDashboardResponse,
   NetworkForecastResponse,
   NetworkForecastClearResponse,
   NetworkForecastClearScope,
@@ -46,6 +47,27 @@ export const networkAPI = {
   getKAMs: (): Promise<NetworkKAMsResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/kams`)
       .then(r => parseJSONResponse<NetworkKAMsResponse>(r, 'Ошибка загрузки списка КАМ')),
+
+  // Витрина реестра: итоги по всем доступным сетям сразу. Область видимости
+  // задаёт сервер по закреплению пользователя, а не эти параметры.
+  getDashboard: (params: {
+    year: number;
+    // Кварталы — набор, не диапазон: сравнивают и несмежные. Пустой список
+    // сервер понимает как весь год.
+    quarters?: number[];
+    kam?: string[];
+    // Сети — тоже набор: разбирают и одну сеть, и пару рядом. Пустой список
+    // означает весь доступный портфель, а не пустую витрину.
+    networkIds?: number[];
+  }): Promise<NetworkDashboardResponse> => {
+    const query = new URLSearchParams();
+    query.set('year', String(params.year));
+    (params.quarters ?? []).forEach((quarter) => query.append('quarter', String(quarter)));
+    (params.kam ?? []).forEach((kam) => query.append('kam', kam));
+    (params.networkIds ?? []).forEach((id) => query.append('network_id', String(id)));
+    return fetchWithAuth(`${API_BASE}/api/networks/dashboard?${query.toString()}`)
+      .then(r => parseJSONResponse<NetworkDashboardResponse>(r, 'Ошибка загрузки витрины реестра'));
+  },
 
   // Новая сеть; year открывает первый год сразу четырьмя кварталами
   create: (data: {

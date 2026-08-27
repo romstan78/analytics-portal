@@ -47,6 +47,16 @@ export type {
   NetworkPricesSaveResponse,
   NetworkForecastInput,
   NetworkContractPriceInput,
+  NetworkDashboardMetrics,
+  NetworkDashboardPromoTag,
+  NetworkDashboardPeriodPoint,
+  NetworkDashboardMonthPoint,
+  NetworkDashboardBreakdown,
+  NetworkDashboardCell,
+  NetworkDashboardBrandQuarter,
+  NetworkDashboardBrandMonth,
+  NetworkDashboardSKU,
+  NetworkDashboardResponse,
 } from './api.generated';
 
 // В Go тип сети — строка с проверкой на стороне сервера; интерфейсу нужен выбор

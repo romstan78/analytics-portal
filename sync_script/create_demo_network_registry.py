@@ -326,25 +326,30 @@ def build_plan_rows(
     plan_years: Sequence[int],
 ) -> list[tuple[Any, ...]]:
     id_to_name = {value: key for key, value in network_ids.items()}
+    known_fact_years = {key[2] for key in quarterly}
     rows: list[tuple[Any, ...]] = []
     gross_totals: dict[tuple[int, int, int], Decimal] = defaultdict(Decimal)
 
-    for (network_id, brand, year, quarter), bucket in sorted(
-        quarterly.items(), key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3])
-    ):
-        if year != fact_year:
-            continue
-        name = id_to_name.get(network_id)
-        if name is None:
-            continue
-        profile = profiles[name]
-        pct = investment_pct.get(name, DEFAULT_INVESTMENT_PCT)
-        key = f"{name}|{brand}|{quarter}"
-        price = bucket["rub"] / bucket["units"] if bucket["units"] > 0 else Decimal(0)
-        is_gross = unit_fraction(synthetic, "registry-gross", name) < 0.10
+    for plan_year in plan_years:
+        # Год со своим фактом опирается на него же, поэтому каждый закрытый год
+        # показывает сравнение «план / факт». Год без факта берёт за основу
+        # последний закрытый и растёт от него.
+        base_year = plan_year if plan_year in known_fact_years else fact_year
+        for (network_id, brand, year, quarter), bucket in sorted(
+            quarterly.items(), key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3])
+        ):
+            if year != base_year:
+                continue
+            name = id_to_name.get(network_id)
+            if name is None:
+                continue
+            profile = profiles[name]
+            pct = investment_pct.get(name, DEFAULT_INVESTMENT_PCT)
+            key = f"{name}|{brand}|{quarter}"
+            price = bucket["rub"] / bucket["units"] if bucket["units"] > 0 else Decimal(0)
+            is_gross = unit_fraction(synthetic, "registry-gross", name) < 0.10
 
-        for plan_year in plan_years:
-            if plan_year == fact_year:
+            if plan_year == base_year:
                 # План закрытого года восстанавливается из факта: часть кварталов
                 # перевыполнена, часть провалена.
                 achievement = pick_decimal(
@@ -418,9 +423,10 @@ def rollup_quarters(
     ROLLUP_SQL сам берёт их сумму, потому что готового итога бренда (sku IS NULL)
     в demo-БД нет. Запускается после вставки планов — MERGE обновляет их строки.
 
-    Сводятся только кварталы планируемых лет. План в демо ведётся на закрытый год
-    и следующий, а квартал без строки плана MERGE завёл бы сам — и в реестре
-    появился бы год, которого там быть не должно.
+    Сводятся только кварталы планируемых лет: у ветки WHEN NOT MATCHED свода нет
+    ни плана, ни распределения по месяцам, и год без плана она завела бы строкой
+    с одним фактом. Сейчас планы есть на оба года факта, так что отсев ничего не
+    отбрасывает, — он держит функцию честной, если годы разойдутся снова.
     """
     years = set(plan_years)
     keys = sorted(key for key in quarterly if key[2] in years)
@@ -448,7 +454,7 @@ def clear_registry(cursor) -> None:
         cursor.execute(f"DELETE FROM {table}")
 
 
-def verify_target(cursor, fact_year: int, plan_years: Sequence[int]) -> dict[str, Any]:
+def verify_target(cursor, fact_years: Sequence[int], plan_years: Sequence[int]) -> dict[str, Any]:
     cursor.execute(
         """
         SELECT COUNT_BIG(*),
@@ -488,7 +494,9 @@ def verify_target(cursor, fact_year: int, plan_years: Sequence[int]) -> dict[str
         FROM dbo.tbl_NetworkMonthlyFacts
         """
     )
-    facts, negative, fact_networks, fact_brands, fact_years = (int(value or 0) for value in cursor.fetchone())
+    facts, negative, fact_networks, fact_brands, fact_year_count = (
+        int(value or 0) for value in cursor.fetchone()
+    )
     if negative:
         raise RuntimeError(f"В факте реестра {negative} отрицательных значений")
 
@@ -503,63 +511,72 @@ def verify_target(cursor, fact_year: int, plan_years: Sequence[int]) -> dict[str
         if plans_by_year.get(year, 0) == 0:
             raise RuntimeError(f"Нет планов за {year} год")
 
-    # Вкладка «План и факт» читает квартальный факт из самой tbl_NetworkPlans,
-    # поэтому без свода она показывает планы вообще без факта.
-    cursor.execute(
-        """
-        SELECT COUNT_BIG(*), SUM(CASE WHEN fact_rub IS NULL THEN 1 ELSE 0 END)
-        FROM dbo.tbl_NetworkPlans
-        WHERE [year] = ? AND brand_as IS NOT NULL
-        """,
-        (fact_year,),
-    )
-    brand_plans, without_fact = (int(value or 0) for value in cursor.fetchone())
-    if brand_plans == 0:
-        raise RuntimeError(f"Нет строк плана по брендам за {fact_year} год")
-    if without_fact:
-        raise RuntimeError(
-            f"У {without_fact} из {brand_plans} строк плана {fact_year} года нет квартального факта"
-        )
+    # Каждый закрытый год проверяется целиком: квартальный факт обязан быть
+    # сведён, совпадать с помесячной таблицей и показывать обе стороны
+    # выполнения — ровный перевес в одну означал бы нарисованную под ответ форму.
+    plan_vs_fact: dict[str, dict[str, int]] = {}
+    for year in plan_years:
+        if year not in fact_years:
+            continue
 
-    # Свод обязан совпадать с помесячной таблицей: расхождение означало бы, что
-    # квартал собран не из тех строк, которые показывает приложение.
-    cursor.execute(
-        """
-        SELECT COUNT_BIG(*)
-        FROM dbo.tbl_NetworkPlans p
-        JOIN (
-            SELECT network_id, brand_as, [year], (([month]-1)/3)+1 AS quarter,
-                   SUM(fact_rub) AS fact_rub
-            FROM dbo.tbl_NetworkMonthlyFacts
-            GROUP BY network_id, brand_as, [year], (([month]-1)/3)+1
-        ) f ON f.network_id = p.network_id AND f.brand_as = p.brand_as
-           AND f.[year] = p.[year] AND f.quarter = p.[quarter]
-        WHERE p.[year] = ? AND ABS(p.fact_rub - f.fact_rub) > 0.01
-        """,
-        (fact_year,),
-    )
-    mismatched = int(cursor.fetchone()[0] or 0)
-    if mismatched:
-        raise RuntimeError(
-            f"Квартальный факт {fact_year} года расходится с помесячным в {mismatched} строках"
+        # Вкладка «План и факт» читает квартальный факт из самой tbl_NetworkPlans,
+        # поэтому без свода она показывает планы вообще без факта.
+        cursor.execute(
+            """
+            SELECT COUNT_BIG(*), SUM(CASE WHEN fact_rub IS NULL THEN 1 ELSE 0 END)
+            FROM dbo.tbl_NetworkPlans
+            WHERE [year] = ? AND brand_as IS NOT NULL
+            """,
+            (year,),
         )
+        brand_plans, without_fact = (int(value or 0) for value in cursor.fetchone())
+        if brand_plans == 0:
+            raise RuntimeError(f"Нет строк плана по брендам за {year} год")
+        if without_fact:
+            raise RuntimeError(
+                f"У {without_fact} из {brand_plans} строк плана {year} года нет квартального факта"
+            )
 
-    # Сравнение плана и факта закрытого года обязано показывать обе стороны:
-    # ровный перевес в одну означал бы нарисованную под ответ форму.
-    cursor.execute(
-        """
-        SELECT SUM(CASE WHEN fact_rub > plan_rub THEN 1 ELSE 0 END),
-               SUM(CASE WHEN fact_rub <= plan_rub THEN 1 ELSE 0 END)
-        FROM dbo.tbl_NetworkPlans
-        WHERE [year] = ? AND plan_rub > 0 AND fact_rub IS NOT NULL
-        """,
-        (fact_year,),
-    )
-    over, under = (int(value or 0) for value in cursor.fetchone())
-    if over == 0 or under == 0:
-        raise RuntimeError(
-            f"План {fact_year} года выполнен односторонне: перевыполнено {over}, провалено {under}"
+        # Свод обязан совпадать с помесячной таблицей: расхождение означало бы,
+        # что квартал собран не из тех строк, которые показывает приложение.
+        cursor.execute(
+            """
+            SELECT COUNT_BIG(*)
+            FROM dbo.tbl_NetworkPlans p
+            JOIN (
+                SELECT network_id, brand_as, [year], (([month]-1)/3)+1 AS quarter,
+                       SUM(fact_rub) AS fact_rub
+                FROM dbo.tbl_NetworkMonthlyFacts
+                GROUP BY network_id, brand_as, [year], (([month]-1)/3)+1
+            ) f ON f.network_id = p.network_id AND f.brand_as = p.brand_as
+               AND f.[year] = p.[year] AND f.quarter = p.[quarter]
+            WHERE p.[year] = ? AND ABS(p.fact_rub - f.fact_rub) > 0.01
+            """,
+            (year,),
         )
+        mismatched = int(cursor.fetchone()[0] or 0)
+        if mismatched:
+            raise RuntimeError(
+                f"Квартальный факт {year} года расходится с помесячным в {mismatched} строках"
+            )
+
+        # Сравнивается та же колонка, которую читает приложение, а не заново
+        # выведенный из помесячных строк квартал.
+        cursor.execute(
+            """
+            SELECT SUM(CASE WHEN fact_rub > plan_rub THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN fact_rub <= plan_rub THEN 1 ELSE 0 END)
+            FROM dbo.tbl_NetworkPlans
+            WHERE [year] = ? AND plan_rub > 0 AND fact_rub IS NOT NULL
+            """,
+            (year,),
+        )
+        over, under = (int(value or 0) for value in cursor.fetchone())
+        if over == 0 or under == 0:
+            raise RuntimeError(
+                f"План {year} года выполнен односторонне: перевыполнено {over}, провалено {under}"
+            )
+        plan_vs_fact[str(year)] = {"above": over, "below": under, "with_fact": brand_plans}
 
     return {
         "networks": networks,
@@ -568,11 +585,9 @@ def verify_target(cursor, fact_year: int, plan_years: Sequence[int]) -> dict[str
         "monthly_facts": facts,
         "fact_networks": fact_networks,
         "fact_brands": fact_brands,
-        "fact_years": fact_years,
+        "fact_years": fact_year_count,
         "plans_by_year": {str(year): count for year, count in plans_by_year.items()},
-        "brand_plans_with_fact": brand_plans,
-        "quarters_above_plan": over,
-        "quarters_below_plan": under,
+        "plan_vs_fact": plan_vs_fact,
     }
 
 
@@ -608,9 +623,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         _, ecom_last_year = fetch_ecom_years(cursor)
         fact_years = (ecom_last_year - 1, ecom_last_year)
-        # Планы ведутся на закрытый год и на следующий: первый показывает
-        # сравнение с фактом, второй — работу с планом до появления отгрузок.
-        plan_years = (ecom_last_year, ecom_last_year + 1)
+        # Планы ведутся на оба года факта и на следующий: закрытые годы дают
+        # сравнение с фактом, последний — работу с планом до отгрузок.
+        plan_years = (*fact_years, ecom_last_year + 1)
 
         investment_pct = fetch_investment_pct(cursor)
         shipments = fetch_shipment_facts(cursor, fact_years[0], fact_years[1])
@@ -647,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
         target.commit()
 
         try:
-            verification = verify_target(cursor, ecom_last_year, plan_years)
+            verification = verify_target(cursor, fact_years, plan_years)
         except Exception:
             clear_registry(cursor)
             target.commit()

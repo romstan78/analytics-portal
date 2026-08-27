@@ -32,23 +32,25 @@ SKU_BRANDS = {
 
 
 def make_shipments(networks, years=(2025, 2026)):
+    """Факт по годам заведомо разный: иначе план года не отличить от плана соседнего."""
     rows = []
     for network in networks:
         for sku in SKU_BRANDS:
             for year in years:
+                scale = Decimal("1") + Decimal(year - min(years)) / Decimal("2")
                 for month in range(1, 13):
                     rows.append({
                         "networkName": network,
                         "productName": sku,
                         "year": year,
                         "month": month,
-                        "units": Decimal("1000") + Decimal(month * 10),
-                        "rub": Decimal("500000") + Decimal(month * 1000),
+                        "units": (Decimal("1000") + Decimal(month * 10)) * scale,
+                        "rub": (Decimal("500000") + Decimal(month * 1000)) * scale,
                     })
     return rows
 
 
-def build_registry(fact_year=2026, plan_years=(2026, 2027), fact_years=(2025, 2026)):
+def build_registry(fact_year=2026, plan_years=(2025, 2026, 2027), fact_years=(2025, 2026)):
     """Полный набор строк реестра: карточки, профили, факт и планы."""
     synthetic = StableSynthetic(SALT)
     network_rows = build_network_rows(synthetic, GEO_ROWS)
@@ -179,23 +181,49 @@ class PlanRowTests(unittest.TestCase):
     def setUp(self):
         self.network_ids, self.profiles, _, self.quarterly, self.rows = build_registry()
 
-    def test_both_plan_years_are_present(self):
+    def test_every_plan_year_is_present(self):
         years = {row[1] for row in self.rows}
-        self.assertEqual(years, {2026, 2027})
+        self.assertEqual(years, {2025, 2026, 2027})
 
     def test_plan_is_missed_and_beaten(self):
         # Обе стороны обязаны быть: иначе форма «план / факт» выглядит нарисованной.
-        above = below = 0
-        for row in self.rows:
-            if row[1] != 2026 or row[3] is None:
+        for year in (2025, 2026):
+            above = below = 0
+            for row in self.rows:
+                if row[1] != year or row[3] is None:
+                    continue
+                fact = self.quarterly[(row[0], row[3], year, row[2])]["rub"]
+                if fact > row[4]:
+                    above += 1
+                else:
+                    below += 1
+            with self.subTest(year=year):
+                self.assertGreater(above, 0)
+                self.assertGreater(below, 0)
+
+    def test_year_with_fact_plans_from_its_own_year(self):
+        # План 2025-го обязан идти от факта 2025-го, а не от последнего года:
+        # иначе закрытый год сравнивался бы с чужим объёмом.
+        plans = {(row[0], row[2], row[3]): row[4] for row in self.rows if row[1] == 2025}
+        self.assertTrue(plans)
+        for (network_id, quarter, brand), plan_rub in plans.items():
+            if brand is None:
                 continue
-            fact = self.quarterly[(row[0], row[3], 2026, row[2])]["rub"]
-            if fact > row[4]:
-                above += 1
-            else:
-                below += 1
-        self.assertGreater(above, 0)
-        self.assertGreater(below, 0)
+            fact = self.quarterly[(network_id, brand, 2025, quarter)]["rub"]
+            ratio = float(plan_rub) / float(fact)
+            self.assertGreater(ratio, 1 / 1.15)
+            self.assertLess(ratio, 1 / 0.87)
+
+    def test_year_without_fact_grows_from_the_last_closed_year(self):
+        plans = {(row[0], row[2], row[3]): row[4] for row in self.rows if row[1] == 2027}
+        self.assertTrue(plans)
+        for (network_id, quarter, brand), plan_rub in plans.items():
+            if brand is None:
+                continue
+            fact = self.quarterly[(network_id, brand, 2026, quarter)]["rub"]
+            ratio = float(plan_rub) / float(fact)
+            self.assertGreater(ratio, 0.95)
+            self.assertLess(ratio, 1.19)
 
     def test_gross_networks_get_a_total_row(self):
         gross_networks = {row[0] for row in self.rows if row[3] is None}
@@ -223,7 +251,7 @@ class RollupTests(unittest.TestCase):
     def setUp(self):
         _, _, _, self.quarterly, self.plan_rows = build_registry()
         self.cursor = RecordingCursor()
-        self.rolled = rollup_quarters(self.cursor, self.quarterly, (2026, 2027))
+        self.rolled = rollup_quarters(self.cursor, self.quarterly, (2025, 2026, 2027))
         self.params = [row for _, batch in self.cursor.calls for row in batch]
 
     def test_uses_the_production_rollup_verbatim(self):
@@ -243,20 +271,30 @@ class RollupTests(unittest.TestCase):
             # Вторая половина параметров адресует ту же строку плана.
             self.assertEqual(merge, [network_id, year, quarter, brand])
 
-    def test_only_plan_years_are_rolled_up(self):
-        # У факта 2025 года планов нет, и MERGE завёл бы их сам.
-        self.assertEqual({row[1] for row in self.params}, {2026})
-        self.assertTrue(any(key[2] == 2025 for key in self.quarterly))
+    def test_both_closed_years_are_rolled_up(self):
+        # Планы ведутся на оба закрытых года, и факт обязан дойти до каждого:
+        # год с планом, но без квартального факта — та самая пустая вкладка.
+        self.assertEqual({row[1] for row in self.params}, {2025, 2026})
         self.assertEqual(self.rolled, len(self.params))
 
-    def test_every_brand_plan_of_the_fact_year_gets_a_fact(self):
+    def test_year_without_plans_is_skipped(self):
+        # Свод адресует только плановые годы: квартал без строки плана MERGE
+        # завёл бы сам, и в реестре появился бы лишний год.
+        cursor = RecordingCursor()
+        rolled = rollup_quarters(cursor, self.quarterly, (2026, 2027))
+        params = [row for _, batch in cursor.calls for row in batch]
+        self.assertTrue(any(key[2] == 2025 for key in self.quarterly))
+        self.assertEqual({row[1] for row in params}, {2026})
+        self.assertEqual(rolled, len(params))
+
+    def test_every_brand_plan_of_a_closed_year_gets_a_fact(self):
         # Совпадение множеств означает, что MERGE всегда попадает в существующую
         # строку: ни один план не остаётся без факта и ни одна строка не заводится.
         plan_keys = {
-            (row[0], row[2], row[3])
-            for row in self.plan_rows if row[1] == 2026 and row[3] is not None
+            (row[0], row[1], row[2], row[3])
+            for row in self.plan_rows if row[1] in (2025, 2026) and row[3] is not None
         }
-        rollup_keys = {(row[5], row[7], row[8]) for row in self.params}
+        rollup_keys = {(row[5], row[6], row[7], row[8]) for row in self.params}
         self.assertEqual(rollup_keys, plan_keys)
 
     def test_gross_total_row_is_left_without_fact(self):
@@ -267,7 +305,7 @@ class RollupTests(unittest.TestCase):
 
     def test_is_deterministic(self):
         cursor = RecordingCursor()
-        rollup_quarters(cursor, self.quarterly, (2026, 2027))
+        rollup_quarters(cursor, self.quarterly, (2025, 2026, 2027))
         self.assertEqual(cursor.calls, self.cursor.calls)
 
 

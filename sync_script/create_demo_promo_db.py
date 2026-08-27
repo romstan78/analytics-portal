@@ -33,6 +33,37 @@ from dedupe_promo import analyze_rows, fetch_duplicate_rows, fetch_table_columns
 PROMO_TABLE = "dbo.tbl_PromoActivities"
 RESET_CONFIRMATION = "RESET_DEMO_PROMO_DB"
 
+# Короткие обозначения механик для плиток витрины реестра.
+#
+# Правила: основа — две буквы от русского слова; «@-» и «P-» разделяют семейства
+# e-comm и pure (без них «e-comm скидка» и «pure скидка» дали бы один код);
+# «·ОС» и «·ф» — суффиксы вариантов «в ОС» и «фикс». УСТМ оставлен целиком:
+# это уже общепринятое сокращение, и две буквы читались бы хуже оригинала.
+#
+# Механика, которой здесь нет, получает NULL — приложение сократит название
+# само. Ключ сверяется с названием как есть, поэтому переименование механики
+# в источнике просто вернёт её к автоматическому коду, а не подставит чужой.
+MECHANICS_SHORT_CODES = {
+    "Амбассадоры": "АБ",
+    "Амбассадоры в ОС": "АБ·ОС",
+    "Амбассадоры фикс": "АБ·ф",
+    "Бандл": "БН",
+    "Выкладка": "ВК",
+    "Пуш": "ПШ",
+    "Скидка": "СК",
+    "Скидка фикс": "СК·ф",
+    "СП в ОС": "СП·ОС",
+    "Супер-промо": "СП",
+    "УСТМ": "УСТМ",
+    "УСТМ в ОС": "УСТМ·ОС",
+    "e-comm бандл": "@-БН",
+    "e-comm подсветка": "@-СВ",
+    "e-comm подсветка mark": "@-СВм",
+    "e-comm скидка": "@-СК",
+    "pure бандлы": "P-БН",
+    "pure скидка": "P-СК",
+}
+
 NETWORK_WORDS = (
     "Аврора", "Вектор", "Вершина", "Горизонт", "Дельта", "Импульс",
     "Каскад", "Клевер", "Контур", "Линия", "Маяк", "Меридиан",
@@ -226,7 +257,11 @@ def connect(server: str, database: str, password: str, readonly: bool) -> pyodbc
         try:
             connection = pyodbc.connect(connection_string, autocommit=False, timeout=30)
             cursor = connection.cursor()
-            cursor.execute("SET NOCOUNT ON; SET XACT_ABORT ON;")
+            # QUOTED_IDENTIFIER задаётся явно, а не оставляется на усмотрение
+            # драйвера: в справочнике механик есть фильтрованный индекс, и при
+            # выключенном флаге любая запись в эту таблицу падает с ошибкой
+            # 1934 — то есть демо-загрузка ломается целиком.
+            cursor.execute("SET QUOTED_IDENTIFIER ON; SET NOCOUNT ON; SET XACT_ABORT ON;")
             if readonly:
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
             cursor.close()
@@ -682,10 +717,14 @@ def insert_reference_data(
         if not mechanics or mechanics in seen_mechanics:
             continue
         seen_mechanics.add(mechanics)
-        mechanics_values.append((mechanics, source.get("channel")))
+        mechanics_values.append((
+            mechanics,
+            source.get("channel"),
+            MECHANICS_SHORT_CODES.get(mechanics),
+        ))
     execute_many(
         cursor,
-        "INSERT INTO dbo.tbl_MechanicsChannelMapping(mechanics,channel) VALUES (?,?)",
+        "INSERT INTO dbo.tbl_MechanicsChannelMapping(mechanics,channel,short_code) VALUES (?,?,?)",
         mechanics_values,
     )
 
