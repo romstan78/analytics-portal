@@ -161,8 +161,10 @@ func main() {
 		api.GET("/promo/comments/:id", handlers.GetPromoCommentsHandler)
 		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
 
-		// Промо — запись (agreement1, agreement2, admin)
-		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2"), handlers.SavePromo)
+		// Промо — запись. Промо ведёт КАМ, поэтому его роль здесь обязательна;
+		// кем именно можно править и заводить, решает область ведения в
+		// обработчике, а не список ролей.
+		api.POST("/promo/save", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.SavePromo)
 		// Доступ к согласованию зависит от закрепления, а не только от роли,
 		// поэтому его выясняет отдельный запрос без ограничения по роли.
 		api.GET("/promo/approval-access", handlers.GetApprovalAccess)

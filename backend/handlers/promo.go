@@ -54,6 +54,17 @@ func promoVisibilityScope(c *gin.Context) ([]string, bool) {
 	return scope, true
 }
 
+// promoWriteAllowed проверяет КАМа промо против области пользователя и сам
+// отвечает клиенту при отказе. Область на записи та же, что и на чтении:
+// править и заводить промо можно только там, где они видны.
+func promoWriteAllowed(c *gin.Context, scope []string, kam string) bool {
+	if repository.KAMAllowedByScope(scope, kam) {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "промо вне области ведения"})
+	return false
+}
+
 func GetPromoFilters(c *gin.Context) {
 	scope, ok := promoVisibilityScope(c)
 	if !ok {
@@ -556,6 +567,11 @@ func SavePromo(c *gin.Context) {
 		return
 	}
 
+	scope, ok := promoVisibilityScope(c)
+	if !ok {
+		return
+	}
+
 	// UPDATE
 	if id, ok := input["id"]; ok && id != nil {
 		idFloat, _ := strconv.ParseFloat(fmt.Sprint(id), 64)
@@ -578,6 +594,12 @@ func SavePromo(c *gin.Context) {
 				return
 			}
 
+			// КАМ берётся из базы, а не из тела запроса: иначе чужое промо
+			// правилось бы подменой поля.
+			if !promoWriteAllowed(c, scope, row.KAM) {
+				return
+			}
+
 			// Берём updated_at из запроса клиента для Optimistic Locking
 			clientUpdatedAt := fmt.Sprint(input["updated_at"])
 
@@ -586,6 +608,12 @@ func SavePromo(c *gin.Context) {
 
 			// Применяем входящие данные поверх существующей строки
 			applyJSONToRow(row, input)
+
+			// Перенос промо за пределы своей области закрыт так же, как правка
+			// чужого: иначе запись уходила бы из видимости одним сохранением.
+			if !promoWriteAllowed(c, scope, row.KAM) {
+				return
+			}
 
 			// Сохраняем комментарий КАМ с датой и ролью, не затирая историю согласования
 			if newComment, ok := input["comments"]; ok {
@@ -666,6 +694,10 @@ func SavePromo(c *gin.Context) {
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
 	row := services.DTOToDBRow(dto, calc)
+
+	if !promoWriteAllowed(c, scope, row.KAM) {
+		return
+	}
 
 	// Первый комментарий КАМ при создании промо тоже оформляем как строку истории
 	// вида [DD.MM.YYYY КАМ|автор]: текст, чтобы он корректно накапливался дальше.
