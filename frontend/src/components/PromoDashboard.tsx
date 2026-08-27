@@ -78,6 +78,12 @@ const fullNumber = (value: number | null | undefined, digits = 0) => {
 const percentLabel = (value: number | null | undefined, digits = 1) =>
   value == null || !Number.isFinite(value) ? '—' : `${fullNumber(value, digits)}%`;
 
+// Recharts сортирует легенду по value, а подсказку по name, поэтому факт вставал
+// перед планом независимо от порядка рядов в разметке. Ранжируем явно: план
+// первым, факт вторым.
+const planFirst = (item: { value?: unknown; name?: unknown; dataKey?: unknown }) =>
+  String(item.dataKey ?? item.name ?? item.value ?? '').startsWith('plan') ? 0 : 1;
+
 const dimensionFilter: Record<BreakdownDimension, string> = {
   network: 'network_name', brand: 'brand', sku: 'sku', mechanics: 'mechanics',
 };
@@ -115,12 +121,16 @@ function ChartPaper({ title, subtitle, children }: { title: string; subtitle: st
 function BubbleTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: BubblePoint }> }) {
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
+  // План сопоставимый: выполнение считается от него же, иначе подсказка
+  // расходилась бы с осью выполнения.
+  const metrics = point.breakdown.metrics;
   return (
     <Paper sx={{ p: 1.25, border: '1px solid #dfe5ee', maxWidth: 280 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{point.name}</Typography>
+      <Typography variant="caption" sx={{ display: 'block' }}>Продажи: план {compactNumber(metrics.comparablePlanUnits)} · факт {compactNumber(metrics.actualUnits)} уп.</Typography>
+      <Typography variant="caption" sx={{ display: 'block' }}>Инвестиции: план {fullNumber(metrics.comparablePlanInvestmentsRub)} · факт {fullNumber(point.investments)} ₽</Typography>
+      <Typography variant="caption" sx={{ display: 'block' }}>ROI: план {percentLabel(metrics.comparablePlanRoi)} · факт {percentLabel(point.roi)}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Выполнение продаж: {percentLabel(point.completion)}</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>ROI факт: {percentLabel(point.roi)}</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>Инвестиции факт: {fullNumber(point.investments)} ₽</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Покрытие фактом: {percentLabel(point.coverage)}</Typography>
     </Paper>
   );
@@ -198,10 +208,10 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
     <>
       <Grid container spacing={1.25} sx={{ mb: 1.25 }}>
         <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Покрытие фактом" primary={percentLabel(summary.factCoveragePct)} secondary={`${summary.factReadyCount.toLocaleString('ru-RU')} из ${summary.promoCount.toLocaleString('ru-RU')} промо`} hint="Факт продаж + факт инвестиций" accent="#64748b" /></Grid>
-        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Продажи, сопоставимый срез" primary={`${compactNumber(summary.actualUnits)} уп.`} secondary={`План ${compactNumber(comparablePlan(summary, 'units'))} · ${percentLabel(summary.salesCompletionPct)}`} accent={SERIES_PLAN} /></Grid>
-        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Инвестиции, сопоставимый срез" primary={`${compactNumber(summary.actualInvestmentsRub)} ₽`} secondary={`План ${compactNumber(comparablePlan(summary, 'investments'))} · ${percentLabel(summary.investmentCompletionPct)}`} accent="#c57a24" /></Grid>
-        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Weighted ROI" primary={percentLabel(summary.actualRoi)} secondary={`План ${percentLabel(summary.comparablePlanRoi)}`} hint="Отношение сумм, не среднее ROI" accent={SERIES_FACT} /></Grid>
-        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Фактический uplift" primary={`${compactNumber(summary.actualUpliftUnits)} уп.`} secondary={`План ${compactNumber(summary.comparablePlanUpliftUnits)} уп.`} accent="#8b5fbf" /></Grid>
+        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Продажи, сопоставимый срез" primary={`План ${compactNumber(comparablePlan(summary, 'units'))} уп.`} secondary={`Факт ${compactNumber(summary.actualUnits)} уп. · ${percentLabel(summary.salesCompletionPct)}`} accent={SERIES_PLAN} /></Grid>
+        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Инвестиции, сопоставимый срез" primary={`План ${compactNumber(comparablePlan(summary, 'investments'))} ₽`} secondary={`Факт ${compactNumber(summary.actualInvestmentsRub)} ₽ · ${percentLabel(summary.investmentCompletionPct)}`} accent="#c57a24" /></Grid>
+        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Weighted ROI" primary={`План ${percentLabel(summary.comparablePlanRoi)}`} secondary={`Факт ${percentLabel(summary.actualRoi)}`} hint="Отношение сумм, не среднее ROI" accent={SERIES_FACT} /></Grid>
+        <Grid size={{ xs: 12, sm: 6, xl: 2.4 }}><KpiCard label="Uplift, сопоставимый срез" primary={`План ${compactNumber(summary.comparablePlanUpliftUnits)} уп.`} secondary={`Факт ${compactNumber(summary.actualUpliftUnits)} уп.`} accent="#8b5fbf" /></Grid>
       </Grid>
 
       <Grid container spacing={1.25} sx={{ mb: 1.25 }}>
@@ -215,8 +225,8 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} minTickGap={22} />
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
-                <Tooltip formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUnits' ? 'План' : 'Факт']} />
-                <Legend formatter={(value) => value === 'planUnits' ? 'План' : 'Факт'} />
+                <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUnits' ? 'План' : 'Факт']} />
+                <Legend itemSorter={planFirst} formatter={(value) => value === 'planUnits' ? 'План' : 'Факт'} />
                 <Bar dataKey="planUnits" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" />
                 <Bar dataKey="actualUnits" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" />
               </BarChart>
@@ -233,8 +243,8 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} minTickGap={22} />
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
-                <Tooltip formatter={(value, name) => [`${fullNumber(Number(value))} ₽`, name === 'planInvestments' ? 'План' : 'Факт']} />
-                <Legend formatter={(value) => value === 'planInvestments' ? 'План' : 'Факт'} />
+                <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} ₽`, name === 'planInvestments' ? 'План' : 'Факт']} />
+                <Legend itemSorter={planFirst} formatter={(value) => value === 'planInvestments' ? 'План' : 'Факт'} />
                 <Bar dataKey="planInvestments" fill="#c57a24" opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" />
                 <Bar dataKey="actualInvestments" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" />
               </BarChart>
@@ -252,8 +262,8 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} minTickGap={22} />
                 <YAxis tickFormatter={(value) => `${fullNumber(Number(value))}%`} tick={{ fontSize: 10 }} width={62} />
                 <ReferenceLine y={0} stroke={SERIES_NEUTRAL} />
-                <Tooltip formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
-                <Legend formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
+                <Tooltip itemSorter={planFirst} formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
+                <Legend itemSorter={planFirst} formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
                 <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={false} connectNulls={false} />
                 <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={false} connectNulls={false} />
               </LineChart>
@@ -359,7 +369,7 @@ function calendarTooltip(point: PromoDashboardCalendarPoint) {
       <Typography variant="caption" sx={{ display: 'block' }}>Промо: {metrics.promoCount} · факт: {metrics.factReadyCount}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Продажи: план {compactNumber(metrics.planUnits)} · факт {compactNumber(metrics.actualUnits)}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Инвестиции: план {compactNumber(metrics.planInvestmentsRub)} · факт {compactNumber(metrics.actualInvestmentsRub)}</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>ROI факт: {percentLabel(metrics.actualRoi)}</Typography>
+      <Typography variant="caption" sx={{ display: 'block' }}>ROI: план {percentLabel(metrics.comparablePlanRoi)} · факт {percentLabel(metrics.actualRoi)}</Typography>
     </Box>
   );
 }
@@ -450,8 +460,8 @@ function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} />
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
-                <Tooltip formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUplift' ? 'План uplift' : 'Факт uplift']} />
-                <Legend formatter={(value) => value === 'planUplift' ? 'План uplift' : 'Факт uplift'} />
+                <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUplift' ? 'План uplift' : 'Факт uplift']} />
+                <Legend itemSorter={planFirst} formatter={(value) => value === 'planUplift' ? 'План uplift' : 'Факт uplift'} />
                 <Bar dataKey="planUplift" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} />
                 <Bar dataKey="actualUplift" fill={SERIES_FACT} radius={[3, 3, 0, 0]} />
               </BarChart>
@@ -466,8 +476,8 @@ function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} />
                 <YAxis tickFormatter={(value) => `${fullNumber(Number(value))}%`} tick={{ fontSize: 10 }} width={62} />
                 <ReferenceLine y={0} stroke={SERIES_NEUTRAL} />
-                <Tooltip formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
-                <Legend formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
+                <Tooltip itemSorter={planFirst} formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
+                <Legend itemSorter={planFirst} formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
                 <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={{ r: 2 }} connectNulls={false} />
                 <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={{ r: 2 }} connectNulls={false} />
               </LineChart>

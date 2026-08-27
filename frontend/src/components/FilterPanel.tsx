@@ -1,7 +1,7 @@
 import type { HTMLAttributes, Key, SyntheticEvent } from 'react';
 import {
   TextField, Stack, Autocomplete,
-  FormControlLabel, Checkbox, ListItemText, Button
+  FormControlLabel, Checkbox, ListItemText, Button, Switch
 } from '@mui/material';
 
 interface NumberOption {
@@ -219,10 +219,10 @@ export default function FilterPanel({
         {onPersistChange && (
           <FormControlLabel
             control={
-              <Checkbox 
-                size="small" 
-                checked={persistFilters} 
-                onChange={(e) => onPersistChange(e.target.checked)} 
+              <Switch
+                size="small"
+                checked={persistFilters}
+                onChange={(e) => onPersistChange(e.target.checked)}
               />
             }
             label="Сохранять" 
