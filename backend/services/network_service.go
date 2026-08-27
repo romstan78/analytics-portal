@@ -25,6 +25,33 @@ func NetRub(gross float64, vatIncluded bool, vatRate float64) float64 {
 	return round2(gross / (1 + vatRate/100))
 }
 
+// NetworkPeriodsWithDefaults достраивает год до четырёх кварталов: незаведённый
+// квартал берёт НДС из карточки сети. Правило должно быть одним для карточки и
+// для витрины реестра — иначе одна и та же сеть считалась бы по разным ставкам.
+func NetworkPeriodsWithDefaults(
+	network models.Network,
+	year int,
+	persisted []models.NetworkPeriod,
+) []models.NetworkPeriod {
+	byQuarter := make(map[int]models.NetworkPeriod, len(persisted))
+	for _, period := range persisted {
+		byQuarter[period.Quarter] = period
+	}
+	periods := make([]models.NetworkPeriod, 0, 4)
+	for quarter := 1; quarter <= 4; quarter++ {
+		period := byQuarter[quarter]
+		period.NetworkID = network.ID
+		period.Year = year
+		period.Quarter = quarter
+		if period.ID == 0 {
+			period.VATIncluded = network.VATIncluded
+			period.VATRate = network.VATRate
+		}
+		periods = append(periods, period)
+	}
+	return periods
+}
+
 // periodsByQuarter — быстрый доступ к настройкам НДС нужного квартала.
 func periodsByQuarter(periods []models.NetworkPeriod) map[int]models.NetworkPeriod {
 	byQuarter := make(map[int]models.NetworkPeriod, len(periods))

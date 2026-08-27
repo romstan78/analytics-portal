@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -17,14 +17,19 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  Autocomplete,
+  Checkbox,
   MenuItem,
   Paper,
   Snackbar,
   Switch,
   FormControlLabel,
+  Stack,
   Tab,
   Tabs,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -36,6 +41,7 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
+import NetworkDashboardView from '../components/NetworkDashboardView';
 import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkVATEditor from '../components/NetworkVATEditor';
@@ -62,6 +68,7 @@ import {
 
 const YEARS = [2026, 2027, 2028];
 const DEFAULT_YEAR = 2027;
+const CURRENT_YEAR = new Date().getFullYear();
 
 const FIELD_LABELS: Record<string, string> = {
   plan_rub: 'План, ₽',
@@ -168,9 +175,49 @@ interface NetworkRegistryProps {
   role: string | null;
 }
 
+// Витрина и карточки — два режима одного блока, а не разные разделы: из итогов
+// проваливаются в сеть и возвращаются обратно, не выходя на главную.
+type RegistryView = 'dashboard' | 'networks';
+
+// Кварталы витрины — набор, а не диапазон: сравнивают и несмежные, например
+// Q1 с Q3. Выбор устроен как в интернет-продажах — мультивыбор с галочками.
+const QUARTER_OPTIONS = [
+  { label: 'I квартал', value: 1 },
+  { label: 'II квартал', value: 2 },
+  { label: 'III квартал', value: 3 },
+  { label: 'IV квартал', value: 4 },
+];
+
+const ALL_QUARTERS = [1, 2, 3, 4];
+
+// Быстрые наборы. Год открыт по умолчанию: разговор об итогах начинается
+// с года, а не с текущего квартала.
+const QUARTER_PRESETS: Array<{ label: string; quarters: number[] }> = [
+  { label: 'Год', quarters: ALL_QUARTERS },
+  { label: 'I полугодие', quarters: [1, 2] },
+  { label: 'II полугодие', quarters: [3, 4] },
+];
+
+function sameQuarters(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+// Прямая ссылка на карточку: сеть и год приходят в адресе. Значения читаются
+// один раз, при первом рендере, — дальше состоянием управляет сама страница.
+function paramNetworkID(params: URLSearchParams): number | null {
+  const value = Number(params.get('network'));
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function paramYear(params: URLSearchParams): number {
+  const value = Number(params.get('year'));
+  return Number.isInteger(value) && value >= 2000 && value <= 2100 ? value : DEFAULT_YEAR;
+}
+
 export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
 
   const canEdit = role === 'admin' || role === 'kam';
 
@@ -179,9 +226,23 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const [kam, setKam] = useState('');
   // Список сетей сворачивается: выбрав сеть, всю ширину отдаём таблице планов.
   const [listOpen, setListOpen] = useState(true);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [year, setYear] = useState(DEFAULT_YEAR);
+  const [selectedId, setSelectedId] = useState<number | null>(() => paramNetworkID(searchParams));
+  const [year, setYear] = useState(() => paramYear(searchParams));
   const [tab, setTab] = useState(0);
+  // Реестр открывается итогами: сначала общая картина, потом конкретная сеть.
+  // Прямая ссылка на карточку сразу переключает в режим сети.
+  const [view, setView] = useState<RegistryView>(() => (
+    paramNetworkID(searchParams) != null ? 'networks' : 'dashboard'
+  ));
+  const [quarters, setQuarters] = useState<number[]>(ALL_QUARTERS);
+  // Год витрины отделён от года карточки: карточка открывается на плановом
+  // горизонте, а итоги — на последнем году, где есть данные. План заводят
+  // вперёд, факт приходит назад, и «плановый» год у витрины часто пуст.
+  // null означает «год не выбирали руками» — тогда он выводится из данных.
+  const [dashboardYear, setDashboardYear] = useState<number | null>(null);
+  // Список лет приходит в самом ответе и от запрошенного года не зависит,
+  // поэтому он хранится отдельно и переживает смену запроса.
+  const [dashboardYears, setDashboardYears] = useState<number[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState<{ quarter: number | null; brand: string | null } | null>(null);
   const [commentText, setCommentText] = useState('');
@@ -204,6 +265,32 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     queryKey: ['networkBrands'],
     queryFn: () => networkAPI.getBrands(),
     staleTime: 30 * 60 * 1000,
+  });
+
+  // Витрина читается только в своём режиме: открывая карточку, незачем тянуть
+  // весь портфель. Предыдущий ответ сохраняется — иначе на время повторного
+  // запроса список лет опустел бы и выбранный год качался бы туда-обратно.
+  // Пока год не выбран руками, берём последний год с данными, а при наличии —
+  // текущий календарный: именно про него обычно и идёт разговор.
+  const effectiveDashboardYear = dashboardYear ?? (
+    dashboardYears.includes(CURRENT_YEAR) || dashboardYears.length === 0
+      ? CURRENT_YEAR
+      : dashboardYears[dashboardYears.length - 1]
+  );
+
+  const dashboardQuery = useQuery({
+    queryKey: ['networkDashboard', effectiveDashboardYear, quarters.join(','), kam],
+    queryFn: async () => {
+      const response = await networkAPI.getDashboard({
+        year: effectiveDashboardYear,
+        quarters,
+        kam: kam ? [kam] : undefined,
+      });
+      setDashboardYears(response.availableYears);
+      return response;
+    },
+    enabled: view === 'dashboard',
+    placeholderData: (previous) => previous,
   });
 
   const planQuery = useQuery({
@@ -295,6 +382,34 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     onError: showError,
   });
 
+  // Годы: к горизонту планирования добавляются те, за которые в реестре есть
+  // данные (факт приходит и за прошлые годы), и обязательно выбранный сейчас —
+  // иначе селектор показывал бы не то, что открыто.
+  const yearOptions = useMemo(() => {
+    const options = new Set<number>(YEARS);
+    dashboardYears.forEach((value) => options.add(value));
+    options.add(year);
+    return [...options].sort((a, b) => a - b);
+  }, [dashboardYears, year]);
+
+  // Витрина показывает только те годы, за которые в реестре есть данные.
+  const dashboardYearOptions = useMemo(() => {
+    const options = new Set<number>(dashboardYears);
+    options.add(effectiveDashboardYear);
+    return [...options].sort((a, b) => a - b);
+  }, [dashboardYears, effectiveDashboardYear]);
+
+  // Переход из витрины в карточку: сеть открывается сразу на «Плане и факте»,
+  // на том же году и без ухода со страницы.
+  const openNetworkFromDashboard = (networkId: number) => {
+    setSelectedId(networkId);
+    setProfile({});
+    setProfilePeriods({});
+    setYear(effectiveDashboardYear);
+    setTab(2);
+    setView('networks');
+  };
+
   const networks = networksQuery.data?.data ?? [];
   const selected = planQuery.data?.network ?? networks.find((n) => n.id === selectedId) ?? null;
   const comments = useMemo(() => commentsQuery.data?.data ?? [], [commentsQuery.data]);
@@ -343,25 +458,136 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1760, mx: 'auto', width: '100%' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
-        <Tooltip title={listOpen ? 'Свернуть список сетей' : 'Показать список сетей'}>
-          <IconButton size="small" onClick={() => setListOpen((open) => !open)}>
-            {listOpen ? <MenuOpenIcon /> : <MenuIcon />}
-          </IconButton>
-        </Tooltip>
+        {view === 'networks' && (
+          <Tooltip title={listOpen ? 'Свернуть список сетей' : 'Показать список сетей'}>
+            <IconButton size="small" onClick={() => setListOpen((open) => !open)}>
+              {listOpen ? <MenuOpenIcon /> : <MenuIcon />}
+            </IconButton>
+          </Tooltip>
+        )}
         <Typography variant="h5">Реестр сетей</Typography>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={view}
+          onChange={(_, value) => value && setView(value as RegistryView)}
+        >
+          <ToggleButton value="dashboard">Итоги</ToggleButton>
+          <ToggleButton value="networks">Сети</ToggleButton>
+        </ToggleButtonGroup>
         <Box sx={{ flex: 1 }} />
-        {canEdit && (
+        {canEdit && view === 'networks' && (
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
             Новая сеть
           </Button>
         )}
       </Box>
 
+      {view === 'dashboard' && (
+        <>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', mb: 2 }}>
+            <TextField
+              select
+              label="Год"
+              value={effectiveDashboardYear}
+              onChange={(e) => setDashboardYear(Number(e.target.value))}
+              sx={{ width: 120 }}
+            >
+              {dashboardYearOptions.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
+            </TextField>
+            <Autocomplete<{ label: string; value: number }, true, false, false>
+              multiple
+              disableCloseOnSelect
+              size="small"
+              options={QUARTER_OPTIONS}
+              getOptionLabel={(option) => option.label}
+              isOptionEqualToValue={(option, value) => option.value === value?.value}
+              value={QUARTER_OPTIONS.filter((option) => quarters.includes(option.value))}
+              onChange={(_, selected) => {
+                // Пустой выбор оставил бы витрину без периода вовсе, поэтому
+                // снятие последнего квартала возвращает весь год.
+                const values = selected.map((option) => option.value).sort((a, b) => a - b);
+                setQuarters(values.length > 0 ? values : ALL_QUARTERS);
+              }}
+              renderValue={() => null}
+              renderOption={(props, option, { selected }) => {
+                const { key, ...rest } = props;
+                return (
+                  <li key={key} {...rest} style={{ padding: '2px 8px' }}>
+                    <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
+                    <ListItemText
+                      primary={option.label}
+                      slotProps={{ primary: { sx: { fontSize: 13 } } }}
+                    />
+                  </li>
+                );
+              }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Кварталы"
+                  placeholder={quarters.length === 4
+                    ? 'Весь год'
+                    : quarters.map((value) => `Q${value}`).join(', ')}
+                  slotProps={{
+                    ...params.slotProps,
+                    inputLabel: { ...params.slotProps.inputLabel, shrink: true },
+                  }}
+                />
+              )}
+              slotProps={{ paper: { sx: { minWidth: 220 } } }}
+              sx={{ minWidth: 210, '& .MuiAutocomplete-tag': { display: 'none' } }}
+            />
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={QUARTER_PRESETS.find((preset) => sameQuarters(preset.quarters, quarters))?.label ?? ''}
+              onChange={(_, value) => {
+                const preset = QUARTER_PRESETS.find((item) => item.label === value);
+                if (preset) setQuarters(preset.quarters);
+              }}
+            >
+              {QUARTER_PRESETS.map((preset) => (
+                <ToggleButton key={preset.label} value={preset.label}>{preset.label}</ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+            {/* Фильтр по КАМу бессмыслен для того, кто и так видит только свои
+                сети: сервер уже ограничил область его закреплением. */}
+            {(kamsQuery.data?.data ?? []).length > 1 && (
+              <TextField
+                select
+                label="КАМ"
+                value={kam}
+                onChange={(e) => setKam(e.target.value)}
+                sx={{ width: 220 }}
+              >
+                <MenuItem value="">Все КАМ</MenuItem>
+                {(kamsQuery.data?.data ?? []).map((option) => (
+                  <MenuItem key={option} value={option}>{option}</MenuItem>
+                ))}
+              </TextField>
+            )}
+            {dashboardQuery.isFetching && <CircularProgress size={16} />}
+          </Stack>
+
+          <NetworkDashboardView
+            data={dashboardQuery.data ?? null}
+            loading={dashboardQuery.isLoading}
+            error={dashboardQuery.isError
+              ? (dashboardQuery.error as { message?: string })?.message ?? 'Не удалось загрузить витрину'
+              : null}
+            onOpenNetwork={openNetworkFromDashboard}
+          />
+        </>
+      )}
+
+      {/* Режим сетей не размонтируется, а прячется: выбранная сеть, вкладка и
+          несохранённый черновик переживают переход к итогам и обратно. */}
       <Box
         sx={{
-          display: 'grid',
+          display: view === 'networks' ? 'grid' : 'none',
           gridTemplateColumns: { xs: '1fr', md: listOpen ? '260px minmax(0, 1fr)' : 'minmax(0, 1fr)' },
           gap: 2,
           alignItems: 'start',
@@ -450,7 +676,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                   onChange={(e) => { setYear(Number(e.target.value)); setProfilePeriods({}); }}
                   sx={{ width: 120 }}
                 >
-                  {YEARS.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
+                  {yearOptions.map((y) => <MenuItem key={y} value={y}>{y}</MenuItem>)}
                 </TextField>
               </Box>
 

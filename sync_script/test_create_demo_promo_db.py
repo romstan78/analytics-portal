@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from create_demo_promo_db import (
+    MECHANICS_SHORT_CODES,
     StableSynthetic,
     build_entity_maps,
     canonical_kam,
@@ -128,3 +129,42 @@ class DemoPromoTransformTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MechanicsShortCodeTests(unittest.TestCase):
+    """Коды механик попадают на плитки витрины и в презентации."""
+
+    def test_codes_are_unique(self):
+        codes = list(MECHANICS_SHORT_CODES.values())
+        self.assertEqual(
+            len(codes), len(set(codes)),
+            "две механики с одним кодом дали бы плитку, которая врёт",
+        )
+
+    def test_codes_fit_the_column(self):
+        # nvarchar(12) в dbo.tbl_MechanicsChannelMapping.short_code
+        for mechanics, code in MECHANICS_SHORT_CODES.items():
+            with self.subTest(mechanics=mechanics):
+                self.assertTrue(code.strip(), "пустой код означал бы «не назначен»")
+                self.assertLessEqual(len(code), 12)
+
+    def test_online_families_stay_separate(self):
+        # Без разделения семейств «e-comm скидка» и «pure скидка» получили бы
+        # один код, хотя это разные механики.
+        self.assertNotEqual(
+            MECHANICS_SHORT_CODES["e-comm скидка"],
+            MECHANICS_SHORT_CODES["pure скидка"],
+        )
+        self.assertNotEqual(
+            MECHANICS_SHORT_CODES["e-comm скидка"],
+            MECHANICS_SHORT_CODES["Скидка"],
+        )
+
+    def test_variants_share_the_base(self):
+        # Вариант механики читается как её основа плюс суффикс.
+        self.assertTrue(MECHANICS_SHORT_CODES["Амбассадоры в ОС"].startswith(
+            MECHANICS_SHORT_CODES["Амбассадоры"]
+        ))
+        self.assertTrue(MECHANICS_SHORT_CODES["УСТМ в ОС"].startswith(
+            MECHANICS_SHORT_CODES["УСТМ"]
+        ))
