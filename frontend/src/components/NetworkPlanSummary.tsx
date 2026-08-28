@@ -48,7 +48,6 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
   const factPct = deltaPct(totals.fact_rub, totals.contract_plan_rub);
   const forecastPct = deltaPct(totals.forecast_rub, totals.contract_plan_rub);
   // Инвестиции сравниваем между собой по одной базе — до вычета НДС.
-  const forecastInvestPct = deltaPct(totals.forecast_investments_rub, totals.investments_rub);
   const factInvestPct = deltaPct(totals.fact_investments_rub, totals.investments_rub);
 
   // Доля инвестиций в фактическом объёме — то, на что смотрят при разборе квартала.
@@ -97,10 +96,14 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
         hint={totals.investments_rub > 0 ? `без НДС ${formatRubShort(totals.investments_rub_net)}` : 'нет процента'}
       />
       <SummaryCard
-        label="Инв. прогноз"
-        value={totals.forecast_investments_rub > 0 ? totals.forecast_investments_rub : null}
-        hint={pctHint(forecastInvestPct, 'к плану', 'не внесён')}
-        tone={deviationTone(forecastInvestPct)}
+		label="К выплате"
+		value={totals.payable_investments_rub > 0 ? totals.payable_investments_rub : null}
+		hint={totals.completed
+			? 'порог периода 100% выполнен'
+			: totals.payable_investments_rub > 0
+				? 'есть строки с правом на выплату'
+				: 'нет строк с правом на выплату'}
+		tone={totals.completed ? 'good' : totals.payable_investments_rub > 0 ? 'neutral' : 'warn'}
       />
       <SummaryCard
         label="Инв. факт"

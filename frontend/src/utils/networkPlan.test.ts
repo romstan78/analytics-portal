@@ -76,6 +76,10 @@ describe('amountsOfPlan', () => {
     fact_investments_rub: null, fact_investments_rub_net: null,
     investments_pct: null, investments_rub: null, investments_rub_net: null,
     forecast_investments_rub: null, forecast_investments_rub_net: null,
+    pay_investments_from_fact: false,
+    payment_base_rub: null, payment_completion_pct: null, payment_eligible: false,
+    payment_period_start_quarter: 0, payment_period_end_quarter: 0,
+    payment_scope: '', payable_investments_rub: null, payable_investments_rub_net: null,
     updated_by: null, updated_at: '', ...patch,
   });
 
@@ -117,14 +121,11 @@ describe('shiftGrossPool', () => {
     expect(parseNumberInput(pool.planRub)).toBe(10_000_000);
   });
 
-  it('двигает и прогноз, и план', () => {
-    const pool = shiftGrossPool(
-      cell({ planRub: '1 000', forecastRub: '900' }),
-      cell({ planRub: '100', forecastRub: '90' }),
-      false,
-    );
+  // Прогноз пул больше не двигает: он ведётся помесячно и приходит сводом,
+  // а не вводится в этой сетке.
+  it('двигает план и не выдумывает прогноз', () => {
+    const pool = shiftGrossPool(cell({ planRub: '1 000' }), cell({ planRub: '100' }), false);
     expect(parseNumberInput(pool.planRub)).toBe(900);
-    expect(parseNumberInput(pool.forecastRub)).toBe(810);
   });
 
   it('пустой пул не заполняет: валовый объём в квартале не ведут', () => {

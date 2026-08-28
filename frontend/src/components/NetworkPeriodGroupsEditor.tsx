@@ -25,7 +25,6 @@ import {
 } from '@mui/icons-material';
 import type { NetworkPeriodGroupInput, NetworkPeriodGroupTotals } from '../types/network';
 import {
-  deltaPct,
   formatRubShort,
   periodGroupConflict,
   periodGroupKey,
@@ -161,45 +160,29 @@ export default function NetworkPeriodGroupsEditor({
                 <TableCell>Общий период</TableCell>
                 <TableCell>Область</TableCell>
                 <TableCell align="right">План</TableCell>
-                <TableCell align="right">Факт</TableCell>
-                <TableCell align="right">Прогноз</TableCell>
-                <TableCell align="right">Инв. план</TableCell>
-                <TableCell align="right">Инв. факт</TableCell>
+				<TableCell align="right">EAC</TableCell>
+				<TableCell align="right">Выполнение</TableCell>
+				<TableCell align="right">К выплате</TableCell>
                 <TableCell padding="none" />
               </TableRow>
             </TableHead>
             <TableBody>
               {groups.map((group) => {
                 const combined = totalsByKey.get(periodGroupKey(group));
-                const factCompletion = combined
-                  ? deltaPct(combined.fact_rub, combined.plan_rub)
-                  : null;
-                const investmentCompletion = combined
-                  ? deltaPct(combined.fact_investments_rub, combined.investments_rub)
-                  : null;
                 return (
                   <TableRow key={periodGroupKey(group)} hover>
                     <TableCell sx={{ fontWeight: 600 }}>Q{group.start_quarter}–Q{group.end_quarter}</TableCell>
                     <TableCell>{scopeLabel(group.brand_as)}</TableCell>
                     <TableCell align="right">{formatRubShort(combined?.plan_rub)}</TableCell>
-                    <TableCell align="right">
-                      {formatRubShort(combined?.fact_rub)}
-                      {factCompletion != null && (
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                          {(100 + factCompletion).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} % плана
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell align="right">{formatRubShort(combined?.forecast_rub)}</TableCell>
-                    <TableCell align="right">{formatRubShort(combined?.investments_rub)}</TableCell>
-                    <TableCell align="right">
-                      {formatRubShort(combined?.fact_investments_rub)}
-                      {investmentCompletion != null && (
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                          {(100 + investmentCompletion).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} % плана
-                        </Typography>
-                      )}
-                    </TableCell>
+					<TableCell align="right">{formatRubShort(combined?.eac_rub)}</TableCell>
+					<TableCell align="right">
+						<Typography variant="body2" color={combined?.completed ? 'success.main' : 'warning.main'}>
+							{combined?.completion_pct == null
+								? '—'
+								: `${combined.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
+						</Typography>
+					</TableCell>
+					<TableCell align="right">{formatRubShort(combined?.payable_investments_rub)}</TableCell>
                     <TableCell padding="none">
                       {canEdit && (
                         <Tooltip title="Удалить объединение">

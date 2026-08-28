@@ -97,6 +97,16 @@ export interface NetworkPlanSaveRequest {
   period_groups: NetworkPeriodGroupInput[];
 }
 
+export interface NetworkInvestmentPaymentModesSaveRequest {
+  year: number;
+  rows: Array<{
+    quarter: number;
+    brand_as: string;
+    pay_investments_from_fact: boolean;
+    updated_at: string;
+  }>;
+}
+
 export interface NetworkForecastSaveRequest {
   year: number;
   quarter: number;

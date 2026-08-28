@@ -95,6 +95,9 @@ export default function NetworkQuarterTable({
     const factPct = row.plan ? deltaPct(row.fact, row.plan) : null;
     const forecastPct = deltaPct(row.forecast, row.plan);
     const hasComment = commentedCells.has(planKey(quarter, brand));
+		const paymentPeriod = row.paymentPeriodStart === row.paymentPeriodEnd
+			? `Q${row.paymentPeriodStart}`
+			: `Q${row.paymentPeriodStart}–Q${row.paymentPeriodEnd}`;
 
     return (
       <TableRow key={brand} hover>
@@ -144,7 +147,17 @@ export default function NetworkQuarterTable({
           <ValueCell value={row.investPlan} netValue={row.investPlanNet} />
         </TableCell>
         <TableCell align="right">
-          <ValueCell value={row.investForecast} netValue={row.investForecastNet} />
+			<ValueCell value={row.payable} netValue={row.payableNet} />
+			<Typography
+				variant="caption"
+				sx={{ display: 'block', color: row.paymentEligible ? 'text.secondary' : 'warning.main' }}
+			>
+				{row.payFromFact
+					? 'от факта · без порога'
+					: row.paymentCompletionPct == null
+						? 'нет базы выполнения'
+						: `${paymentPeriod} · ${row.paymentCompletionPct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
+			</Typography>
         </TableCell>
         <TableCell align="right">
           <ValueCell value={row.investFact} netValue={row.investFactNet} />
@@ -167,6 +180,7 @@ export default function NetworkQuarterTable({
       plan: number; fact: number; forecast: number;
       investPlan: number; investPlanNet: number;
       investForecast: number; investForecastNet: number;
+		payable: number; payableNet: number;
       investFact: number; investFactNet: number;
     },
   ) => {
@@ -197,7 +211,7 @@ export default function NetworkQuarterTable({
           <ValueCell value={values.investPlan || null} netValue={values.investPlanNet || null} bold />
         </TableCell>
         <TableCell align="right">
-          <ValueCell value={values.investForecast || null} netValue={values.investForecastNet || null} bold />
+			<ValueCell value={values.payable || null} netValue={values.payableNet || null} bold />
         </TableCell>
         <TableCell align="right">
           <ValueCell value={values.investFact || null} netValue={values.investFactNet || null} bold />
@@ -218,6 +232,8 @@ export default function NetworkQuarterTable({
         acc.investPlanNet += a.investPlanNet ?? 0;
         acc.investForecast += a.investForecast ?? 0;
         acc.investForecastNet += a.investForecastNet ?? 0;
+		acc.payable += a.payable ?? 0;
+		acc.payableNet += a.payableNet ?? 0;
         acc.investFact += a.investFact ?? 0;
         acc.investFactNet += a.investFactNet ?? 0;
         return acc;
@@ -226,6 +242,7 @@ export default function NetworkQuarterTable({
         plan: 0, fact: 0, forecast: 0,
         investPlan: 0, investPlanNet: 0,
         investForecast: 0, investForecastNet: 0,
+		payable: 0, payableNet: 0,
         investFact: 0, investFactNet: 0,
       },
     );
@@ -250,7 +267,7 @@ export default function NetworkQuarterTable({
             <TableCell align="right">Прогноз, ₽</TableCell>
             <TableCell align="right">Инв., %</TableCell>
             <TableCell align="right">Инв. план</TableCell>
-            <TableCell align="right">Инв. прогноз</TableCell>
+			<TableCell align="right">К выплате</TableCell>
             <TableCell align="right">Инв. факт</TableCell>
             <TableCell padding="none" />
           </TableRow>
@@ -384,8 +401,8 @@ export default function NetworkQuarterTable({
             </TableCell>
             <TableCell align="right">
               <ValueCell
-                value={totals.forecast_investments_rub || null}
-                netValue={totals.forecast_investments_rub_net || null}
+				value={totals.payable_investments_rub || null}
+				netValue={totals.payable_investments_rub_net || null}
                 bold
               />
             </TableCell>

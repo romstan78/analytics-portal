@@ -83,9 +83,14 @@ export default function NetworkAnnualInvestmentCumulative({
                 <TableCell align="right">Выполнение</TableCell>
                 <TableCell align="right">
                   <Tooltip title="Сумма EAC каждого квартала × процент инвестиций этого квартала">
-                    <span>Начислено за год</span>
+					<span>Условно начислено</span>
                   </Tooltip>
                 </TableCell>
+				<TableCell align="right">
+					<Tooltip title="Факт × процент; не зависит от выполнения плана">
+						<span>От факта</span>
+					</Tooltip>
+				</TableCell>
                 <TableCell align="right">Выплачено Q1–Q3</TableCell>
                 <TableCell align="right">Прогноз Q4</TableCell>
                 <TableCell align="right">Доплата</TableCell>
@@ -94,8 +99,14 @@ export default function NetworkAnnualInvestmentCumulative({
             </TableHead>
             <TableBody>
               {data.rows.map((row) => {
-                const status = row.eligible
-                  ? 'К доплате'
+				const hasFactBased = row.fact_based_accrued_investments_rub > 0;
+				const hasSupplement = row.supplement_rub > 0;
+				const status = hasSupplement
+					? 'К доплате'
+					: row.eligible
+						? 'Доплата не требуется'
+						: hasFactBased
+							? 'Оплата от факта учтена'
                   : data.portfolio_completed
                     ? 'План строки не выполнен'
                     : 'Портфель не выполнен';
@@ -127,6 +138,12 @@ export default function NetworkAnnualInvestmentCumulative({
                     </TableCell>
                     <TableCell align="right">
                       <ValueCell
+                        value={row.fact_based_accrued_investments_rub || null}
+                        netValue={row.fact_based_accrued_investments_rub_net || null}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <ValueCell
                         value={row.paid_investments_rub}
                         netValue={row.paid_investments_rub_net}
                       />
@@ -139,16 +156,16 @@ export default function NetworkAnnualInvestmentCumulative({
                     </TableCell>
                     <TableCell align="right">
                       <ValueCell
-                        value={row.eligible ? row.supplement_rub : null}
-                        netValue={row.eligible ? row.supplement_rub_net : null}
+						value={row.eligible || hasFactBased ? row.supplement_rub : null}
+						netValue={row.eligible || hasFactBased ? row.supplement_rub_net : null}
                         bold
                       />
                     </TableCell>
                     <TableCell>
                       <Chip
                         size="small"
-                        color={row.eligible ? 'success' : 'default'}
-                        variant={row.eligible ? 'filled' : 'outlined'}
+						color={hasSupplement ? 'success' : 'default'}
+						variant={hasSupplement ? 'filled' : 'outlined'}
                         label={status}
                       />
                     </TableCell>

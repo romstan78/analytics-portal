@@ -647,3 +647,101 @@ func BuildNetworkForecast(
 		Months: rows, Brands: brandTotals, Totals: totals,
 	}
 }
+
+// ─── Свод помесячного слоя в квартальную сетку ─────────────────────────────
+
+// Строки одного квартала. BuildNetworkForecast читает
+// только свои месяцы, но состав брендов и SKU он собирает по всему, что ему
+// передали, — поэтому отбор делается до вызова, а не внутри него.
+func forecastLinesOfQuarter(lines []models.NetworkForecastLine, quarter int) []models.NetworkForecastLine {
+	monthFrom := (quarter-1)*3 + 1
+	result := make([]models.NetworkForecastLine, 0, len(lines))
+	for _, line := range lines {
+		if line.Month >= monthFrom && line.Month <= monthFrom+2 {
+			result = append(result, line)
+		}
+	}
+	return result
+}
+
+func promoIndicatorsOfQuarter(rows []models.NetworkPromoIndicator, quarter int) []models.NetworkPromoIndicator {
+	monthFrom := (quarter-1)*3 + 1
+	result := make([]models.NetworkPromoIndicator, 0, len(rows))
+	for _, row := range rows {
+		if row.Month >= monthFrom && row.Month <= monthFrom+2 {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+// rollupValue переводит квартальный итог в поле строки плана. Ноль означает
+// отсутствие величины: итог не различает «не отгружали» и «данных ещё нет», а
+// прочерк в не наступившем квартале честнее объявленного нуля.
+func rollupValue(value float64) *float64 {
+	if value == 0 {
+		return nil
+	}
+	result := value
+	return &result
+}
+
+// ApplyForecastRollup подставляет в квартальные строки плана факт и EAC,
+// посчитанные из помесячного слоя тем же кодом, что и вкладка «Прогноз».
+//
+// Колонки fact_rub и forecast_rub в tbl_NetworkPlans остаются денормализованным
+// зеркалом для загрузчика отгрузок и внешних потребителей, но источником истины
+// при чтении больше не являются. Наполнялись они только побочным эффектом
+// записи — загрузкой факта и сохранением прогноза, — и потому вкладка «План и
+// факт» показывала нули там, где факт и прогноз давно есть помесячно, а первое
+// же сохранение прогноза по одному бренду проявляло EAC сразу по всем брендам
+// квартала. Считать здесь — единственный способ свести «План и факт» с
+// «Прогнозом» и витриной до копейки в любой момент, без загрузок и сохранений.
+//
+// Строки плана не создаются: бренд, по которому идут отгрузки, но плана в году
+// нет, в сетке не появится — как и до этой правки.
+func ApplyForecastRollup(
+	network models.Network,
+	year int,
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+	facts []models.NetworkMonthlyFact,
+	forecasts []models.NetworkForecastLine,
+	promos []models.NetworkPromoIndicator,
+	prices []models.NetworkContractPrice,
+	now time.Time,
+) []models.NetworkPlan {
+	for quarter := 1; quarter <= 4; quarter++ {
+		// Кварталы считаются по возрастанию и правят только свои строки, а
+		// BuildNetworkForecast берёт из плана объём и процент инвестиций —
+		// то, чего этот свод не трогает. Порядок кварталов на результат не влияет.
+		response := BuildNetworkForecast(
+			network, year, quarter, plans, periods, facts,
+			forecastLinesOfQuarter(forecasts, quarter),
+			promoIndicatorsOfQuarter(promos, quarter),
+			prices, now,
+		)
+		byBrand := make(map[string]models.NetworkForecastBrandTotals, len(response.Brands))
+		for _, brand := range response.Brands {
+			byBrand[brand.BrandAS] = brand
+		}
+
+		for i := range plans {
+			plan := &plans[i]
+			// Строка пула брендом не ведётся: помесячного факта у неё нет, а её
+			// доля собирается из брендов пула в итогах квартала.
+			if plan.Quarter != quarter || plan.BrandAS == nil {
+				continue
+			}
+			total, ok := byBrand[*plan.BrandAS]
+			if !ok {
+				continue
+			}
+			plan.FactRub = rollupValue(total.FactRub)
+			plan.ForecastRub = rollupValue(total.EACRub)
+			plan.FactInvestmentsRub = rollupValue(total.FactInvestmentsRub)
+			plan.ForecastInvestmentsRub = rollupValue(total.EACInvestmentsRub)
+		}
+	}
+	return plans
+}

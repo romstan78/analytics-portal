@@ -247,10 +247,19 @@ export interface NetworkPlan {
   fact_investments_rub: number | null;
   fact_investments_rub_net: number | null;
   investments_pct: number | null;
+  pay_investments_from_fact: boolean;
   investments_rub: number | null;
   investments_rub_net: number | null;
   forecast_investments_rub: number | null;
   forecast_investments_rub_net: number | null;
+  payment_base_rub: number | null;
+  payment_completion_pct: number | null;
+  payment_eligible: boolean;
+  payment_period_start_quarter: number;
+  payment_period_end_quarter: number;
+  payment_scope: string;
+  payable_investments_rub: number | null;
+  payable_investments_rub_net: number | null;
   updated_by: string | null;
   updated_at: string;
 }
@@ -274,6 +283,11 @@ export interface NetworkPlanTotals {
   forecast_investments_rub_net: number;
   fact_investments_rub: number;
   fact_investments_rub_net: number;
+  eac_rub: number;
+  completion_pct: number | null;
+  completed: boolean;
+  payable_investments_rub: number;
+  payable_investments_rub_net: number;
 }
 
 export interface NetworkPeriodGroup {
@@ -300,6 +314,11 @@ export interface NetworkPeriodGroupTotals {
   forecast_investments_rub_net: number;
   fact_investments_rub: number;
   fact_investments_rub_net: number;
+  eac_rub: number;
+  completion_pct: number | null;
+  completed: boolean;
+  payable_investments_rub: number;
+  payable_investments_rub_net: number;
 }
 
 export interface NetworkAnnualInvestmentRow {
@@ -312,6 +331,8 @@ export interface NetworkAnnualInvestmentRow {
   eligible: boolean;
   accrued_investments_rub: number;
   accrued_investments_rub_net: number;
+  fact_based_accrued_investments_rub: number;
+  fact_based_accrued_investments_rub_net: number;
   paid_investments_rub: number;
   paid_investments_rub_net: number;
   q4_forecast_investments_rub: number;
@@ -719,7 +740,6 @@ export interface NetworkPlanInput {
   brand_as: string | null;
   in_gross: boolean;
   plan_rub: number | null;
-  forecast_rub: number | null;
   investments_pct: number | null;
   entry_level: string;
   entry_unit: string;

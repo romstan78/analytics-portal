@@ -16,6 +16,7 @@ import type {
   NetworkForecastSaveRequest,
   NetworkForecastSaveResponse,
   NetworkKAMsResponse,
+	NetworkInvestmentPaymentModesSaveRequest,
   NetworkEntryLevel,
   NetworkEntryUnit,
   NetworkListResponse,
@@ -112,6 +113,14 @@ export const networkAPI = {
   savePlan: (id: number, data: NetworkPlanSaveRequest): Promise<NetworkPlanSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/plan`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkPlanSaveResponse>(r, 'Ошибка сохранения планов')),
+
+  saveInvestmentPaymentModes: (
+    id: number,
+    data: NetworkInvestmentPaymentModesSaveRequest,
+  ): Promise<{ message: string }> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/investment-payment-modes`, {
+      method: 'POST', body: JSON.stringify(data),
+    }).then(r => parseJSONResponse<{ message: string }>(r, 'Ошибка сохранения режима оплаты')),
 
   // Пересчёт черновика до сохранения. НДС, инвестиции и итоги считает только
   // бэкенд — интерфейс показывает то, что вернул этот запрос.
