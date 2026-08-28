@@ -43,6 +43,12 @@ yarn-debug.log*
 yarn-error.log*
 .npm/
 
+# 🧪 ВРЕМЕННЫЕ СТЕНДЫ
+# Отдельные точки входа, чтобы посмотреть компонент на подобранных данных без
+# входа в приложение. Живут ровно столько, сколько идёт правка вида.
+frontend/preview-*.html
+frontend/src/preview-*.tsx
+
 # 📁 UPLOADS & DATA
 upload/
 *.csv
