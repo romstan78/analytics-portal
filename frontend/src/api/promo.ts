@@ -54,8 +54,14 @@ async function refreshTokenOnce(): Promise<boolean> {
 
 // ─── Утилита: fetch с авторизацией и таймаутом ──────────────────────────────
 export async function fetchWithAuth(url: string, options: RequestInit = {}, timeout = 15000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  // Таймер на каждую попытку свой: один AbortController на запрос и его повтор
+  // после refresh означал, что на повтор оставалось столько времени, сколько
+  // не потратил первый, — вплоть до мгновенной отмены.
+  let controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(), timeout);
+  // Снимаем таймер в finally: при исключении (обрыв сети, отмена) он раньше
+  // оставался висеть и через 15 секунд отменял уже другой запрос.
+  const clearTimer = () => clearTimeout(timer);
 
   const doFetch = (): Promise<Response> => {
     const token = localStorage.getItem('token');
@@ -73,13 +79,28 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
     return fetch(url, { ...options, headers, signal: controller.signal });
   };
 
-  let res = await doFetch();
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch (error) {
+    clearTimer();
+    throw error;
+  }
 
   // При 401 пробуем обновить токен и повторить (с Promise Lock)
   if (res.status === 401) {
     const refreshed = await refreshTokenOnce();
     if (refreshed) {
-      res = await doFetch();
+      // Повтору — свой таймаут: обновление токена уже заняло часть исходного.
+      clearTimer();
+      controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        res = await doFetch();
+      } catch (error) {
+        clearTimer();
+        throw error;
+      }
     } else {
       // Рефреш не удался — полный logout и редирект. Открытый раздел
       // запоминаем до logout (он стирает имя пользователя), чтобы вошедший
@@ -87,6 +108,7 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
       rememberReturnPath(window.location.pathname + window.location.search, getUsername());
       logout();
       window.location.replace('/login');
+      clearTimer();
       // Заглушка с валидным JSON, чтобы не ломать вызывающий код при разборе
       return new Response('{}', {
         status: 401,
@@ -95,7 +117,7 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
     }
   }
 
-  clearTimeout(timer);
+  clearTimer();
   return res;
 }
 

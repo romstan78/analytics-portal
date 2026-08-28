@@ -1,9 +1,14 @@
 # Analytics Portal
 
 ## Стек
-- **Backend:** Go 1.22 + Gin + MSSQL (go-mssqldb) + squirrel + excelize + golang-jwt
-- **Frontend:** React 18 + TypeScript + Vite + MUI v5/v6 + Recharts + React Query + Vite
-- **Infra:** MSSQL (dbo.tbl_PromoActivities), Docker (docker-compose.yml), локальный сервер localhost:8080/5173
+- **Backend:** Go 1.25 + Gin + MSSQL (go-mssqldb) + squirrel + excelize + golang-jwt + goose
+- **Frontend:** React 19 + TypeScript 6 + Vite 8 + MUI 9 + Recharts 3 + React Query 5
+- **Infra:** MSSQL (dbo.tbl_PromoActivities), Docker (docker-compose.yml), локальный сервер localhost:8080/5173;
+  отдельный демо-контур — docker-compose.demo.yml, localhost:8081/5174
+
+> Версии сверяются с `backend/go.mod` и `frontend/package.json`. Если правите
+> стек — правьте и здесь: расхождение этого файла с фактом уже было предметом
+> аудита.
 
 ## Архитектура
 ```

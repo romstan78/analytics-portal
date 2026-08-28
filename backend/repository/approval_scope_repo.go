@@ -128,7 +128,8 @@ func GetPromoVisibilityScope(username, role string) ([]string, error) {
 	rows, err := config.DB.Query(
 		`SELECT kam FROM (
 		     SELECT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_Users
-		     WHERE username = ? AND kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
+		     WHERE username = ? AND deleted_at IS NULL
+		       AND kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
 		     UNION
 		     SELECT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_ApprovalScope
 		     WHERE username = ?

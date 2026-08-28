@@ -9,6 +9,8 @@ import (
 
 	"backend/config"
 	"backend/models"
+
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 // ─── Ошибки ─────────────────────────────────────────────────────────────────
@@ -101,14 +103,9 @@ func InsertNetwork(
 	hasAnnualInvestmentCumulative bool,
 	defaultEntryLevel, defaultEntryUnit string,
 ) (int, error) {
-	var exists int
-	if err := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_Networks WHERE name = ?", name).Scan(&exists); err != nil {
-		return 0, err
-	}
-	if exists > 0 {
-		return 0, ErrNetworkExists
-	}
-
+	// Уникальность имени проверяет индекс UQ_Networks_name, а не отдельный
+	// SELECT перед вставкой: между проверкой и вставкой помещается чужой INSERT,
+	// и такая гонка отдавала клиенту 500 вместо понятного «сеть уже есть».
 	var id int
 	err := config.DB.QueryRow(
 		`INSERT INTO dbo.tbl_Networks (
@@ -120,7 +117,23 @@ func InsertNetwork(
 		month1Pct, month2Pct, month3Pct,
 		hasAnnualInvestmentCumulative, defaultEntryLevel, defaultEntryUnit,
 	).Scan(&id)
+	if isUniqueViolation(err) {
+		return 0, ErrNetworkExists
+	}
 	return id, err
+}
+
+// isUniqueViolation распознаёт нарушение уникального индекса MSSQL:
+// 2627 — нарушение ограничения PRIMARY KEY/UNIQUE, 2601 — уникального индекса.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var mssqlErr mssql.Error
+	if errors.As(err, &mssqlErr) {
+		return mssqlErr.Number == 2627 || mssqlErr.Number == 2601
+	}
+	return false
 }
 
 // UpdateNetwork правит карточку сети с проверкой updated_at (optimistic locking).

@@ -133,7 +133,41 @@ func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
 	return where, args
 }
 
+// promoFilterColumns — колонки, по которым разрешено строить фильтры и
+// справочники. Идентификатор нельзя подставить плейсхолдером, поэтому в SQL
+// попадает только имя из этой карты. Сегодня все вызовы передают литералы, но
+// в продажах защита уже есть (salesSortColumns), и промо не должно быть
+// исключением: следующий вызов может прийти и из query-параметра.
+var promoFilterColumns = map[string]string{
+	"kam":            "kam",
+	"brand_as":       "brand_as",
+	"sku":            "sku",
+	"network_name":   "network_name",
+	"mechanics":      "mechanics",
+	"status":         "status",
+	"p.kam":          "p.kam",
+	"p.brand_as":     "p.brand_as",
+	"p.sku":          "p.sku",
+	"p.network_name": "p.network_name",
+	"p.mechanics":    "p.mechanics",
+	"p.status":       "p.status",
+	"m.channel":      "m.channel",
+}
+
+// promoFilterColumn возвращает безопасное имя колонки; неизвестное имя не
+// попадает в запрос вовсе.
+func promoFilterColumn(col string) (string, bool) {
+	safe, ok := promoFilterColumns[col]
+	return safe, ok
+}
+
 func AddFilter(col string, values []string) (string, []interface{}) {
+	safeCol, ok := promoFilterColumn(col)
+	if !ok {
+		config.Logger.Warn("promo_filter_column_rejected", "column", col)
+		return "", nil
+	}
+	col = safeCol
 	if len(values) == 0 {
 		return "", nil
 	}
@@ -188,7 +222,13 @@ func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, exclu
 	where += cond
 	args = append(args, channelArgs...)
 
-	query := "SELECT DISTINCT " + col + " FROM dbo.tbl_PromoActivities " + where + " AND " + col + " IS NOT NULL ORDER BY " + col
+	safeCol, ok := promoFilterColumn(col)
+	if !ok {
+		config.Logger.Warn("promo_filter_column_rejected", "column", col)
+		return []string{}
+	}
+	query := "SELECT DISTINCT " + safeCol + " FROM dbo.tbl_PromoActivities " + where +
+		" AND " + safeCol + " IS NOT NULL ORDER BY " + safeCol
 	return ExecDistinct(query, args)
 }
 
