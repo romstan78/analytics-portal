@@ -314,6 +314,8 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     staleTime: 30 * 60 * 1000,
   });
 
+  const [planSavedTick, setPlanSavedTick] = useState(0);
+
   const planQuery = useQuery({
     queryKey: ['networkPlan', selectedId, year],
     queryFn: () => networkAPI.getPlan(selectedId!, year),
@@ -350,6 +352,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     mutationFn: (request: NetworkPlanSaveRequest) => networkAPI.savePlan(selectedId!, request),
     onSuccess: () => {
       setToast({ text: 'Планы сохранены', severity: 'success' });
+      // Черновик сетки забывается по этому счётчику: свежие данные придут
+      // отдельным запросом, а несохранённого к этому моменту уже нет.
+      setPlanSavedTick((tick) => tick + 1);
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
     },
@@ -813,6 +818,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                       brandOptions={brandsQuery.data?.data ?? []}
                       canEdit={canEdit}
                       saving={savePlanMutation.isPending}
+                      savedTick={planSavedTick}
                       onSave={(request) => savePlanMutation.mutate(request)}
                       onCommentCell={(quarter, brand) => setCommentTarget({ quarter, brand })}
                       commentedCells={commentedCells}

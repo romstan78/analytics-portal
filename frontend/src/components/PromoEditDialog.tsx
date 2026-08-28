@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Button, Box, Typography, TextField, Paper, Dialog, DialogTitle,
+  Alert, Button, Box, Typography, TextField, Paper, Dialog, DialogTitle,
   DialogContent, DialogActions, IconButton, MenuItem, Tooltip, Chip,
   CircularProgress,
 } from '@mui/material';
 import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon, RestoreOutlined as RestoreIcon } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
+import { draftSavedAtLabel } from '../utils/formDraft';
 import type { CommentRow } from '../types/promo';
 import type { PromoFormValues } from '../hooks/usePromoForm';
 import type { FilterMeta } from '../hooks/usePromoFilters';
@@ -125,6 +126,10 @@ interface PromoEditDialogProps {
   investmentTypes: string[];
   role: string | null;
   readOnly?: boolean;
+  // Черновик, оставшийся от прерванной работы: null — предлагать нечего.
+  draftSavedAt?: number | null;
+  onRestoreDraft?: () => void;
+  onDismissDraft?: () => void;
 }
 
 export default function PromoEditDialog({
@@ -132,6 +137,7 @@ export default function PromoEditDialog({
   onSave, onDelete, saving,
   meta, allSkuOptions, investmentTypes,
   role, readOnly = false,
+  draftSavedAt = null, onRestoreDraft, onDismissDraft,
 }: PromoEditDialogProps) {
   const queryClient = useQueryClient();
   const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
@@ -260,6 +266,23 @@ export default function PromoEditDialog({
         
         {/* Уменьшили расстояние между тремя блоками (gap: 1.5 вместо 3) */}
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+
+          {/* Черновик прерванной работы. Значения не подставляются молча:
+              пользователь должен понимать, откуда они взялись, — поэтому
+              решение и время сохранения показаны явно. */}
+          {draftSavedAt != null && !isLocked && (
+            <Alert
+              severity="info"
+              action={
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button size="small" variant="contained" onClick={onRestoreDraft}>Восстановить</Button>
+                  <Button size="small" color="inherit" onClick={onDismissDraft}>Отклонить</Button>
+                </Box>
+              }
+            >
+              Остался несохранённый черновик от {draftSavedAtLabel(draftSavedAt)}. Восстановить введённые значения?
+            </Alert>
+          )}
   
           {(() => {
             const gridStyles = { 

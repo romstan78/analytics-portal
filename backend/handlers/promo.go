@@ -656,6 +656,20 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 	}
 }
 
+// respondExistingPromo отдаёт запись, созданную прошлой попыткой с тем же
+// ключом идемпотентности. Ответ повторяет обычный ответ на создание: для
+// клиента повтор ничем не отличается от первого удачного сохранения.
+func respondExistingPromo(c *gin.Context, promoID int) {
+	row, err := repository.FetchExistingRow(promoID)
+	if err != nil {
+		config.Logger.Error("promo_idempotency_refetch_failed", "error", err.Error(), "id", promoID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось прочитать созданное промо"})
+		return
+	}
+	config.Logger.Info("promo_create_repeated", "id", promoID)
+	c.JSON(http.StatusOK, gin.H{"message": "Created", "id": promoID, "data": services.DBRowToMap(row)})
+}
+
 func SavePromo(c *gin.Context) {
 	var input map[string]interface{}
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -791,6 +805,25 @@ func SavePromo(c *gin.Context) {
 	}
 
 	// INSERT
+	usernameForKey := fmt.Sprint(mustGet(c, "username"))
+	// Ключ идемпотентности: ответ на «Сохранить» мог не дойти, и повтор с тем
+	// же ключом обязан вернуть прежний результат, а не создать дубль. Нужен
+	// только вставке — обновление от повторов защищает optimistic locking.
+	idempotencyKey, hasIdempotencyKey := "", false
+	if raw, ok := input["idempotency_key"]; ok && raw != nil {
+		idempotencyKey, hasIdempotencyKey = repository.NormalizePromoIdempotencyKey(fmt.Sprint(raw))
+	}
+	if hasIdempotencyKey {
+		if existingID, found, err := repository.FindPromoByIdempotencyKey(idempotencyKey, usernameForKey); err != nil {
+			config.Logger.Error("promo_idempotency_lookup_failed", "error", err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось создать промо"})
+			return
+		} else if found {
+			respondExistingPromo(c, existingID)
+			return
+		}
+	}
+
 	dto := services.MapToDTO(input)
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
@@ -809,8 +842,20 @@ func SavePromo(c *gin.Context) {
 		row.Comments = fmt.Sprintf("[%s КАМ|%s]: %s", ts, fmt.Sprint(usernameVal), insertComments)
 	}
 
-	newID, err := repository.InsertPromo(row)
+	newID, err := repository.InsertPromoWithKey(row, idempotencyKey, usernameForKey)
 	if respondIfDedupInProgress(c, err) {
+		return
+	}
+	// Ключ занял одновременный повтор: запись уже создана им, своя вставка
+	// откатилась. Отдаём созданное — ровно то, чего ждал клиент.
+	if errors.Is(err, repository.ErrPromoIdempotencyKeyTaken) {
+		existingID, found, findErr := repository.FindPromoByIdempotencyKey(idempotencyKey, usernameForKey)
+		if findErr == nil && found {
+			respondExistingPromo(c, existingID)
+			return
+		}
+		config.Logger.Error("promo_idempotency_race_unresolved", "key", idempotencyKey)
+		c.JSON(http.StatusConflict, gin.H{"error": "Сохранение уже выполняется. Обновите страницу."})
 		return
 	}
 	if err == nil && insertComments != "" && insertComments != "<nil>" {

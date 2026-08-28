@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"backend/config"
+	"backend/models"
 )
 
 func withTestLogger(t *testing.T) {
@@ -20,15 +21,9 @@ func withTestLogger(t *testing.T) {
 
 func registerTestExportJob(t *testing.T, id, owner string) {
 	t.Helper()
-	salesExportJobStore.Lock()
-	salesExportJobStore.jobs[id] = &salesExportJob{
+	store := useTestExportJobs(t)
+	putTestExportJob(t, store, models.SalesExportJob{
 		ID: id, Owner: owner, Status: "running", CreatedAt: time.Now(),
-	}
-	salesExportJobStore.Unlock()
-	t.Cleanup(func() {
-		salesExportJobStore.Lock()
-		delete(salesExportJobStore.jobs, id)
-		salesExportJobStore.Unlock()
 	})
 }
 
@@ -54,7 +49,7 @@ func TestRecoverSalesExportJobKeepsProcessAlive(t *testing.T) {
 		t.Fatal("горутина выгрузки не завершилась")
 	}
 
-	job, ok := salesExportJobForUser(id, "tester")
+	job, ok := exportJobs.ForUser(id, "tester")
 	if !ok {
 		t.Fatal("задание пропало из реестра")
 	}
@@ -110,7 +105,7 @@ func TestRecoverSalesExportJobIgnoresSuccess(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("готовый файл удалён: %v", err)
 	}
-	job, _ := salesExportJobForUser(id, "tester")
+	job, _ := exportJobs.ForUser(id, "tester")
 	if job.Status != "running" {
 		t.Fatalf("статус задания = %q, менять его без паники не следует", job.Status)
 	}

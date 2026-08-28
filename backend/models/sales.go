@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // Структуры ответов интернет-продаж. Держатся в models, а не в хендлерах,
 // чтобы контракт API был описан в одном месте: из этих типов генерируется
 // frontend/src/types/api.generated.ts (см. backend/cmd/tsgen).
@@ -207,4 +209,21 @@ type SalesDashboardResponse struct {
 	NetworkTrends    []SalesDashboardSeriesPoint      `json:"networkTrends"`
 	ChannelTrends    []SalesDashboardSeriesPoint      `json:"channelTrends"`
 	NetworkBreakdown []SalesDashboardNetworkBreakdown `json:"networkBreakdown"`
+}
+
+// SalesExportJob — фоновая выгрузка интернет-продаж.
+//
+// Состояние хранится в БД (dbo.tbl_SalesExportJobs), поэтому задание переживает
+// перезапуск процесса и видно любой реплике. Владелец и путь к файлу наружу не
+// уходят: первый — чужая учётная запись, второй — устройство файловой системы.
+type SalesExportJob struct {
+	ID          string    `json:"id"`
+	Owner       string    `json:"-"`
+	Status      string    `json:"status"`
+	TotalRows   int       `json:"totalRows"`
+	FileName    string    `json:"fileName"`
+	FilePath    string    `json:"-"`
+	Error       string    `json:"error,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	CompletedAt time.Time `json:"completedAt,omitempty"`
 }

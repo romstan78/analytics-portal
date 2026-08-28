@@ -1005,7 +1005,17 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 	return affected, err
 }
 
+// InsertPromo создаёт промо без ключа идемпотентности.
 func InsertPromo(r *models.PromoRowDB) (int64, error) {
+	return InsertPromoWithKey(r, "", "")
+}
+
+// InsertPromoWithKey создаёт промо и в той же транзакции занимает ключ
+// идемпотентности. Одна транзакция здесь обязательна: иначе повтор,
+// пришедший до записи ключа, вставил бы второе промо. Занятый ключ
+// возвращается как ErrPromoIdempotencyKeyTaken — гонку выиграл сосед, и
+// вставка этого запроса откатывается целиком.
+func InsertPromoWithKey(r *models.PromoRowDB, idempotencyKey, username string) (int64, error) {
 	query := `INSERT INTO dbo.tbl_PromoActivities (
 		network_name, kam, brand, brand_as, sku,
 		year, month, quarter, mechanics, gtn_opex,
@@ -1068,7 +1078,7 @@ func InsertPromo(r *models.PromoRowDB) (int64, error) {
 
 	var newID int64
 	err := WithPromoWrite(func(tx *sql.Tx) error {
-		return tx.QueryRow(query,
+		if scanErr := tx.QueryRow(query,
 			r.NetworkName, r.KAM, r.Brand, r.BrandAS, r.SKU,
 			r.Year, r.Month, r.Quarter, r.Mechanics, r.GTNOpex,
 			r.BaselineUnits, r.BaselineRub,
@@ -1096,7 +1106,21 @@ func InsertPromo(r *models.PromoRowDB) (int64, error) {
 			r.ActualInvestmentsPctWoEcom, r.ActualROIWoEcom,
 			r.PlanVsFactRub, r.PlanVsFactInvestments,
 			r.TurnoverPerPoint, r.TurnoverPerPointPromo,
-		).Scan(&newID)
+		).Scan(&newID); scanErr != nil {
+			return scanErr
+		}
+		if idempotencyKey == "" {
+			return nil
+		}
+		_, insertErr := tx.Exec(
+			`INSERT INTO dbo.tbl_PromoIdempotency (idempotency_key, promo_id, username)
+			 VALUES (?, ?, ?)`,
+			idempotencyKey, newID, username,
+		)
+		if isUniqueViolation(insertErr) {
+			return ErrPromoIdempotencyKeyTaken
+		}
+		return insertErr
 	})
 	return newID, err
 }
