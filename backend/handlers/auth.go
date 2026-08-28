@@ -3,7 +3,11 @@ package handlers
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +51,47 @@ func WarmUpPasswordHashing() {
 	_ = dummyPasswordHash()
 }
 
+// loginLockoutPolicy — правила блокировки, настраиваемые окружением.
+//
+// LOGIN_LOCKOUT_MINUTES=0 выключает блокировку: она защищает от подбора с
+// множества адресов, который лимитом по адресу не ловится, но ценой того, что
+// зная чужой логин, вход в него можно временно закрыть. Окно короткое именно
+// поэтому.
+func loginLockoutPolicy() repository.LoginLockoutPolicy {
+	return repository.LoginLockoutPolicy{
+		Threshold: envInt("LOGIN_MAX_FAILED_ATTEMPTS", 10),
+		Window:    time.Duration(envInt("LOGIN_FAILED_WINDOW_MINUTES", 15)) * time.Minute,
+		Lockout:   time.Duration(envInt("LOGIN_LOCKOUT_MINUTES", 15)) * time.Minute,
+	}
+}
+
+func envInt(name string, fallback int) int {
+	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value >= 0 {
+			return value
+		}
+	}
+	return fallback
+}
+
+// respondLoginLocked отвечает на попытку входа в закрытую учётную запись.
+// Текст одинаков для существующего и несуществующего логина: счётчик ведётся
+// по введённой строке, а не по найденному пользователю, поэтому ответ не
+// подсказывает, есть ли такая учётная запись.
+func respondLoginLocked(c *gin.Context, until time.Time, now time.Time) {
+	remaining := until.Sub(now)
+	// Округляем вверх, но не завышаем: при остатке ровно в минуту так и
+	// сообщаем «через 1 мин.», а не «через 2».
+	minutes := int(math.Ceil(remaining.Minutes()))
+	if minutes < 1 {
+		minutes = 1
+	}
+	c.Header("Retry-After", strconv.Itoa(int(math.Ceil(remaining.Seconds()))))
+	c.JSON(http.StatusTooManyRequests, gin.H{
+		"error": fmt.Sprintf("Слишком много неудачных попыток входа. Повторите через %d мин.", minutes),
+	})
+}
+
 // passwordHashFor возвращает хеш для сравнения: настоящий у найденного
 // пользователя и фиктивный у ненайденного.
 func passwordHashFor(user *repository.UserRecord) []byte {
@@ -74,14 +119,53 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Сравнение выполняется всегда, в том числе когда пользователя нет:
-	// короткое замыкание по user == nil делало бы ответ на несуществующий
-	// логин заметно быстрее.
+	now := time.Now().UTC()
+	policy := loginLockoutPolicy()
+	attempts, err := repository.GetLoginAttemptState(req.Username)
+	if err != nil {
+		config.Logger.Error("login_attempts_read_failed", "error", err.Error(), "username", req.Username)
+		// Читать состояние не удалось — вход не закрываем: иначе сбой таблицы
+		// счётчиков останавливал бы работу всем сразу.
+		attempts = repository.LoginAttemptState{}
+	}
+
+	// Сравнение выполняется всегда, в том числе когда пользователя нет и когда
+	// вход уже закрыт: короткое замыкание делало бы ответ заметно быстрее, и по
+	// времени отклика проверялось бы существование учётной записи.
 	passwordMatches := bcrypt.CompareHashAndPassword(passwordHashFor(user), []byte(req.Password)) == nil
+
+	if attempts.Locked(now) {
+		config.Logger.Warn("login_locked", "username", req.Username, "ip", c.ClientIP(),
+			"locked_until", attempts.LockedUntil.Format(time.RFC3339))
+		respondLoginLocked(c, attempts.LockedUntil, now)
+		return
+	}
+
 	if user == nil || !passwordMatches {
-		config.Logger.Warn("login_failed", "username", req.Username, "ip", c.ClientIP())
+		next := repository.NextAttemptState(attempts, now, policy)
+		if err := repository.SaveLoginAttemptState(req.Username, next); err != nil {
+			config.Logger.Error("login_attempts_save_failed", "error", err.Error(), "username", req.Username)
+		}
+		config.Logger.Warn("login_failed", "username", req.Username, "ip", c.ClientIP(),
+			"failed_count", next.FailedCount)
+		if next.Locked(now) {
+			config.Logger.Warn("login_account_locked", "username", req.Username, "ip", c.ClientIP(),
+				"locked_until", next.LockedUntil.Format(time.RFC3339))
+			respondLoginLocked(c, next.LockedUntil, now)
+			return
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
 		return
+	}
+
+	// Удачный вход закрывает серию: копить неудачи дальше не с чем.
+	if err := repository.ResetLoginAttempts(req.Username); err != nil {
+		config.Logger.Error("login_attempts_reset_failed", "error", err.Error(), "username", req.Username)
+	}
+	// Обслуживание таблицы попыток — тем же приёмом, что и реестр refresh-сессий
+	// ниже: подбор по словарю иначе оставлял бы в ней строку на каждый логин.
+	if err := repository.DeleteExpiredLoginAttempts(24 * time.Hour); err != nil {
+		config.Logger.Error("login_attempts_cleanup_failed", "error", err.Error())
 	}
 
 	accessToken, err := config.GenerateAccessToken(req.Username, user.Role)
