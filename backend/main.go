@@ -94,6 +94,10 @@ func main() {
 	}
 	defer config.DB.Close()
 
+	// Файлы фоновых выгрузок от прошлого запуска: карта заданий после
+	// перезапуска пуста, и убрать их по ней уже невозможно.
+	handlers.CleanupSalesExportDir()
+
 	limiter := NewIPRateLimiter(100.0/60.0, 20) // 100 запросов в минуту, burst 20
 
 	if config.IsProduction() {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -20,6 +21,16 @@ import (
 const (
 	defaultSalesBackgroundExportMaxRows = 1000000
 	salesExportJobTTL                   = time.Hour
+	// salesExportJobStuckAfter — после этого срока задание, не отчитавшееся ни
+	// успехом, ни ошибкой, считается зависшим. Без такого потолка «running»
+	// пропускалось чисткой без ограничения по времени и оставалось в памяти
+	// навсегда: горутина уже мертва, а клиент опрашивает статус до перезапуска.
+	salesExportJobStuckAfter = 30 * time.Minute
+	// salesExportDirName — свой подкаталог во временной директории. Файлы
+	// выгрузок лежат отдельно от чужих temp-файлов, поэтому уборку при старте
+	// можно делать по каталогу, а не по карте заданий, которая после
+	// перезапуска пуста.
+	salesExportDirName = "analytics-portal-exports"
 )
 
 type salesExportJob struct {
@@ -52,11 +63,63 @@ func salesBackgroundExportMaxRows() int {
 	return defaultSalesBackgroundExportMaxRows
 }
 
+// salesExportDir — каталог готовых файлов выгрузки.
+// SALES_EXPORT_DIR позволяет вынести их на отдельный том: временная директория
+// контейнера живёт ровно до его пересоздания.
+func salesExportDir() string {
+	if raw := strings.TrimSpace(os.Getenv("SALES_EXPORT_DIR")); raw != "" {
+		return raw
+	}
+	return filepath.Join(os.TempDir(), salesExportDirName)
+}
+
+// CleanupSalesExportDir удаляет файлы выгрузок, оставшиеся от прошлого запуска.
+//
+// Состояние заданий живёт в памяти процесса, поэтому после перезапуска карта
+// пуста — а чистка по расписанию обходит именно её. Файлы предыдущего процесса
+// не удалил бы никто: за ними больше не числится ни одного задания. Вызывается
+// при старте, до приёма запросов.
+func CleanupSalesExportDir() {
+	dir := salesExportDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			config.Logger.Warn("sales_export_dir_scan_failed", "dir", dir, "error", err.Error())
+		}
+		return
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		config.Logger.Info("sales_export_orphans_removed", "dir", dir, "files", removed)
+	}
+}
+
 func cleanExpiredSalesExportJobs(now time.Time) {
 	salesExportJobStore.Lock()
 	defer salesExportJobStore.Unlock()
 	for id, job := range salesExportJobStore.jobs {
-		if job.Status == "queued" || job.Status == "running" || now.Sub(job.CreatedAt) < salesExportJobTTL {
+		if job.Status == "queued" || job.Status == "running" {
+			// Зависшее задание закрываем сами: горутина, которая перевела бы
+			// его в failed, уже не отчитается — процесс мог быть перезапущен
+			// или задание оборвалось иначе.
+			if now.Sub(job.CreatedAt) >= salesExportJobStuckAfter {
+				job.Status = "failed"
+				job.Error = "Выгрузка не завершилась вовремя"
+				job.CompletedAt = now
+				config.Logger.Warn("sales_background_export_stuck", "job_id", id,
+					"age_minutes", int(now.Sub(job.CreatedAt).Minutes()))
+			}
+			continue
+		}
+		if now.Sub(job.CreatedAt) < salesExportJobTTL {
 			continue
 		}
 		if job.FilePath != "" {
@@ -137,7 +200,12 @@ func runSalesExportJob(id string, filter repository.SalesFilter, columns []sales
 	}
 	defer f.Close()
 
-	tmp, err := os.CreateTemp("", "internet-sales-*.xlsx")
+	dir := salesExportDir()
+	if err = os.MkdirAll(dir, 0o750); err != nil {
+		failSalesExportJob(id, err)
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "internet-sales-*.xlsx")
 	if err != nil {
 		failSalesExportJob(id, err)
 		return
