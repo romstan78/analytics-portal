@@ -26,12 +26,27 @@ import (
 
 // IPRateLimiter — Token Bucket rate limiter на базе golang.org/x/time/rate.
 type IPRateLimiter struct {
-	limit rate.Limit
-	burst int
+	limit   rate.Limit
+	burst   int
+	message string
 }
 
 func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
-	return &IPRateLimiter{limit: r, burst: b}
+	return &IPRateLimiter{limit: r, burst: b, message: "Слишком много запросов. Попробуйте позже."}
+}
+
+// NewLoginRateLimiter — отдельный, куда более жёсткий лимит для входа.
+//
+// Общий лимит портала (100 запросов в минуту) для формы входа означает сотню
+// попыток пароля в минуту с одного адреса: за сутки это 144 000 паролей по
+// каждой учётной записи. Обычному человеку хватает нескольких попыток, поэтому
+// счёт здесь идёт на единицы: 5 попыток в минуту, всплеск — те же 5.
+func NewLoginRateLimiter() *IPRateLimiter {
+	return &IPRateLimiter{
+		limit:   5.0 / 60.0,
+		burst:   5,
+		message: "Слишком много попыток входа. Повторите через минуту.",
+	}
 }
 
 func (rl *IPRateLimiter) RateLimitMiddleware() gin.HandlerFunc {
@@ -68,7 +83,8 @@ func (rl *IPRateLimiter) RateLimitMiddleware() gin.HandlerFunc {
 		mu.Unlock()
 
 		if !v.limiter.Allow() {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Слишком много запросов. Попробуйте позже."})
+			c.Header("Retry-After", "60")
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": rl.message})
 			c.Abort()
 			return
 		}
@@ -94,7 +110,17 @@ func main() {
 	}
 	defer config.DB.Close()
 
+	// Файлы фоновых выгрузок от прошлого запуска: карта заданий после
+	// перезапуска пуста, и убрать их по ней уже невозможно.
+	handlers.CleanupSalesExportDir()
+	// Фиктивный хеш пароля — до первого запроса, иначе первый вход по
+	// несуществующему логину выдал бы себя временем ответа.
+	handlers.WarmUpPasswordHashing()
+
 	limiter := NewIPRateLimiter(100.0/60.0, 20) // 100 запросов в минуту, burst 20
+	// Вход считается отдельно от остального API: подбор пароля не должен
+	// прикрываться общим лимитом, рассчитанным на работу с интерфейсом.
+	loginLimiter := NewLoginRateLimiter()
 
 	if config.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -123,7 +149,7 @@ func main() {
 	// ─── Публичный роут (без авторизации) ────────────────────────────────
 	r.GET("/health", handlers.Liveness)
 	r.GET("/ready", handlers.Readiness)
-	r.POST("/api/auth/login", handlers.Login)
+	r.POST("/api/auth/login", loginLimiter.RateLimitMiddleware(), handlers.Login)
 	r.POST("/api/auth/refresh", handlers.RefreshToken)
 	r.POST("/api/auth/logout", handlers.Logout)
 
@@ -160,6 +186,8 @@ func main() {
 		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
 		api.GET("/promo/comments/:id", handlers.GetPromoCommentsHandler)
 		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
+		// Пересчёт черновика карточки: формулы живут только в services.
+		api.POST("/promo/calculate", handlers.PreviewPromoCalculations)
 
 		// Промо — запись. Промо ведёт КАМ, поэтому его роль здесь обязательна;
 		// кем именно можно править и заводить, решает область ведения в
@@ -170,9 +198,6 @@ func main() {
 		api.GET("/promo/approval-access", handlers.GetApprovalAccess)
 		api.GET("/promo/approvals", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovals)
 		api.GET("/promo/approval-filters", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalFilters)
-		api.GET("/promo/approval-kams", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalKAMs)
-		api.GET("/promo/approval-networks", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalNetworks)
-		api.GET("/promo/approval-brands", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalBrands)
 		api.POST("/promo/approve", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.ApprovePromo)
 		api.POST("/promo/approve/batch", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.BatchApprovePromo)
 

@@ -254,7 +254,7 @@ func buildSalesPivotFromRows(req SalesPivotRequest, analysisYear int, rows []rep
 		LeafRows:         leafRows,
 	}
 	if req.Unit == "евро" {
-		response.CurrencySource = "ЦБ РФ · средний официальный курс EUR за месяц"
+		response.CurrencySource = eurCurrencySource([]int{analysisYear - 1, analysisYear})
 	}
 	return response, nil
 }

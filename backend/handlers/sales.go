@@ -59,8 +59,42 @@ func respondSalesError(c *gin.Context, err error) {
 }
 
 // GetFilterOptions возвращает справочники панели фильтров.
+// salesFiltersCacheKey — ключ кэша справочников продаж.
+//
+// Область видимости в ключ не входит: продажи её не применяют (README,
+// «Интернет-продажи областью не ограничены»). Если это изменится, область
+// обязана попасть в ключ — иначе срез одного пользователя достанется другому,
+// как это уже учтено в справочниках промо.
+func salesFiltersCacheKey(filter repository.SalesFilter) (string, bool) {
+	raw, err := json.Marshal(filter)
+	if err != nil {
+		return "", false
+	}
+	return "sales-filters:" + string(raw), true
+}
+
 func GetFilterOptions(c *gin.Context) {
-	c.JSON(http.StatusOK, repository.SalesFilterOptions())
+	filter := salesFilterFromQuery(c)
+	// Поиск и сортировка на состав справочников не влияют: в ключе кэша они
+	// давали бы промах на каждое нажатие клавиши.
+	filter.Search, filter.SortField, filter.SortDirection = "", "", ""
+
+	// Панель фильтров строится восемью SELECT DISTINCT, и до сих пор они
+	// выполнялись при каждом её открытии. Кэш рядом уже был, но использовался
+	// только промо.
+	cacheKey, cacheable := salesFiltersCacheKey(filter)
+	if cacheable {
+		if cached, ok := config.FiltersCache.Get(cacheKey); ok {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
+	options := repository.SalesFilterOptions(filter)
+	if cacheable {
+		config.FiltersCache.Set(cacheKey, options, config.FilterCacheTTL)
+	}
+	c.JSON(http.StatusOK, options)
 }
 
 // GetSalesNetworkOptions возвращает сети, доступные при текущих фильтрах.

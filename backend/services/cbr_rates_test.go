@@ -28,7 +28,7 @@ func TestParseEURMonthlyRatesEmpty(t *testing.T) {
 func TestFillMissingMonthsCarriesLastRate(t *testing.T) {
 	// Год ещё не закрыт: котировок после августа нет, но суммы за эти месяцы
 	// в витрине есть, и пересчёт в евро обязан остаться возможным.
-	filled := fillMissingMonths(map[int]float64{1: 90, 2: 92, 8: 96})
+	filled, _ := fillMissingMonths(map[int]float64{1: 90, 2: 92, 8: 96})
 	for month := 1; month <= 12; month++ {
 		if filled[month] <= 0 {
 			t.Fatalf("месяц %d остался без курса: %#v", month, filled)
@@ -46,14 +46,41 @@ func TestFillMissingMonthsCarriesLastRate(t *testing.T) {
 }
 
 func TestFillMissingMonthsBackfillsLeadingGap(t *testing.T) {
-	filled := fillMissingMonths(map[int]float64{5: 95})
+	filled, _ := fillMissingMonths(map[int]float64{5: 95})
 	if filled[1] != 95 || filled[4] != 95 || filled[12] != 95 {
 		t.Fatalf("filled = %#v, ожидался единый курс за весь год", filled)
 	}
 }
 
 func TestFillMissingMonthsWithoutRatesStaysEmpty(t *testing.T) {
-	if filled := fillMissingMonths(map[int]float64{}); len(filled) != 0 {
+	if filled, _ := fillMissingMonths(map[int]float64{}); len(filled) != 0 {
 		t.Fatalf("filled = %#v, ожидалась пустая карта", filled)
+	}
+}
+
+// Достроенные месяцы перечисляются отдельно: витрина помечает ими подпись
+// источника курса, иначе перенесённый курс выглядит как официальный.
+func TestFillMissingMonthsReportsCarriedMonths(t *testing.T) {
+	_, carried := fillMissingMonths(map[int]float64{1: 90, 2: 92, 8: 96})
+	// Официальные котировки есть за 1, 2 и 8 — остальные девять перенесены.
+	want := []int{3, 4, 5, 6, 7, 9, 10, 11, 12}
+	if len(carried) != len(want) {
+		t.Fatalf("перенесённые месяцы = %v, ожидалось %v", carried, want)
+	}
+	for i, month := range want {
+		if carried[i] != month {
+			t.Fatalf("перенесённые месяцы = %v, ожидалось %v", carried, want)
+		}
+	}
+}
+
+func TestFillMissingMonthsReportsNothingWhenYearIsComplete(t *testing.T) {
+	full := map[int]float64{}
+	for month := 1; month <= 12; month++ {
+		full[month] = 90 + float64(month)
+	}
+	filled, carried := fillMissingMonths(full)
+	if len(filled) != 12 || len(carried) != 0 {
+		t.Fatalf("filled = %d, carried = %v — полный год ничего не достраивает", len(filled), carried)
 	}
 }

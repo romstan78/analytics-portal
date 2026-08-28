@@ -390,7 +390,10 @@ func BuildSalesDashboard(req SalesDashboardRequest) (*models.SalesDashboardRespo
 		Unit:         req.Unit,
 	}
 	if req.Unit == "евро" {
-		response.CurrencySource = "ЦБ РФ · средний официальный курс EUR за месяц"
+		// Подпись отмечает месяцы, курс за которые перенесён с предыдущего:
+		// пересчёт в евро не должен выглядеть одинаково достоверным там, где
+		// котировка настоящая, и там, где её ещё нет.
+		response.CurrencySource = eurCurrencySource([]int{analysisYear - 1, analysisYear})
 	}
 
 	summary, err := repository.SalesSummary(b.baseFilter)

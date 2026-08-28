@@ -115,9 +115,12 @@ func GetPromoKAMs(ids []int) ([]string, error) {
 // (tbl_ApprovalScope). Поэтому руководитель видит и свой портфель, и портфели
 // подчинённых, а рядовой КАМ — только свой.
 //
-// Администратор ограничению не подлежит. Пользователь без закрепления и без
-// области тоже: до появления этой связи промо видели все, и молча спрятать их
-// у неучтённой учётной записи хуже, чем оставить прежнее поведение.
+// Администратор ограничению не подлежит. Унаследованный согласующий без
+// закрепления и без области тоже: до появления этой связи промо видели все, и
+// молча спрятать их у неучтённой учётной записи хуже, чем оставить прежнее
+// поведение. У роли kam пустая область — не «ограничений нет», а незаполненное
+// закрепление: такая учётная запись получает ErrKAMNotLinked, иначе один
+// пропущенный шаг при заведении открывал бы весь портфель компании.
 func GetPromoVisibilityScope(username, role string) ([]string, error) {
 	if role == "admin" {
 		return nil, nil
@@ -125,7 +128,8 @@ func GetPromoVisibilityScope(username, role string) ([]string, error) {
 	rows, err := config.DB.Query(
 		`SELECT kam FROM (
 		     SELECT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_Users
-		     WHERE username = ? AND kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
+		     WHERE username = ? AND deleted_at IS NULL
+		       AND kam IS NOT NULL AND LTRIM(RTRIM(kam)) <> ''
 		     UNION
 		     SELECT LTRIM(RTRIM(kam)) AS kam FROM dbo.tbl_ApprovalScope
 		     WHERE username = ?
@@ -145,5 +149,11 @@ func GetPromoVisibilityScope(username, role string) ([]string, error) {
 		}
 		kams = append(kams, kam)
 	}
-	return kams, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := kamLinkRequired(role, len(kams) > 0); err != nil {
+		return nil, err
+	}
+	return kams, nil
 }

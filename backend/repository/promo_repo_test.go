@@ -238,3 +238,171 @@ func TestBuildPromoWhereWithoutScopeStaysOpen(t *testing.T) {
 		t.Fatalf("where = %q, без области ограничения быть не должно", where)
 	}
 }
+
+// Нечисловой ввод не должен превращаться в ноль: «year >= 0» выглядит как
+// применённый фильтр, а «month IN (0)» отдаёт пустую выдачу без объяснения.
+func TestBuildBaseWhereIgnoresNonNumericPeriod(t *testing.T) {
+	where, args := BuildBaseWhere(PromoFilterParams{
+		YearFromStr: "abc",
+		YearToStr:   "",
+		Months:      []string{"abc"},
+	})
+	if strings.Contains(where, "year >=") || strings.Contains(where, "month IN") {
+		t.Fatalf("where = %q, мусорный период не должен попадать в условие", where)
+	}
+	if len(args) != 0 {
+		t.Fatalf("args = %#v, ожидался пустой набор", args)
+	}
+}
+
+// Разбор периода обязан совпадать с витриной продаж: один и тот же запрос
+// не может фильтроваться в промо иначе, чем в интернет-продажах.
+func TestBuildBaseWhereMatchesSalesOnMixedMonths(t *testing.T) {
+	where, args := BuildBaseWhere(PromoFilterParams{
+		YearFromStr: "2026",
+		Months:      []string{"3", "abc", "5"},
+	})
+	if !strings.Contains(where, "month IN (?,?)") {
+		t.Fatalf("where = %q, ожидались только два разобранных месяца", where)
+	}
+	if len(args) != 3 || args[0] != 2026 || args[1] != 3 || args[2] != 5 {
+		t.Fatalf("args = %#v, ожидались год и месяцы 3 и 5", args)
+	}
+
+	salesWhere, salesArgs := BuildSalesWhere(SalesFilter{
+		YearFromStr: "2026",
+		Months:      []string{"3", "abc", "5"},
+	})
+	if strings.Count(salesWhere, "?") != strings.Count(where, "?") || len(salesArgs) != len(args) {
+		t.Fatalf("промо: %q %#v; продажи: %q %#v — разбор периода разошёлся",
+			where, args, salesWhere, salesArgs)
+	}
+}
+
+// Справочники согласования и сам список очереди обязаны читать период
+// одинаково: иначе мусорный год оставлял бы карточки в списке, но обнулял
+// выпадающие списки над ними.
+func TestBuildApprovalWhereIgnoresNonNumericPeriod(t *testing.T) {
+	where, args := buildApprovalWhere(ApprovalFilterParams{
+		Role:     "agreement1",
+		YearStr:  "abc",
+		MonthStr: "abc",
+	}, "")
+	// Ищем именно отдельные условия: «p.year = ?» встречается и внутри ветки
+	// по умолчанию «(p.year > ? OR (p.year = ? AND p.month >= ?))».
+	if strings.Contains(where, " AND p.year = ?") || strings.Contains(where, " AND p.month = ?") {
+		t.Fatalf("where = %q, мусорный период не должен попадать в условие", where)
+	}
+	// Год не разобран — очередь остаётся на поведении «без года»: будущее от
+	// текущего месяца, а не пустая выдача.
+	if !strings.Contains(where, "p.year > ?") || len(args) != 3 {
+		t.Fatalf("where = %q args = %#v, ожидалось условие по умолчанию", where, args)
+	}
+}
+
+func TestGetPromoHistoryQueryShapeMatchesFilters(t *testing.T) {
+	// Разбор года в истории тот же, что в BuildBaseWhere: мусор отбрасывается.
+	where, args := BuildBaseWhere(PromoFilterParams{YearFromStr: "abc", YearToStr: "2026"})
+	if strings.Contains(where, "year >= ?") {
+		t.Fatalf("where = %q, нечитаемый yearFrom не должен фильтровать", where)
+	}
+	if !strings.Contains(where, "year <= ?") || len(args) != 1 || args[0] != 2026 {
+		t.Fatalf("where = %q args = %#v, ожидался только верхний год", where, args)
+	}
+}
+
+// Идентификатор колонки нельзя подставить плейсхолдером, поэтому в ORDER BY
+// попадает только имя из белого списка, а всё остальное — порядок по умолчанию.
+func TestPromoRowsOrderByAllowsOnlyKnownColumns(t *testing.T) {
+	if got := promoRowsOrderBy(PromoFilterParams{SortField: "sku", SortDirection: "desc"}); got != " ORDER BY p.sku DESC, p.id ASC" {
+		t.Fatalf("order = %q", got)
+	}
+	// Тай-брейк по id обязателен: без него OFFSET/FETCH терял бы строки.
+	if got := promoRowsOrderBy(PromoFilterParams{SortField: "year"}); got != " ORDER BY p.[year] ASC, p.id ASC" {
+		t.Fatalf("order = %q", got)
+	}
+	for _, field := range []string{"", "unknown", "p.sku; DROP TABLE dbo.tbl_PromoActivities", "1=1"} {
+		if got := promoRowsOrderBy(PromoFilterParams{SortField: field}); got != promoRowOrder {
+			t.Fatalf("SortField=%q дал %q, ожидался порядок по умолчанию", field, got)
+		}
+	}
+}
+
+func TestEscapeLikePatternNeutralizesWildcards(t *testing.T) {
+	// «%» в запросе должен искать сам символ, а не «что угодно».
+	if got := escapeLikePattern("50%_[а]"); got != `50\%\_\[а]` {
+		t.Fatalf("escapeLikePattern = %q", got)
+	}
+}
+
+func TestBuildPromoWhereSearchesVisibleColumns(t *testing.T) {
+	where, args := buildPromoWhere(PromoFilterParams{Search: "Север"}, nil)
+	if !strings.Contains(where, "p.network_name LIKE ? ESCAPE") || !strings.Contains(where, "m.channel LIKE ?") {
+		t.Fatalf("where = %q, поиск должен идти по видимым колонкам", where)
+	}
+	if len(args) != 9 {
+		t.Fatalf("args = %#v, ожидался один шаблон на каждую колонку поиска", args)
+	}
+	if args[0] != "%Север%" {
+		t.Fatalf("args[0] = %v, ожидался шаблон с обрамляющими процентами", args[0])
+	}
+}
+
+func TestBuildPromoWhereIgnoresBlankSearch(t *testing.T) {
+	where, args := buildPromoWhere(PromoFilterParams{Search: "   "}, nil)
+	if strings.Contains(where, "LIKE") || len(args) != 0 {
+		t.Fatalf("where = %q args = %#v, пустой поиск не должен попадать в условие", where, args)
+	}
+}
+
+// Канал живёт в справочнике механик, а не в строке промо, поэтому сужает
+// выборку подзапросом. Без него выбор канала не влиял ни на один другой список.
+func TestChannelConditionLimitsByMechanics(t *testing.T) {
+	cond, args := channelCondition([]string{"онлайн", "оффлайн"})
+	if !strings.Contains(cond, "mechanics IN (SELECT mechanics FROM dbo.tbl_MechanicsChannelMapping") {
+		t.Fatalf("условие = %q", cond)
+	}
+	if strings.Count(cond, "?") != 2 || len(args) != 2 {
+		t.Fatalf("условие = %q args = %#v, ожидались два канала", cond, args)
+	}
+}
+
+func TestChannelConditionIgnoresEmptyInput(t *testing.T) {
+	for _, channels := range [][]string{nil, {}, {""}, {"  ", ""}} {
+		cond, args := channelCondition(channels)
+		if cond != "" || len(args) != 0 {
+			t.Fatalf("channelCondition(%#v) = %q %#v, пустой выбор ничего не ограничивает", channels, cond, args)
+		}
+	}
+}
+
+// AddFilter собирает IN-условие и отбрасывает пустые значения: пустая строка в
+// списке означала бы «показать записи без значения», а не «не фильтровать».
+func TestAddFilterSkipsEmptyValues(t *testing.T) {
+	cond, args := AddFilter("p.kam", []string{"Ершов Максим", "", "Жукова Ольга"})
+	if cond != " AND p.kam IN (?,?)" {
+		t.Fatalf("условие = %q", cond)
+	}
+	if len(args) != 2 || args[0] != "Ершов Максим" || args[1] != "Жукова Ольга" {
+		t.Fatalf("args = %#v", args)
+	}
+
+	for _, values := range [][]string{nil, {}, {""}, {"", ""}} {
+		if cond, args := AddFilter("p.kam", values); cond != "" || len(args) != 0 {
+			t.Fatalf("AddFilter(%#v) = %q %#v, ожидалось пустое условие", values, cond, args)
+		}
+	}
+}
+
+// Пустое имя КАМа означает «владельца нет»: в базу должен уйти NULL, иначе сеть
+// получила бы владельца с пустым именем и пропала из фильтров.
+func TestNullIfEmpty(t *testing.T) {
+	if got := nullIfEmpty("Ершов Максим"); got != "Ершов Максим" {
+		t.Fatalf("nullIfEmpty(имя) = %v", got)
+	}
+	for _, blank := range []string{"", "   ", "\t"} {
+		if got := nullIfEmpty(blank); got != nil {
+			t.Fatalf("nullIfEmpty(%q) = %v, ожидался NULL", blank, got)
+		}
+	}
+}

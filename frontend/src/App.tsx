@@ -1,11 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { ThemeProvider, CssBaseline, Box, Typography, Button, CircularProgress } from '@mui/material';
 import { ArrowBack as ArrowBackIcon } from '@mui/icons-material';
 import { modernTheme } from './theme';
 import ErrorBoundary from './components/ErrorBoundary';
 import { getToken, logout } from './api/auth';
+import { forgetReturnPath, takeReturnPath } from './utils/returnPath';
 import type { SessionData } from './api/auth';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -53,13 +54,21 @@ interface AuthState {
 export default function App() {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const navigate = useNavigate();
   const [auth, setAuth] = useState<AuthState>(() => ({
     token: getToken(),
     username: localStorage.getItem('username'),
     role: localStorage.getItem('role'),
   }));
 
+  // Куда уйти сразу после входа: на прерванный истечением сессии раздел, а
+  // иначе на главную. Цель держим в ref и переходим уже после рендера: вызов
+  // navigate прямо из обработчика применяется позже, чем монтируются маршруты,
+  // и catch-all успевал увести на главную с адреса /login, отменив возврат.
+  const pendingReturn = useRef<string | null>(null);
+
   const handleLogin = (data: SessionData) => {
+    pendingReturn.current = takeReturnPath(data.username ?? null) ?? '/';
     setAuth({
       token: data.token ?? null,
       username: data.username ?? null,
@@ -68,9 +77,19 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    forgetReturnPath();
     logout();
     setAuth({ token: null, username: null, role: null });
   };
+
+  useEffect(() => {
+    const target = pendingReturn.current;
+    if (target === null) return;
+    // Цель забываем сразу: переход одноразовый, дальше пользователь ходит сам.
+    pendingReturn.current = null;
+    // Адрес заменяем: «назад» не должно возвращать на форму входа.
+    navigate(target, { replace: true });
+  }, [auth.token, navigate]);
 
   // Слушаем разлогин: и кнопкой, и принудительный из api/promo.ts — logout()
   // в обоих случаях шлёт это событие.
@@ -103,6 +122,17 @@ export default function App() {
     );
   }
 
+  // Пока возврат не состоялся, маршруты не монтируем: иначе адрес /login
+  // попал бы в catch-all и увёл бы на главную вместо прерванного раздела.
+  if (pendingReturn.current !== null) {
+    return (
+      <ThemeProvider theme={modernTheme}>
+        <CssBaseline />
+        <PageLoader />
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider theme={modernTheme}>
       <CssBaseline />
@@ -119,6 +149,11 @@ export default function App() {
               <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
               <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
               <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
+              {/* Форма входа живёт вне Routes, поэтому адрес /login маршрута не
+                  имеет: после истечения сессии fetchWithAuth уводит туда
+                  (api/promo.ts), и без этого правила вошедший заново оставался
+                  бы на пустом экране. Заодно закрывает старые ссылки. */}
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </ErrorBoundary>

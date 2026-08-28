@@ -1,4 +1,5 @@
-import { refreshToken, logout } from './auth';
+import { refreshToken, logout, getUsername } from './auth';
+import { rememberReturnPath } from '../utils/returnPath';
 import type {
   ApprovalFiltersResponse,
   PromoApprovalAccessResponse,
@@ -14,6 +15,7 @@ import type {
   PromoDashboardResponse,
   PromoDataResponse,
   PromoHistoryResponse,
+  PromoCalculatedFields,
   PromoRow,
   PromoSaveResponse,
   SKUInfoResponse,
@@ -52,8 +54,14 @@ async function refreshTokenOnce(): Promise<boolean> {
 
 // ─── Утилита: fetch с авторизацией и таймаутом ──────────────────────────────
 export async function fetchWithAuth(url: string, options: RequestInit = {}, timeout = 15000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  // Таймер на каждую попытку свой: один AbortController на запрос и его повтор
+  // после refresh означал, что на повтор оставалось столько времени, сколько
+  // не потратил первый, — вплоть до мгновенной отмены.
+  let controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(), timeout);
+  // Снимаем таймер в finally: при исключении (обрыв сети, отмена) он раньше
+  // оставался висеть и через 15 секунд отменял уже другой запрос.
+  const clearTimer = () => clearTimeout(timer);
 
   const doFetch = (): Promise<Response> => {
     const token = localStorage.getItem('token');
@@ -71,17 +79,36 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
     return fetch(url, { ...options, headers, signal: controller.signal });
   };
 
-  let res = await doFetch();
+  let res: Response;
+  try {
+    res = await doFetch();
+  } catch (error) {
+    clearTimer();
+    throw error;
+  }
 
   // При 401 пробуем обновить токен и повторить (с Promise Lock)
   if (res.status === 401) {
     const refreshed = await refreshTokenOnce();
     if (refreshed) {
-      res = await doFetch();
+      // Повтору — свой таймаут: обновление токена уже заняло часть исходного.
+      clearTimer();
+      controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        res = await doFetch();
+      } catch (error) {
+        clearTimer();
+        throw error;
+      }
     } else {
-      // Рефреш не удался — полный logout и редирект
+      // Рефреш не удался — полный logout и редирект. Открытый раздел
+      // запоминаем до logout (он стирает имя пользователя), чтобы вошедший
+      // заново вернулся туда, где его прервали.
+      rememberReturnPath(window.location.pathname + window.location.search, getUsername());
       logout();
       window.location.replace('/login');
+      clearTimer();
       // Заглушка с валидным JSON, чтобы не ломать вызывающий код при разборе
       return new Response('{}', {
         status: 401,
@@ -90,7 +117,7 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, time
     }
   }
 
-  clearTimeout(timer);
+  clearTimer();
   return res;
 }
 
@@ -154,13 +181,17 @@ export interface ApprovalItemVersion {
 
 // ─── API: Промо ────────────────────────────────────────────────────────────
 export const promoAPI = {
-  // Справочники фильтров
+  // Справочники фильтров. Статус ответа проверяется: без этого отказ по области
+  // видимости приходил бы как успешный пустой справочник, и списки молча
+  // пустели вместо объяснения причины.
   getFilters: (filters: Record<string, unknown> = {}): Promise<FilterOptions> =>
-    fetchWithAuth(`${API_BASE}/api/promo/filters?${buildParams(filters)}`).then(readJSON<FilterOptions>),
+    fetchWithAuth(`${API_BASE}/api/promo/filters?${buildParams(filters)}`)
+      .then(r => parseJSONResponse<FilterOptions>(r, 'Ошибка загрузки справочников')),
 
   // Данные промо
   getData: (filters: Record<string, unknown> = {}): Promise<PromoDataResponse> =>
-    fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`).then(readJSON<PromoDataResponse>),
+    fetchWithAuth(`${API_BASE}/api/promo/data?all=true&${buildParams(filters)}`)
+      .then(r => parseJSONResponse<PromoDataResponse>(r, 'Ошибка загрузки промо')),
 
   // Агрегированная витрина план-факт, эффективности и календаря.
   getDashboard: (filters: Record<string, unknown> = {}): Promise<PromoDashboardResponse> =>
@@ -173,6 +204,14 @@ export const promoAPI = {
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       return data;
     }),
+
+  // Пересчёт черновика карточки. Формулы живут только на сервере
+  // (services/promo_service.go); браузер получает готовые числа.
+  calculate: (draft: Record<string, unknown>): Promise<PromoCalculatedFields> =>
+    fetchWithAuth(`${API_BASE}/api/promo/calculate`, {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    }).then(r => parseJSONResponse<PromoCalculatedFields>(r, 'Не удалось пересчитать показатели')),
 
   // История промо по SKU/сети/механике
   getHistory: (params: Record<string, string> = {}): Promise<PromoHistoryResponse> =>
@@ -245,17 +284,7 @@ export const promoAPI = {
 
   // ─── Согласование ──────────────────────────────────────────────────────
 
-  // Список KAM'ов с промо на согласовании
-  getApprovalKAMs: (approvalRole?: string): Promise<StringListResponse> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-kams?approval_role=${encodeURIComponent(approvalRole || '')}`).then(readJSON<StringListResponse>),
-
-  // Сети для выбранного KAM (в согласовании)
-  getApprovalNetworks: (kam: string, approvalRole?: string): Promise<StringListResponse> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-networks?kam=${encodeURIComponent(kam)}&approval_role=${encodeURIComponent(approvalRole || '')}`).then(readJSON<StringListResponse>),
-
-  // Бренды для KAM + сети (в согласовании)
-  getApprovalBrands: (kam: string, network = '', approvalRole?: string): Promise<StringListResponse> =>
-    fetchWithAuth(`${API_BASE}/api/promo/approval-brands?kam=${encodeURIComponent(kam)}&network_name=${encodeURIComponent(network)}&approval_role=${encodeURIComponent(approvalRole || '')}`).then(readJSON<StringListResponse>),
+  // Справочники очереди согласования — один запрос: getApprovalFilters ниже.
 
   // Список промо на согласование
   getApprovals: (params: ApprovalParams & { page?: number; pageSize?: number } = {}): Promise<ApprovalsResponse> => {
@@ -322,8 +351,11 @@ export const promoAPI = {
 
 // ─── API: Интернет-продажи ─────────────────────────────────────────────────
 export const salesAPI = {
-  getFilters: (): Promise<SalesFilterOptions> =>
-    fetchWithAuth(`${API_BASE}/api/filters`).then(readJSON<SalesFilterOptions>),
+  // Справочники панели. Фильтры передаются, чтобы списки сужались текущим
+  // выбором: каждый список считается без своего собственного фильтра, поэтому
+  // переключиться внутри него по-прежнему можно.
+  getFilters: (filters: Record<string, unknown> = {}): Promise<SalesFilterOptions> =>
+    fetchWithAuth(`${API_BASE}/api/filters?${buildParams(filters)}`).then(readJSON<SalesFilterOptions>),
 
   getData: (filters: Record<string, unknown> = {}): Promise<SalesDataResponse> =>
     fetchWithAuth(`${API_BASE}/api/data?${buildParams(filters)}`).then(readJSON<SalesDataResponse>),

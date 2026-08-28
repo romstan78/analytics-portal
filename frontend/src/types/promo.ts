@@ -70,6 +70,9 @@ export interface PromoFormData {
 
 export interface PromoDataResponse {
   data: PromoRow[];
+  // Размер всей выборки. Приходит только в постраничном режиме: при all=true
+  // строки и так пришли целиком.
+  totalRows?: number;
 }
 
 export interface PromoHistoryResponse {
@@ -143,4 +146,25 @@ export interface ApprovalFiltersResponse {
   brands: string[];
   mechanics: string[];
   kams: string[];
+}
+
+// Ответ POST /api/promo/calculate — рассчитанные сервером показатели карточки.
+// Поля повторяют services.CalculatedFields (backend/services/promo_service.go).
+export interface PromoCalculatedFields {
+  plan_promo_rub: number;
+  plan_promo_uplift_units: number;
+  plan_promo_uplift_rub: number;
+  plan_promo_uplift_pct_units: number;
+  plan_promo_uplift_pct_rub: number;
+  plan_investments_pct: number;
+  plan_roi: number;
+  baseline_rub: number;
+  actual_promo_rub: number;
+  actual_promo_uplift_units: number;
+  actual_promo_uplift_rub: number;
+  actual_investments_pct: number;
+  actual_roi: number;
+  net_promo_uplift_rub: number;
+  net_promo_uplift_pct: number;
+  gm: number;
 }

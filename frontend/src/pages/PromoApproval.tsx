@@ -151,17 +151,23 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
 
-  // Загрузка справочников
+  // Загрузка справочников.
+  //
+  // Списки строятся по текущему выбору (draft*), а не по применённым фильтрам:
+  // сузить их только после «Применить» — значит заставить выбирать сеть из
+  // полного списка, половина которого к выбранному КАМу отношения не имеет.
+  // Сами данные по-прежнему грузятся по applied*, поэтому таблица не дёргается
+  // на каждый щелчок в фильтре.
   useEffect(() => {
     promoAPI.getApprovalFilters({
       approval_role: requestApprovalRole,
-      approval_status: appliedStatus,
-      kam: appliedKam,
-      network_name: appliedNetwork,
-      brand: appliedBrand,
-      mechanics: appliedMechanics,
-      year: appliedYear,
-      month: appliedMonth,
+      approval_status: draftStatus,
+      kam: draftKam,
+      network_name: draftNetwork,
+      brand: draftBrand,
+      mechanics: draftMechanics,
+      year: draftYear,
+      month: draftMonth,
     })
       .then(data => {
         setKams(data.kams || []);
@@ -170,7 +176,7 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
         setMechanicsOptions(data.mechanics || []);
       })
       .catch(err => console.error('Ошибка справочников:', err));
-  }, [requestApprovalRole, appliedStatus, appliedKam, appliedNetwork, appliedBrand, appliedMechanics, appliedYear, appliedMonth, refreshFilters]);
+  }, [requestApprovalRole, draftStatus, draftKam, draftNetwork, draftBrand, draftMechanics, draftYear, draftMonth, refreshFilters]);
 
   // Загрузка данных. Ключ содержит все применённые фильтры и страницу,
   // поэтому устаревшие ответы отбрасываются самим React Query.

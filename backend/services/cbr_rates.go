@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,8 +31,10 @@ type cbrCurrencyResponse struct {
 }
 
 type eurRateCacheEntry struct {
-	Rates     map[int]float64
-	ExpiresAt time.Time
+	Rates map[int]float64
+	// CarriedMonths — месяцы, курс за которые перенесён с соседнего.
+	CarriedMonths []int
+	ExpiresAt     time.Time
 }
 
 var eurRateCache = struct {
@@ -91,12 +94,16 @@ func parseEURMonthlyRates(reader io.Reader) (map[int]float64, error) {
 // не хватает котировки за один месяц. Пропуск закрывается последним известным
 // курсом; когда ЦБ опубликует настоящий, он заменит перенесённый при
 // ближайшем обновлении кеша.
-func fillMissingMonths(rates map[int]float64) map[int]float64 {
+func fillMissingMonths(rates map[int]float64) (map[int]float64, []int) {
+	carriedMonths := []int{}
 	filled := make(map[int]float64, 12)
 	carried := 0.0
 	for month := 1; month <= 12; month++ {
 		if rate, ok := rates[month]; ok && rate > 0 {
 			carried = rate
+		} else if carried > 0 {
+			// Курса за этот месяц ЦБ не публиковал — он перенесён с предыдущего.
+			carriedMonths = append(carriedMonths, month)
 		}
 		if carried > 0 {
 			filled[month] = carried
@@ -115,10 +122,12 @@ func fillMissingMonths(rates map[int]float64) map[int]float64 {
 		for month := 1; month <= 12; month++ {
 			if filled[month] <= 0 {
 				filled[month] = first
+				carriedMonths = append(carriedMonths, month)
 			}
 		}
 	}
-	return filled
+	sort.Ints(carriedMonths)
+	return filled, carriedMonths
 }
 
 // LoadEURMonthlyRates возвращает средние месячные курсы EUR за год.
@@ -162,9 +171,57 @@ func LoadEURMonthlyRates(year int) (map[int]float64, error) {
 	if err != nil {
 		return nil, err
 	}
-	rates = fillMissingMonths(rates)
+	rates, carriedMonths := fillMissingMonths(rates)
 	eurRateCache.Lock()
-	eurRateCache.Items[year] = eurRateCacheEntry{Rates: rates, ExpiresAt: time.Now().Add(6 * time.Hour)}
+	eurRateCache.Items[year] = eurRateCacheEntry{
+		Rates: rates, CarriedMonths: carriedMonths, ExpiresAt: time.Now().Add(6 * time.Hour),
+	}
 	eurRateCache.Unlock()
 	return rates, nil
+}
+
+// EURCarriedMonths — месяцы, курс за которые перенесён с соседнего, потому что
+// ЦБ его ещё не публиковал. Пустой срез означает, что весь год закрыт
+// официальными котировками.
+func EURCarriedMonths(year int) []int {
+	eurRateCache.Lock()
+	defer eurRateCache.Unlock()
+	if entry, ok := eurRateCache.Items[year]; ok {
+		return entry.CarriedMonths
+	}
+	return nil
+}
+
+// eurCurrencySource описывает источник курса для ответа витрины.
+//
+// Месяцы без официальной котировки закрываются перенесённым курсом
+// (fillMissingMonths), и в ответе это должно быть видно: иначе пересчёт в евро
+// выглядит одинаково достоверным и там, где курс настоящий, и там, где он
+// подставлен.
+func eurCurrencySource(years []int) string {
+	source := "ЦБ РФ · средний официальный курс EUR за месяц"
+	carried := map[int][]int{}
+	total := 0
+	for _, year := range years {
+		if months := EURCarriedMonths(year); len(months) > 0 {
+			carried[year] = months
+			total += len(months)
+		}
+	}
+	if total == 0 {
+		return source
+	}
+	parts := make([]string, 0, len(carried))
+	for _, year := range years {
+		months, ok := carried[year]
+		if !ok {
+			continue
+		}
+		labels := make([]string, 0, len(months))
+		for _, month := range months {
+			labels = append(labels, strconv.Itoa(month))
+		}
+		parts = append(parts, fmt.Sprintf("%d: %s", year, strings.Join(labels, ", ")))
+	}
+	return source + "; курс перенесён с предыдущего месяца (" + strings.Join(parts, "; ") + ")"
 }

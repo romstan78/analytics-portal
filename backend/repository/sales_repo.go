@@ -283,8 +283,8 @@ func placeholders(n int) string {
 
 // salesDistinct возвращает непустые значения колонки; ошибка запроса даёт
 // пустой список — панель фильтров должна открываться и без части справочников.
-func salesDistinct(query string) []string {
-	rows, err := config.DB.Query(query)
+func salesDistinct(query string, args []interface{}) []string {
+	rows, err := config.DB.Query(query, args...)
 	if err != nil {
 		config.Logger.Error("sales_distinct_failed", "error", err.Error())
 		return []string{}
@@ -302,27 +302,52 @@ func salesDistinct(query string) []string {
 }
 
 // SalesFilterOptions возвращает справочники для панели фильтров.
-func SalesFilterOptions() models.SalesFilterOptions {
-	distinctOf := func(expr string) string {
-		return "SELECT DISTINCT " + expr + " FROM " + salesTable +
-			" WHERE " + expr + " IS NOT NULL ORDER BY " + expr
+// SalesFilterOptions собирает справочники панели фильтров под текущий выбор.
+//
+// Каждый список сужается остальными фильтрами, но не своим собственным: иначе,
+// выбрав бренд, пользователь увидел бы в списке брендов только его и не смог бы
+// переключиться. Раньше сужался лишь список сетей, а бренд, SKU и КАМ
+// приходили глобальным SELECT DISTINCT по всей таблице и не реагировали ни на
+// один фильтр.
+func SalesFilterOptions(f SalesFilter) models.SalesFilterOptions {
+	// distinctOf строит запрос по срезу «все фильтры, кроме собственного».
+	distinctOf := func(expr string, without func(SalesFilter) SalesFilter) (string, []interface{}) {
+		where, args := BuildSalesWhere(without(f))
+		return "SELECT DISTINCT " + expr + " FROM " + salesTable + " n" + where +
+			" AND " + expr + " IS NOT NULL ORDER BY " + expr, args
 	}
+
+	withoutYears := func(f SalesFilter) SalesFilter {
+		f.YearFromStr, f.YearToStr, f.Months, f.Quarters = "", "", nil, nil
+		return f
+	}
+	withoutBrands := func(f SalesFilter) SalesFilter { f.BrandNames, f.BrandExact = nil, ""; return f }
+	withoutProducts := func(f SalesFilter) SalesFilter { f.ProductNames, f.ProductExact = nil, ""; return f }
+	withoutNetworks := func(f SalesFilter) SalesFilter { f.NetworkNames, f.NetworkExact = nil, ""; return f }
+	withoutUnRubs := func(f SalesFilter) SalesFilter { f.UnRubs = nil; return f }
+	withoutSegments := func(f SalesFilter) SalesFilter { f.Segments = nil; return f }
+	withoutChannels := func(f SalesFilter) SalesFilter { f.Channels = nil; return f }
+	withoutKAMs := func(f SalesFilter) SalesFilter { f.KAMs = nil; return f }
+
+	// КАМы берутся из справочника сетей и сужаются до тех, чьи сети
+	// действительно встречаются в текущем срезе продаж: иначе фильтр предлагал
+	// бы имена, по которым ничего не находится.
+	kamWhere, kamArgs := BuildSalesWhere(withoutKAMs(f))
 	options := models.SalesFilterOptions{
-		// КАМы берутся из справочника сетей и сужаются до тех, чьи сети
-		// действительно встречаются в продажах: иначе фильтр предлагал бы
-		// имена, по которым ничего не находится.
 		KAM: salesDistinct(`SELECT DISTINCT g.kam FROM dbo.tbl_NetworkGeoMapping g
 			WHERE g.kam IS NOT NULL AND LTRIM(RTRIM(g.kam)) <> ''
-			  AND EXISTS (SELECT 1 FROM ` + salesTable + ` n WHERE n.networkName = g.network_name)
-			ORDER BY g.kam`),
-		Year:        salesDistinct(distinctOf("CONVERT(varchar(4), [year])")),
-		BrandName:   salesDistinct(distinctOf("brandName")),
-		ProductName: salesDistinct(distinctOf("productName")),
-		NetworkName: salesDistinct(distinctOf("networkName")),
-		UnRub:       salesDistinct(distinctOf("un_rub")),
-		Segment:     salesDistinct(distinctOf("segment")),
-		Channel:     salesDistinct(distinctOf("channel")),
+			  AND EXISTS (SELECT 1 FROM `+salesTable+` n`+kamWhere+
+			` AND n.networkName = g.network_name)
+			ORDER BY g.kam`, kamArgs),
 	}
+	options.Year = salesDistinct(distinctOf("CONVERT(varchar(4), n.[year])", withoutYears))
+	options.BrandName = salesDistinct(distinctOf("n.brandName", withoutBrands))
+	options.ProductName = salesDistinct(distinctOf("n.productName", withoutProducts))
+	options.NetworkName = salesDistinct(distinctOf("n.networkName", withoutNetworks))
+	options.UnRub = salesDistinct(distinctOf("n.un_rub", withoutUnRubs))
+	options.Segment = salesDistinct(distinctOf("n.segment", withoutSegments))
+	options.Channel = salesDistinct(distinctOf("n.channel", withoutChannels))
+
 	options.SegmentChannelMap, options.ChannelSegmentMap = salesChannelSegmentMaps()
 	return options
 }

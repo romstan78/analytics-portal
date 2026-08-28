@@ -24,5 +24,22 @@ func Readiness(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	// Состояние пула отдаётся вместе с готовностью: исчерпание видно только по
+	// нему. wait_count — сколько раз запрос ждал свободного соединения; растущее
+	// значение и есть тот самый «пул исчерпан», который иначе проявляется лишь
+	// задержками на стороне пользователя.
+	stats := config.DB.Stats()
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ready",
+		"db_pool": gin.H{
+			"max_open":            stats.MaxOpenConnections,
+			"open":                stats.OpenConnections,
+			"in_use":              stats.InUse,
+			"idle":                stats.Idle,
+			"wait_count":          stats.WaitCount,
+			"wait_duration_ms":    stats.WaitDuration.Milliseconds(),
+			"max_idle_closed":     stats.MaxIdleClosed,
+			"max_lifetime_closed": stats.MaxLifetimeClosed,
+		},
+	})
 }

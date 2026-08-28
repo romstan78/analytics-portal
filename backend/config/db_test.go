@@ -1,6 +1,8 @@
 package config
 
 import (
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -45,5 +47,33 @@ func TestEnvEnabled(t *testing.T) {
 	t.Setenv("FEATURE_FLAG", "false")
 	if envEnabled("FEATURE_FLAG") {
 		t.Fatal("false не должен включать флаг")
+	}
+}
+
+// Настройки пула читаются из окружения; мусор и неположительные значения
+// игнорируются — пул с нулём соединений остановил бы приложение молча.
+func TestEnvPositiveInt(t *testing.T) {
+	if Logger == nil {
+		Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	tests := []struct {
+		name  string
+		value string
+		want  int
+	}{
+		{name: "переменной нет", value: "", want: 25},
+		{name: "обычное значение", value: "50", want: 50},
+		{name: "пробелы вокруг", value: "  40  ", want: 40},
+		{name: "ноль игнорируется", value: "0", want: 25},
+		{name: "отрицательное игнорируется", value: "-5", want: 25},
+		{name: "не число игнорируется", value: "много", want: 25},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DB_MAX_OPEN_CONNS_TEST", tt.value)
+			if got := envPositiveInt("DB_MAX_OPEN_CONNS_TEST", 25); got != tt.want {
+				t.Fatalf("envPositiveInt(%q) = %d, ожидалось %d", tt.value, got, tt.want)
+			}
+		})
 	}
 }

@@ -14,12 +14,12 @@ import {
 } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
 import { ButtonGroup } from '@mui/material';
-import { DataGrid, type GridColDef, type GridRenderCellParams, type GridRowParams } from '@mui/x-data-grid';
+import { DataGrid, type GridColDef, type GridRenderCellParams, type GridRowParams, type GridSortModel } from '@mui/x-data-grid';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import FilterPanel, { type ExtraFilter } from '../components/FilterPanel';
-import type { PromoRow } from '../types/promo';
+import type { PromoDataResponse, PromoRow } from '../types/promo';
 import PromoEditDialog from '../components/PromoEditDialog';
-import { promoAPI } from '../api/promo';
+import { promoAPI, fetchWithAuth, parseJSONResponse, buildParams } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
 import { usePromoForm } from '../hooks/usePromoForm';
@@ -30,6 +30,7 @@ import {
   selectPromoDashboardFilters,
   type DashboardReturnMode,
 } from '../utils/promoDashboardNavigation';
+import { apiErrorMessage, queryFailure } from '../utils/apiError';
 
 const PromoForm = lazy(() => import('./PromoForm'));
 const PromoApproval = lazy(() => import('./PromoApproval'));
@@ -161,7 +162,12 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   // ─── Пользовательский тулбар таблицы ──────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Пагинация и сортировка серверные: страница у таблицы одна, и разбирать
+  // выборку в браузере больше нечем.
+  const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 100 });
+  const [sortModel, setSortModel] = useState<GridSortModel>([{ field: 'year', sort: 'desc' }]);
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {};
     COLUMNS.forEach(c => { map[c.field] = true; });
@@ -177,14 +183,55 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
     ...(deletedFilter ? { deletedFilter } : {}),
   }), [appliedFilters, deletedFilter]);
 
-  const { rows, loading: dataLoading, refetch } = usePromoData(appliedWithDeleted, tab === 1);
-  const { data: dashboardData, isFetching: dashboardLoading, error: dashboardQueryError } = useQuery({
+  // Смена выборки возвращает таблицу на первую страницу: иначе выдача
+  // открывалась бы на странице, которой в ней больше нет.
+  const resetPage = useCallback(() => {
+    setPaginationModel((current) => (current.page === 0 ? current : { ...current, page: 0 }));
+  }, []);
+
+  const changeSearch = useCallback((value: string) => {
+    setSearchText(value);
+    resetPage();
+  }, [resetPage]);
+
+  const changeSort = useCallback((model: GridSortModel) => {
+    setSortModel(model);
+    resetPage();
+  }, [resetPage]);
+
+  const changeDeletedFilter = useCallback((value: string) => {
+    setDeletedFilter(value);
+    resetPage();
+  }, [resetPage]);
+
+  const applySearch = useCallback(() => {
+    handleSearch();
+    resetPage();
+  }, [handleSearch, resetPage]);
+
+  const applyReset = useCallback(() => {
+    handleReset();
+    resetPage();
+  }, [handleReset, resetPage]);
+
+  const promoQuery = useMemo(() => ({
+    page: paginationModel.page,
+    pageSize: paginationModel.pageSize,
+    search: debouncedSearch,
+    sortField: sortModel[0]?.field ?? '',
+    sortDirection: (sortModel[0]?.sort ?? 'desc') as 'asc' | 'desc',
+  }), [paginationModel, debouncedSearch, sortModel]);
+  const { rows, total: totalRows, loading: dataLoading, error: dataError, refetch } =
+    usePromoData(appliedWithDeleted, tab === 1, promoQuery);
+  const dashboardQuery = useQuery({
     queryKey: ['promoDashboard', appliedWithDeleted] as const,
     enabled: tab === 0,
     queryFn: () => promoAPI.getDashboard(appliedWithDeleted),
   });
-  const dashboardError = dashboardQueryError
-    ? (dashboardQueryError instanceof Error ? dashboardQueryError.message : String(dashboardQueryError))
+  const { data: dashboardData, isFetching: dashboardLoading } = dashboardQuery;
+  const dashboardFailure = queryFailure(dashboardQuery);
+  const dashboardError = dashboardFailure != null
+    ? apiErrorMessage(dashboardFailure, 'Не удалось загрузить дашборд')
     : null;
 
   // После редактирования/удаления/создания — сбрасываем кеш и перезапрашиваем
@@ -199,7 +246,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete } = 
     usePromoForm({ onEditSuccess: handleDataChanged, onDeleteSuccess: handleDataChanged, onCreateSuccess: handleDataChanged });
-  const { recalcPlan, recalcActual } = usePromoCalculations(form);
+  const { scheduleRecalc } = usePromoCalculations(form, setForm);
 
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
   useEffect(() => {
@@ -246,8 +293,9 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       deletedFilter,
     });
     applyFilters(buildPromoDrilldownFilters(appliedFilters, nextFilters));
+    resetPage();
     setTab(1);
-  }, [appliedFilters, applyFilters, deletedFilter]);
+  }, [appliedFilters, applyFilters, deletedFilter, resetPage]);
 
   const handleTabChange = useCallback((nextTab: number) => {
     if (nextTab === 0 && tab !== 0 && dashboardOrigin) {
@@ -286,16 +334,6 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
     return () => clearTimeout(timer);
   }, [searchText]);
 
-  // ─── Поиск по таблице (клиентский, с debounce) ────────────────────────
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) return rows;
-    const lower = debouncedSearch.toLowerCase();
-    return rows.filter(row =>
-      Object.values(row).some(val =>
-        val != null && String(val).toLowerCase().includes(lower)
-      )
-    );
-  }, [rows, debouncedSearch]);
 
   const visibleCols = useMemo(
     () => COLUMNS.filter(c => visibleColumns[c.field] !== false),
@@ -309,17 +347,32 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
     return row.deleted_at != null ? 'deleted-row' : '';
   };
 
-  // ─── Экспорт CSV (клиентский — выгружаем отфильтрованные строки) ─────
-  const handleExportCSV = () => {
+  // Параметры выборки для выгрузок: файл должен повторять то, что на экране,
+  // включая поиск и сортировку.
+  const exportParams = useCallback((extra: Record<string, unknown> = {}) => buildParams({
+    ...appliedWithDeleted,
+    ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    ...(sortModel[0] ? { sortField: sortModel[0].field, sortDirection: sortModel[0].sort ?? 'desc' } : {}),
+    ...extra,
+  }), [appliedWithDeleted, debouncedSearch, sortModel]);
+
+  const confirmLargeExport = (count: number) => count <= EXPORT_WARNING_THRESHOLD || window.confirm(
+    `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${count.toLocaleString('ru-RU')}). Продолжить?`
+  );
+
+  // ─── Экспорт CSV ──────────────────────────────────────────────────────
+  // Строки берём с сервера: в браузере лежит только текущая страница, а файл
+  // должен содержать всю выборку. Слишком большую сервер отклонит сам (413).
+  const handleExportCSV = async () => {
+    if (!totalRows) { setSnackbar({ open: true, message: 'Нет данных для выгрузки.', severity: 'error' }); return; }
+    if (!confirmLargeExport(totalRows)) return;
+    setExporting(true);
     try {
-      const data = filteredRows;
-      if (!data.length) { window.alert('Нет данных для выгрузки.'); return; }
-      if (data.length > EXPORT_WARNING_THRESHOLD) {
-        const ok = window.confirm(
-          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${data.length.toLocaleString('ru-RU')}). Продолжить?`
-        );
-        if (!ok) return;
-      }
+      const response = await fetchWithAuth(`${API_BASE}/api/promo/data?${exportParams({ all: 'true' })}`, {}, 120000);
+      const payload = await parseJSONResponse<PromoDataResponse>(response, 'Не удалось выгрузить строки');
+      const data = payload.data ?? [];
+      if (!data.length) { setSnackbar({ open: true, message: 'Нет данных для выгрузки.', severity: 'error' }); return; }
+
       const headers = visibleCols.map(c => c.headerName || c.field);
       const fields = visibleCols.map(c => c.field);
       let csv = '\uFEFF' + headers.join(';') + '\n';
@@ -334,34 +387,33 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       });
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       saveAs(blob, `promo-analysis_${new Date().toISOString().split('T')[0]}.csv`);
-    } catch (e) { console.error('Export error:', e); }
+    } catch (e) {
+      setSnackbar({ open: true, message: apiErrorMessage(e, 'Ошибка при выгрузке CSV.'), severity: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
-  // Экспорт XLSX через серверный эндпоинт
+  // ─── Экспорт XLSX (серверный, потоком из курсора БД) ──────────────────
   const handleExportXLSX = async () => {
+    if (!totalRows) { setSnackbar({ open: true, message: 'Нет данных для выгрузки.', severity: 'error' }); return; }
+    if (!confirmLargeExport(totalRows)) return;
+    setExporting(true);
     try {
-      const token = localStorage.getItem('token');
-      if (rows.length > EXPORT_WARNING_THRESHOLD) {
-        const ok = window.confirm(
-          `Будет выгружено более ${EXPORT_WARNING_THRESHOLD.toLocaleString('ru-RU')} строк (${rows.length.toLocaleString('ru-RU')}). Продолжить?`
-        );
-        if (!ok) return;
+      // Через fetchWithAuth: истёкший токен обновляется под promise-lock, а
+      // ручной заголовок Authorization ронял выгрузку с HTTP 401.
+      const resp = await fetchWithAuth(`${API_BASE}/api/promo/export-xlsx?${exportParams()}`, {}, 120000);
+      if (!resp.ok) {
+        const details = await resp.json().catch(() => ({})) as { error?: string };
+        throw new Error(details.error || `HTTP ${resp.status}`);
       }
-      const qs = new URLSearchParams();
-      Object.entries(appliedFilters).forEach(([key, value]) => {
-        if (Array.isArray(value)) {
-          value.forEach(v => { if (v !== '' && v != null) qs.append(key, String(v)); });
-        } else if (value !== '' && value != null) {
-          qs.set(key, String(value));
-        }
-      });
-      const resp = await fetch(`${API_BASE}/api/promo/export-xlsx?${qs}`, {
-        headers: { 'Authorization': `Bearer ${token}` },
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const blob = await resp.blob();
       saveAs(blob, `promo-export_${new Date().toISOString().split('T')[0]}.xlsx`);
-    } catch (e) { console.error('Export error:', e); window.alert('Ошибка при выгрузке Excel.'); }
+    } catch (e) {
+      setSnackbar({ open: true, message: apiErrorMessage(e, 'Ошибка при выгрузке Excel.'), severity: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   // ─── Рендер ───────────────────────────────────────────────────────────
@@ -372,8 +424,10 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>Анализ промо</Typography>
         {meta.loading && <CircularProgress size={20} />}
-        {rows.length > 0 && tab === 1 &&
-          <Typography variant="body2" color="text.secondary">Загружено: {rows.length} записей</Typography>}
+        {totalRows > 0 && tab === 1 &&
+          <Typography variant="body2" color="text.secondary">
+            Найдено: {totalRows.toLocaleString('ru-RU')} записей
+          </Typography>}
       </Stack>
 
       {/* ─── Вкладки ─────────────────────────────────────────────────── */}
@@ -387,7 +441,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       {(tab === 0 || tab === 1) && (
         <Box sx={{ mb: 2 }}>
           <FilterPanel filters={filters} filterOptions={filterOptions} onFiltersChange={setFilters}
-            onSearch={handleSearch} onReset={handleReset} extraFilters={EXTRA_FILTERS}
+            onSearch={applySearch} onReset={applyReset} extraFilters={EXTRA_FILTERS}
             persistFilters={persistFilters} onPersistChange={handlePersistChange}
             visibleFilters={PROMO_VISIBLE_FILTERS} />
         </Box>
@@ -406,7 +460,10 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
 
       {/* ─── Tab 1: Просмотр данных ──────────────────────────────────── */}
       {tab === 1 && (<>
-        {meta.error && 
+        {/* Отказ по области видимости объясняет себя сам: без этого сообщения
+            запрет выглядел бы как «промо нет». */}
+        {dataError && <Alert severity="error" sx={{ mb: 2 }}>{dataError}</Alert>}
+        {meta.error &&
           <Button variant="outlined" color="warning" onClick={() => fetchMeta()} sx={{ mb: 2 }}>
             Ошибка загрузки справочников. Повторить
           </Button>}
@@ -437,7 +494,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
               ))}
             </Menu>
             <TextField size="small" placeholder="Поиск по таблице..." value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
+              onChange={(e) => changeSearch(e.target.value)}
               slotProps={{ input: { startAdornment: <SearchIcon sx={{ fontSize: 18, color: '#94a3b8', mr: 0.5 }} /> } }}
               sx={{ width: 240, '& .MuiOutlinedInput-root': { bgcolor: '#fff', borderRadius: 2 }, '& .MuiInputBase-input': { fontSize: '0.875rem', py: 0.75 } }} />
             <Box sx={{ flex: 1 }} />
@@ -446,7 +503,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
                 select
                 size="small"
                 value={deletedFilter}
-                onChange={(e) => setDeletedFilter(e.target.value)}
+                onChange={(e) => changeDeletedFilter(e.target.value)}
                 label="Состояние"
                 sx={{ width: 140, mr: 1, '& .MuiInputBase-input': { fontSize: '0.8rem', py: 0.75 }, '& .MuiInputLabel-root': { fontSize: '0.8rem' } }}
               >
@@ -455,31 +512,33 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
                 <MenuItem value="deleted">Удалённые</MenuItem>
               </TextField>
             )}
-            {rows.length > 0 && (
+            {totalRows > 0 && (
               <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
-                {rows.length.toLocaleString('ru-RU')} строк
+                {totalRows.toLocaleString('ru-RU')} строк
               </Typography>
             )}
             <ButtonGroup size="small" variant="text">
-              <Button startIcon={<ExportIcon />} onClick={handleExportCSV}
+              <Button startIcon={<ExportIcon />} onClick={handleExportCSV} disabled={exporting}
                 sx={{ color: '#475569', fontWeight: 500 }}>CSV</Button>
-              <Button startIcon={<ExportIcon />} onClick={handleExportXLSX}
+              <Button startIcon={<ExportIcon />} onClick={handleExportXLSX} disabled={exporting}
                 sx={{ color: '#475569', fontWeight: 500 }}>Excel</Button>
             </ButtonGroup>
           </Box>
 
           <DataGrid 
             apiRef={apiRef}
-            rows={filteredRows} 
+            rows={rows} 
             columns={visibleCols} 
             loading={dataLoading} 
-            sortingMode="client" 
+            paginationMode="server"
+            sortingMode="server"
+            rowCount={totalRows}
+            paginationModel={paginationModel}
+            onPaginationModelChange={setPaginationModel}
+            sortModel={sortModel}
+            onSortModelChange={changeSort}
             disableColumnFilter
             onRowClick={handleRowClick}
-            initialState={{ 
-              pagination: { paginationModel: { pageSize: 100 } }, 
-              sorting: { sortModel: [{ field: 'year', sort: 'desc' }] } 
-            }}
             pageSizeOptions={[25, 50, 100]} 
             disableRowSelectionOnClick 
             getRowClassName={getRowClassName}
@@ -515,7 +574,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       {/* Карточка доступна и из таблицы, и из истории на форме создания */}
       <PromoEditDialog
         open={editDialogOpen} onClose={() => { setEditDialogOpen(false); setPromoViewOnly(false); }}
-        form={form} setForm={setForm} recalcPlan={recalcPlan} recalcActual={recalcActual}
+        form={form} setForm={setForm} scheduleRecalc={scheduleRecalc}
         onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
         saving={saving} deleting={deleting} meta={meta}
         allSkuOptions={allSkuOptions} allNetworkOptions={allNetworkOptions}

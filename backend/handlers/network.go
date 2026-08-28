@@ -149,6 +149,10 @@ func networkOwnKAM(c *gin.Context) (string, bool) {
 	username, _ := c.Get("username")
 	role, _ := c.Get("role")
 	kam, err := repository.GetOwnKAM(fmt.Sprint(username), fmt.Sprint(role))
+	if errors.Is(err, repository.ErrKAMNotLinked) {
+		respondKAMNotLinked(c, fmt.Sprint(username))
+		return "", false
+	}
 	if err != nil {
 		config.Logger.Error("network_scope_failed", "error", err.Error(), "user", fmt.Sprint(username))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось определить доступ к реестру"})
@@ -193,6 +197,51 @@ func NetworkAccessRequired() gin.HandlerFunc {
 	}
 }
 
+// errNetworkKAMOutOfScope — попытка записи сети за пределы своего закрепления.
+var errNetworkKAMOutOfScope = errors.New("сеть вне области ведения")
+
+// networkKAMForWrite определяет владельца сети для записи.
+//
+// Отсутствие поля в PATCH — откат на текущее значение, как у name и
+// network_type: без него запрос без `kam` обнулял бы владельца, и сеть
+// пропадала бы из реестра у всех КАМов сразу.
+//
+// Закреплённый КАМ ведёт только свой портфель, поэтому чужое имя в теле
+// запроса отклоняется, а пустое заполняется собственным закреплением: иначе
+// сеть заводилась бы на чужое имя или уходила бы из своей области одним
+// сохранением. Пустой ownKAM — ограничения нет (администратор).
+func networkKAMForWrite(requested *string, current, ownKAM string) (string, error) {
+	kam := strings.TrimSpace(current)
+	if requested != nil {
+		kam = strings.TrimSpace(*requested)
+	}
+	if ownKAM == "" {
+		return kam, nil
+	}
+	if kam == "" {
+		return ownKAM, nil
+	}
+	if kam != ownKAM {
+		return "", errNetworkKAMOutOfScope
+	}
+	return kam, nil
+}
+
+// networkWriteKAM — networkKAMForWrite с закреплением текущего пользователя;
+// сам отвечает клиенту при отказе.
+func networkWriteKAM(c *gin.Context, requested *string, current string) (string, bool) {
+	ownKAM, ok := networkOwnKAM(c)
+	if !ok {
+		return "", false
+	}
+	kam, err := networkKAMForWrite(requested, current, ownKAM)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return "", false
+	}
+	return kam, true
+}
+
 // GetNetworks — список сетей реестра.
 func GetNetworks(c *gin.Context) {
 	// Реестр ведёт каждый КАМ за себя: подчинённые в область не входят, даже
@@ -219,8 +268,10 @@ func GetNetworks(c *gin.Context) {
 }
 
 type networkInput struct {
-	Name                          string               `json:"name"`
-	KAM                           string               `json:"kam"`
+	Name string `json:"name"`
+	// KAM — указатель, чтобы отличить «поле не прислано» от «прислано пустым»:
+	// PATCH без него не должен обнулять владельца сети.
+	KAM                           *string              `json:"kam"`
 	NetworkType                   string               `json:"network_type"`
 	IsActive                      *bool                `json:"is_active"`
 	Month1Pct                     *float64             `json:"month1_pct"`
@@ -405,9 +456,15 @@ func CreateNetwork(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// КАМ сверяется с закреплением вызывающего, а не берётся из тела запроса:
+	// иначе сеть заводилась бы в чужом портфеле.
+	kam, ok := networkWriteKAM(c, input.KAM, "")
+	if !ok {
+		return
+	}
 
 	id, err := repository.InsertNetwork(
-		input.Name, input.KAM, input.NetworkType,
+		input.Name, kam, input.NetworkType,
 		vatIncluded, vatRate,
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
@@ -478,6 +535,12 @@ func UpdateNetwork(c *gin.Context) {
 	if input.IsActive != nil {
 		isActive = *input.IsActive
 	}
+	// NetworkAccessRequired проверил только текущего владельца, поэтому перенос
+	// сети за пределы своей области закрывается здесь — как и у промо.
+	kam, ok := networkWriteKAM(c, input.KAM, models.ValString(current.KAM))
+	if !ok {
+		return
+	}
 	profile, err := networkProfileSettings(input, current)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -509,7 +572,7 @@ func UpdateNetwork(c *gin.Context) {
 	}
 
 	if err := repository.UpdateNetwork(
-		id, name, input.KAM, networkType, isActive,
+		id, name, kam, networkType, isActive,
 		vatIncluded, vatRate,
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
@@ -529,8 +592,8 @@ func UpdateNetwork(c *gin.Context) {
 	if current.NetworkType != networkType {
 		changes["network_type"] = map[string]interface{}{"old": current.NetworkType, "new": networkType}
 	}
-	if models.ValString(current.KAM) != strings.TrimSpace(input.KAM) {
-		changes["kam"] = map[string]interface{}{"old": models.ValString(current.KAM), "new": strings.TrimSpace(input.KAM)}
+	if models.ValString(current.KAM) != kam {
+		changes["kam"] = map[string]interface{}{"old": models.ValString(current.KAM), "new": kam}
 	}
 	if current.IsActive != isActive {
 		changes["is_active"] = map[string]interface{}{"old": current.IsActive, "new": isActive}
