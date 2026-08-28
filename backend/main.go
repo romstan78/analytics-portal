@@ -170,9 +170,6 @@ func main() {
 		api.GET("/promo/approval-access", handlers.GetApprovalAccess)
 		api.GET("/promo/approvals", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovals)
 		api.GET("/promo/approval-filters", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalFilters)
-		api.GET("/promo/approval-kams", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalKAMs)
-		api.GET("/promo/approval-networks", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalNetworks)
-		api.GET("/promo/approval-brands", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.GetApprovalBrands)
 		api.POST("/promo/approve", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.ApprovePromo)
 		api.POST("/promo/approve/batch", middleware.RoleRequired("admin", "agreement1", "agreement2", "kam"), handlers.BatchApprovePromo)
 

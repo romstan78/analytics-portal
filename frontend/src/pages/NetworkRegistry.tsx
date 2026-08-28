@@ -68,6 +68,7 @@ import {
   parseNumberInput,
   planKey,
 } from '../utils/networkPlan';
+import { apiErrorMessage, queryFailure } from '../utils/apiError';
 
 const YEARS = [2026, 2027, 2028];
 const DEFAULT_YEAR = 2027;
@@ -459,6 +460,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   };
 
   const networks = networksQuery.data?.data ?? [];
+  const networksFailure = queryFailure(networksQuery);
   const selected = planQuery.data?.network ?? networks.find((n) => n.id === selectedId) ?? null;
   const comments = useMemo(() => commentsQuery.data?.data ?? [], [commentsQuery.data]);
   const monthDistribution: [string, string, string] = selected ? [
@@ -731,7 +733,13 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
             ))}
           </TextField>
           {networksQuery.isLoading && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={22} /></Box>}
-          {networksQuery.isError && <Alert severity="error" sx={{ mt: 1 }}>Не удалось загрузить список сетей</Alert>}
+          {/* Причину отказа показываем как есть: у учётной записи без
+              закрепления пустой реестр иначе выглядел бы как «сетей нет». */}
+          {networksFailure != null && (
+            <Alert severity="error" sx={{ mt: 1 }}>
+              {apiErrorMessage(networksFailure, 'Не удалось загрузить список сетей')}
+            </Alert>
+          )}
           <List dense sx={{ maxHeight: '70vh', overflowY: 'auto', mt: 1 }}>
             {networks.map((network) => (
               <ListItemButton

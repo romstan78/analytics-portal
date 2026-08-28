@@ -70,6 +70,9 @@ export interface PromoFormData {
 
 export interface PromoDataResponse {
   data: PromoRow[];
+  // Размер всей выборки. Приходит только в постраничном режиме: при all=true
+  // строки и так пришли целиком.
+  totalRows?: number;
 }
 
 export interface PromoHistoryResponse {

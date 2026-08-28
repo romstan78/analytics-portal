@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -40,12 +41,26 @@ func respondIfDedupInProgress(c *gin.Context, err error) bool {
 	return true
 }
 
+// respondKAMNotLinked отвечает учётной записи с ролью kam, у которой нет
+// закрепления. Пустая таблица без объяснения читалась бы как «промо нет»,
+// поэтому причина называется прямо: чинить её администратору, а не КАМу.
+func respondKAMNotLinked(c *gin.Context, username string) {
+	config.Logger.Warn("kam_account_without_scope", "user", username, "path", c.FullPath())
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": "Учётная запись не привязана к КАМу — обратитесь к администратору портала",
+	})
+}
+
 // promoVisibilityScope возвращает область видимости промо для текущего
 // пользователя и сам отвечает клиенту при ошибке. Пустой срез — ограничения нет.
 func promoVisibilityScope(c *gin.Context) ([]string, bool) {
 	username := fmt.Sprint(mustGet(c, "username"))
 	role := fmt.Sprint(mustGet(c, "role"))
 	scope, err := repository.GetPromoVisibilityScope(username, role)
+	if errors.Is(err, repository.ErrKAMNotLinked) {
+		respondKAMNotLinked(c, username)
+		return nil, false
+	}
 	if err != nil {
 		config.Logger.Error("promo_scope_failed", "error", err.Error(), "user", username)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось определить область видимости"})
@@ -187,19 +202,71 @@ func GetPromoData(c *gin.Context) {
 		Mechanics:     c.QueryArray("mechanics"),
 		Statuses:      c.QueryArray("status"),
 		DeletedFilter: deletedFilter,
+		Search:        c.Query("search"),
+		SortField:     c.Query("sortField"),
+		SortDirection: c.Query("sortDirection"),
 	}
 	channels := c.QueryArray("channel")
 
-	all := c.Query("all")
+	all := c.Query("all") == "true"
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "0"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", c.DefaultQuery("limit", "100")))
 
-	results, err := repository.GetPromoRows(params, channels, page, pageSize, all == "true")
+	// Выборку целиком запрашивает выгрузка. Она уходит в память браузера, и
+	// потолок здесь единственный: без него растущая база однажды не «замедлит»
+	// вкладку, а уронит её.
+	if all {
+		limit := promoRowsMaxRows()
+		totalRows, err := repository.PromoRowsCount(params, channels)
+		if err != nil {
+			config.Logger.Error("promo_rows_count_failed", "error", err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+			return
+		}
+		if totalRows > limit {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error": fmt.Sprintf(
+					"Выборка слишком большая: %d строк при лимите %d. Уточните фильтры или используйте выгрузку в Excel.",
+					totalRows, limit,
+				),
+				"total": totalRows,
+				"limit": limit,
+				"data":  []interface{}{},
+			})
+			return
+		}
+	}
+
+	results, err := repository.GetPromoRows(params, channels, page, pageSize, all)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": results})
+	if all {
+		c.JSON(http.StatusOK, models.PromoDataResponse{Data: results})
+		return
+	}
+
+	totalRows, err := repository.PromoRowsCount(params, channels)
+	if err != nil {
+		config.Logger.Error("promo_rows_count_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query execution failed", "data": []interface{}{}})
+		return
+	}
+	c.JSON(http.StatusOK, models.PromoDataResponse{Data: results, TotalRows: &totalRows})
+}
+
+// defaultPromoMaxRows — потолок выборки промо целиком (all=true). В отличие от
+// выгрузки продаж эти строки живут в памяти вкладки, поэтому потолок ниже.
+const defaultPromoMaxRows = 50000
+
+func promoRowsMaxRows() int {
+	if raw := strings.TrimSpace(os.Getenv("PROMO_MAX_ROWS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultPromoMaxRows
 }
 
 // GetPromoDashboard возвращает агрегированную витрину промо. Сырые строки
@@ -1124,83 +1191,6 @@ func GetApprovalFilters(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"networks": networks, "brands": brands, "mechanics": mechanics, "kams": kams})
 }
 
-func GetApprovalKAMs(c *gin.Context) {
-	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
-		return
-	}
-	field := fmt.Sprintf("agreement%d", access.AgreementNum)
-
-	kams, err := repository.GetApprovalKAMs(field)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	// Список КАМов — это и меню фильтра, и перечень тех, кого пользователь
-	// вообще может увидеть. Вне области он не должен знать даже имён.
-	allowed := make([]string, 0, len(kams))
-	for _, kam := range kams {
-		if access.allowsKAM(kam) {
-			allowed = append(allowed, kam)
-		}
-	}
-	c.JSON(http.StatusOK, gin.H{"data": allowed})
-}
-
-func GetApprovalNetworks(c *gin.Context) {
-	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
-		return
-	}
-	kam := c.Query("kam")
-	if kam == "" {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	if !access.allowsKAM(kam) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
-		return
-	}
-
-	field := fmt.Sprintf("p.agreement%d", access.AgreementNum)
-
-	networks, err := repository.GetApprovalNetworks(field, kam)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": networks})
-}
-
-func GetApprovalBrands(c *gin.Context) {
-	access, ok := resolveApprovalAccess(c, c.Query("approval_role"))
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "доступ к согласованию запрещён"})
-		return
-	}
-	kam := c.Query("kam")
-	network := c.Query("network_name")
-	if kam == "" {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	if !access.allowsKAM(kam) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "КАМ вне области согласования"})
-		return
-	}
-
-	field := fmt.Sprintf("p.agreement%d", access.AgreementNum)
-
-	brands, err := repository.GetApprovalBrands(field, kam, network)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": brands})
-}
-
 // ─── Batch Approve ─────────────────────────────────────────────────────────
 
 func BatchApprovePromo(c *gin.Context) {
@@ -1335,6 +1325,11 @@ func ExportPromoExcel(c *gin.Context) {
 		Networks:    c.QueryArray("network_name"),
 		Mechanics:   c.QueryArray("mechanics"),
 		Statuses:    c.QueryArray("status"),
+		// Поиск и сортировка идут в выгрузку вместе с фильтрами: файл должен
+		// повторять то, что видно в таблице, а не всю выборку в другом порядке.
+		Search:        c.Query("search"),
+		SortField:     c.Query("sortField"),
+		SortDirection: c.Query("sortDirection"),
 	}
 	channels := c.QueryArray("channel")
 

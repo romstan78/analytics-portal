@@ -29,6 +29,56 @@ type PromoFilterParams struct {
 	// отсутствие ограничения; непустой применяется всегда и не зависит от
 	// Kams, который приходит из query-параметров.
 	AllowedKAMs []string
+	// Search — поиск по таблице. Ищет сервер, а не браузер: страница у него
+	// одна, и клиентский поиск нашёл бы совпадения только в ней.
+	Search string
+	// SortField/SortDirection — сортировка страницы. Поле сверяется с
+	// promoSortColumns, в SQL попадает только имя из этого списка.
+	SortField     string
+	SortDirection string
+}
+
+// promoSortColumns — единственный источник имён колонок для ORDER BY.
+// Идентификатор нельзя подставить плейсхолдером, поэтому в запрос попадает
+// только значение из этой карты; продажи защищены так же (salesSortColumns).
+var promoSortColumns = map[string]string{
+	"id":                       "p.id",
+	"year":                     "p.[year]",
+	"month":                    "p.[month]",
+	"channel":                  "m.channel",
+	"network_name":             "p.network_name",
+	"kam":                      "p.kam",
+	"brand_as":                 "p.brand_as",
+	"sku":                      "p.sku",
+	"mechanics":                "p.mechanics",
+	"status":                   "p.status",
+	"plan_promo_units":         "p.plan_promo_units",
+	"actual_promo_sales_units": "p.actual_promo_sales_units",
+	"plan_investments_rub":     "p.plan_investments_rub",
+	"actual_investments":       "p.actual_investments",
+	"agreement1":               "p.agreement1",
+	"agreement2":               "p.agreement2",
+}
+
+// promoRowOrder — порядок по умолчанию: свежие промо сверху.
+const promoRowOrder = " ORDER BY p.year DESC, p.month DESC, p.id ASC"
+
+// promoRowsOrderBy возвращает безопасный ORDER BY. Тай-брейк по p.id
+// обязателен: без него OFFSET/FETCH терял бы строки между страницами.
+func promoRowsOrderBy(params PromoFilterParams) string {
+	column, ok := promoSortColumns[params.SortField]
+	if !ok {
+		return promoRowOrder
+	}
+	direction := "ASC"
+	if strings.EqualFold(params.SortDirection, "desc") {
+		direction = "DESC"
+	}
+	order := " ORDER BY " + column + " " + direction
+	if column != "p.id" {
+		order += ", p.id ASC"
+	}
+	return order
 }
 
 func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
@@ -49,15 +99,21 @@ func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
 	default:
 		where += " AND deleted_at IS NULL"
 	}
+	// Нечисловой ввод отбрасывается, а не превращается в ноль: иначе
+	// yearFrom=abc давал бы «year >= 0» — фильтр как будто применён, но не
+	// фильтрует, — а months=abc сводился бы к «month IN (0)» и пустой выдаче без
+	// объяснения причины. Продажи разбирают тот же ввод так же
+	// (sales_repo.go, BuildSalesWhere), и один запрос обязан давать один ответ
+	// на обеих витринах.
 	args := baseArgs
 	if params.YearFromStr != "" {
-		if y, _ := strconv.Atoi(params.YearFromStr); true {
+		if y, err := strconv.Atoi(params.YearFromStr); err == nil {
 			where += " AND year >= ?"
 			args = append(args, y)
 		}
 	}
 	if params.YearToStr != "" {
-		if y, _ := strconv.Atoi(params.YearToStr); true {
+		if y, err := strconv.Atoi(params.YearToStr); err == nil {
 			where += " AND year <= ?"
 			args = append(args, y)
 		}
@@ -65,7 +121,7 @@ func BuildBaseWhere(params PromoFilterParams) (string, []interface{}) {
 	if len(params.Months) > 0 {
 		placeholders := make([]string, 0, len(params.Months))
 		for _, m := range params.Months {
-			if val, _ := strconv.Atoi(m); true {
+			if val, err := strconv.Atoi(m); err == nil {
 				placeholders = append(placeholders, "?")
 				args = append(args, val)
 			}
@@ -225,7 +281,30 @@ func buildPromoWhere(params PromoFilterParams, channels []string) (string, []int
 	addInFilter("p.status", params.Statuses)
 	addInFilter("m.channel", channels)
 
+	// Поиск по видимым текстовым колонкам таблицы. Спецсимволы LIKE
+	// экранируются: без этого «%» находил бы всё, а «_» — что угодно.
+	if search := strings.TrimSpace(params.Search); search != "" {
+		pattern := "%" + escapeLikePattern(search) + "%"
+		columns := []string{
+			"p.network_name", "p.kam", "p.brand_as", "p.sku",
+			"p.mechanics", "p.status", "p.id_directum", "p.ds_number", "m.channel",
+		}
+		conditions := make([]string, 0, len(columns))
+		for _, column := range columns {
+			conditions = append(conditions, column+" LIKE ? ESCAPE '\\'")
+			args = append(args, pattern)
+		}
+		where += " AND (" + strings.Join(conditions, " OR ") + ")"
+	}
+
 	return " WHERE " + where, args
+}
+
+// escapeLikePattern обезвреживает подстановочные символы в пользовательском
+// вводе: искать нужно сам символ, а не «что угодно».
+func escapeLikePattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`, "[", `\[`)
+	return replacer.Replace(value)
 }
 
 // promoRowsColumns — общий список колонок для GetPromoRowsStream и GetPromoRows.
@@ -265,8 +344,20 @@ func ScanPromoRow(scanner promoRowScanner) (models.PromoRow, error) {
 // Вызывающая сторона обязана закрыть rows (defer rows.Close()).
 func GetPromoRowsStream(params PromoFilterParams, channels []string) (*sql.Rows, error) {
 	where, whereArgs := buildPromoWhere(params, channels)
-	query := "SELECT " + promoRowsColumns + " FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics" + where + " ORDER BY p.year DESC, p.month DESC"
+	query := "SELECT " + promoRowsColumns + " FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics" + where + promoRowsOrderBy(params)
 	return config.DB.Query(query, whereArgs...)
+}
+
+// PromoRowsCount — число строк текущей выборки. Нужен и постраничной таблице,
+// и проверке потолка перед выгрузкой целиком.
+func PromoRowsCount(params PromoFilterParams, channels []string) (int, error) {
+	where, args := buildPromoWhere(params, channels)
+	var total int
+	err := config.DB.QueryRow(
+		"SELECT COUNT(*) FROM dbo.tbl_PromoActivities p LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics"+where,
+		args...,
+	).Scan(&total)
+	return total, err
 }
 
 func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize int, getAll bool) ([]models.PromoRow, error) {
@@ -275,17 +366,19 @@ func GetPromoRows(params PromoFilterParams, channels []string, page, pageSize in
 	args := make([]interface{}, len(whereArgs))
 	copy(args, whereArgs)
 
-	if getAll {
-		query += " ORDER BY p.year DESC, p.month DESC"
-	} else {
+	query += promoRowsOrderBy(params)
+	if !getAll {
 		if pageSize <= 0 {
 			pageSize = 100
 		}
 		if pageSize > 1000 {
 			pageSize = 1000
 		}
+		if page < 0 {
+			page = 0
+		}
 		offset := page * pageSize
-		query += " ORDER BY p.year DESC, p.month DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+		query += " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
 		args = append(args, offset, pageSize)
 	}
 
@@ -444,13 +537,13 @@ func GetPromoHistory(sku, network, mechanics, yearFrom, yearTo string) ([]models
 		args = append(args, mechanics)
 	}
 	if yearFrom != "" {
-		if y, _ := strconv.Atoi(yearFrom); true {
+		if y, err := strconv.Atoi(yearFrom); err == nil {
 			query += " AND year >= ?"
 			args = append(args, y)
 		}
 	}
 	if yearTo != "" {
-		if y, _ := strconv.Atoi(yearTo); true {
+		if y, err := strconv.Atoi(yearTo); err == nil {
 			query += " AND year <= ?"
 			args = append(args, y)
 		}
@@ -1611,19 +1704,22 @@ func buildApprovalWhere(params ApprovalFilterParams, excludeCol string) (string,
 	where := "p.deleted_at IS NULL"
 	args := []interface{}{}
 
-	if params.YearStr != "" {
-		y, _ := strconv.Atoi(params.YearStr)
+	// Разбор периода тот же, что у списка очереди (buildApprovalsWhere): иначе
+	// на одной странице список показывал бы карточки, а его же справочники
+	// схлопывались бы до «p.year = 0» и приходили пустыми.
+	if year, err := strconv.Atoi(params.YearStr); params.YearStr != "" && err == nil {
 		where += " AND p.year = ?"
-		args = append(args, y)
+		args = append(args, year)
 	} else {
 		where += " AND (p.year > ? OR (p.year = ? AND p.month >= ?))"
 		args = append(args, currentYear, currentYear, currentMonth)
 	}
 
 	if params.MonthStr != "" {
-		m, _ := strconv.Atoi(params.MonthStr)
-		where += " AND p.month = ?"
-		args = append(args, m)
+		if month, err := strconv.Atoi(params.MonthStr); err == nil {
+			where += " AND p.month = ?"
+			args = append(args, month)
+		}
 	}
 
 	if params.KAM != "" && excludeCol != "kam" {
@@ -1710,98 +1806,4 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 	}
 
 	return resNetwork, resBrand, resMech, resKam, nil
-}
-
-func GetApprovalKAMs(field string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.kam 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL AND (%s IS NULL OR %s = 'commented') AND p.kam IS NOT NULL
-		ORDER BY p.kam
-	`, field, field)
-
-	rows, err := config.DB.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var kams []string
-	for rows.Next() {
-		var k string
-		if rows.Scan(&k) == nil {
-			kams = append(kams, k)
-		}
-	}
-	if kams == nil {
-		kams = []string{}
-	}
-	return kams, nil
-}
-
-func GetApprovalNetworks(field, kam string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.network_name 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL 
-		  AND (%s IS NULL OR %s = 'commented') 
-		  AND p.kam = ? 
-		  AND p.network_name IS NOT NULL
-		ORDER BY p.network_name
-	`, field, field)
-
-	rows, err := config.DB.Query(query, kam)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var networks []string
-	for rows.Next() {
-		var n string
-		if rows.Scan(&n) == nil {
-			networks = append(networks, n)
-		}
-	}
-	if networks == nil {
-		networks = []string{}
-	}
-	return networks, nil
-}
-
-func GetApprovalBrands(field, kam, network string) ([]string, error) {
-	query := fmt.Sprintf(`
-		SELECT DISTINCT p.brand_as 
-		FROM dbo.tbl_PromoActivities p 
-		WHERE p.deleted_at IS NULL 
-		  AND (%s IS NULL OR %s = 'commented') 
-		  AND p.kam = ? 
-		  AND p.brand_as IS NOT NULL
-	`, field, field)
-	args := []interface{}{kam}
-
-	if network != "" {
-		query += " AND p.network_name = ?"
-		args = append(args, network)
-	}
-
-	query += " ORDER BY p.brand_as"
-
-	rows, err := config.DB.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var brands []string
-	for rows.Next() {
-		var b string
-		if rows.Scan(&b) == nil {
-			brands = append(brands, b)
-		}
-	}
-	if brands == nil {
-		brands = []string{}
-	}
-	return brands, nil
 }

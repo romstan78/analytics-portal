@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { promoAPI } from '../api/promo';
 import { userScopedKey } from '../utils/storage';
+import { apiErrorMessage, queryFailure } from '../utils/apiError';
 
 export interface FilterMeta {
   kam: string[];
@@ -49,10 +50,12 @@ export function usePromoFilters(
     return () => clearTimeout(timer);
   }, [filters]);
 
-  const { data, isFetching, error, refetch } = useQuery({
+  const filtersQuery = useQuery({
     queryKey: ['promoFilters', debouncedFilters] as const,
     queryFn: () => promoAPI.getFilters(debouncedFilters),
   });
+  const { data, isFetching, refetch } = filtersQuery;
+  const failure = queryFailure(filtersQuery);
 
   const meta: FilterMeta = useMemo(() => ({
     kam: data?.kam || [],
@@ -63,8 +66,8 @@ export function usePromoFilters(
     channel: data?.channel || [],
     status: data?.status || [],
     loading: isFetching,
-    error: error ? (error instanceof Error ? error.message : String(error)) : null,
-  }), [data, isFetching, error]);
+    error: failure != null ? apiErrorMessage(failure, 'Ошибка загрузки справочников') : null,
+  }), [data, isFetching, failure]);
 
   // Ручное обновление справочников (кнопка «Повторить» при ошибке).
   const fetchMeta = useCallback(() => { void refetch(); }, [refetch]);

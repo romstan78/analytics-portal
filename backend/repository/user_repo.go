@@ -3,7 +3,25 @@ package repository
 import (
 	"backend/config"
 	"database/sql"
+	"errors"
 )
+
+// ErrKAMNotLinked — у учётной записи с ролью kam нет закрепления за КАМом.
+//
+// Для администратора и унаследованных согласующих пустая область по-прежнему
+// означает «ограничений нет»: они заводились до появления этой связи. У роли
+// kam закрепление обязательно, и его отсутствие — пропущенный шаг заведения
+// учётной записи, а не разрешение видеть весь портфель компании. Поэтому режим
+// отказа здесь fail-closed: доступа нет, а причина называется прямо.
+var ErrKAMNotLinked = errors.New("учётная запись не привязана к КАМу")
+
+// kamLinkRequired отказывает роли kam без закрепления.
+func kamLinkRequired(role string, linked bool) error {
+	if role == "kam" && !linked {
+		return ErrKAMNotLinked
+	}
+	return nil
+}
 
 // UserRecord — запись из tbl_Users.
 type UserRecord struct {
@@ -38,7 +56,8 @@ func GetUserByUsername(username string) (*UserRecord, error) {
 // В отличие от области согласования сюда не входят подчинённые: реестр сетей
 // ведёт каждый КАМ сам за себя, и руководитель работает в нём только со своим
 // портфелем, хотя промо подчинённых он согласует. Пустая строка означает
-// отсутствие ограничения.
+// отсутствие ограничения, а у роли kam незакреплённая учётная запись получает
+// ErrKAMNotLinked вместо доступа ко всему реестру.
 func GetOwnKAM(username, role string) (string, error) {
 	if role == "admin" {
 		return "", nil
@@ -49,8 +68,14 @@ func GetOwnKAM(username, role string) (string, error) {
 		 WHERE username = ? AND deleted_at IS NULL`,
 		username,
 	).Scan(&kam)
-	if err == sql.ErrNoRows {
-		return "", nil
+	if errors.Is(err, sql.ErrNoRows) {
+		kam, err = "", nil
 	}
-	return kam, err
+	if err != nil {
+		return "", err
+	}
+	if err := kamLinkRequired(role, kam != ""); err != nil {
+		return "", err
+	}
+	return kam, nil
 }

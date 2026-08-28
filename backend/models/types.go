@@ -100,6 +100,14 @@ type PromoRow struct {
 	DeletedAt               *string  `json:"deleted_at"`
 }
 
+// PromoDataResponse — страница таблицы промо.
+// TotalRows нужен постраничному режиму, чтобы таблица знала размер выборки;
+// при all=true он не считается — выборка и так пришла целиком.
+type PromoDataResponse struct {
+	Data      []PromoRow `json:"data"`
+	TotalRows *int       `json:"totalRows,omitempty"`
+}
+
 type HistoryRow struct {
 	ID                     int      `json:"id"`
 	NetworkName            *string  `json:"network_name"`

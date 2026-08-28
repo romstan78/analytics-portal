@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -93,7 +94,38 @@ func failSalesExportJob(id string, err error) {
 	time.AfterFunc(salesExportJobTTL, func() { cleanExpiredSalesExportJobs(time.Now()) })
 }
 
+// recoverSalesExportJob перехватывает панику фоновой выгрузки.
+//
+// Задание выполняется в собственной горутине, а значит вне Recovery-middleware
+// Gin: без своего recover любая паника внутри buildSalesExcel завершала бы
+// процесс целиком — вместе со всеми чужими запросами. Само задание при этом
+// нужно перевести в failed: иначе оно навсегда осталось бы «running», а клиент
+// продолжал бы опрашивать его статус.
+//
+// tmpPath указывает на недописанный файл, если паника случилась после его
+// создания: он никому не достанется, а сирота остался бы на диске.
+func recoverSalesExportJob(id string, tmpPath *string) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	if tmpPath != nil && *tmpPath != "" {
+		_ = os.Remove(*tmpPath)
+	}
+	config.Logger.Error("sales_background_export_panic",
+		"job_id", id,
+		"panic", fmt.Sprint(recovered),
+		"stack", string(debug.Stack()),
+	)
+	failSalesExportJob(id, fmt.Errorf("паника фоновой выгрузки: %v", recovered))
+}
+
 func runSalesExportJob(id string, filter repository.SalesFilter, columns []salesExcelColumn) {
+	// path объявлен до recover: файл может появиться в любой момент работы, и
+	// обработчик паники должен видеть актуальное значение.
+	var path string
+	defer recoverSalesExportJob(id, &path)
+
 	salesExportJobStore.workers <- struct{}{}
 	defer func() { <-salesExportJobStore.workers }()
 
@@ -110,7 +142,7 @@ func runSalesExportJob(id string, filter repository.SalesFilter, columns []sales
 		failSalesExportJob(id, err)
 		return
 	}
-	path := tmp.Name()
+	path = tmp.Name()
 	if err = f.Write(tmp); err != nil {
 		tmp.Close()
 		_ = os.Remove(path)
@@ -128,6 +160,8 @@ func runSalesExportJob(id string, filter repository.SalesFilter, columns []sales
 		job.FilePath = path
 		job.CompletedAt = time.Now()
 	})
+	// Файл дошёл до задания: удалять его в обработчике паники больше нельзя.
+	path = ""
 	time.AfterFunc(salesExportJobTTL, func() { cleanExpiredSalesExportJobs(time.Now()) })
 }
 
