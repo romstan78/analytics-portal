@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  Alert,
   Autocomplete,
   Box,
   Button,
@@ -37,6 +38,16 @@ import {
   shiftGrossPool,
 } from '../utils/networkPlan';
 import type { DraftCell } from '../utils/networkPlan';
+import {
+  draftDiffers,
+  draftSavedAtLabel,
+  draftStorageKey,
+  readDraft,
+  removeDraft,
+  type SavedDraft,
+} from '../utils/formDraft';
+import { useFormDraft } from '../hooks/useFormDraft';
+import { getUsername } from '../api/auth';
 import NetworkPlanSummary from './NetworkPlanSummary';
 import NetworkAnnualInvestmentCumulative from './NetworkAnnualInvestmentCumulative';
 import NetworkPeriodGroupsEditor from './NetworkPeriodGroupsEditor';
@@ -57,6 +68,40 @@ const buildPeriodGroups = (data: NetworkPlanResponse): NetworkPeriodGroupInput[]
 // а таблица не дёргает сервер на каждое нажатие.
 const PREVIEW_DEBOUNCE_MS = 250;
 
+// ─── Черновик сетки ─────────────────────────────────────────────────────────
+// Значения вносят массово и сохраняют одной кнопкой, поэтому обрыв сессии или
+// закрытая вкладка стоят дороже, чем в обычной форме. Хранится только
+// введённое: НДС, инвестиции и итоги считает бэкенд.
+const DRAFT_BASE_KEY = 'network_plan_draft_v1';
+
+interface PlanDraftValues {
+  draft: Record<string, DraftCell>;
+  brands: string[];
+  periodGroups: NetworkPeriodGroupInput[];
+}
+
+// Ключ на сеть и год: у каждой сетки свой черновик.
+const planDraftKey = (data: NetworkPlanResponse) =>
+  draftStorageKey(DRAFT_BASE_KEY, `${data.network.id}-${data.year}`);
+
+const planDraftValues = (data: NetworkPlanResponse): PlanDraftValues => ({
+  draft: buildDraft(data.plans),
+  brands: brandsFromPlans(data.plans),
+  periodGroups: buildPeriodGroups(data),
+});
+
+// Черновик предлагается, только если он расходится с пришедшим с сервера:
+// совпавший означает, что правки уже сохранены, и держать его незачем.
+function planDraftOffer(key: string, data: NetworkPlanResponse): SavedDraft<PlanDraftValues> | null {
+  const saved = readDraft<PlanDraftValues>(key, getUsername());
+  if (!saved) return null;
+  if (!draftDiffers(saved.values, planDraftValues(data))) {
+    removeDraft(key);
+    return null;
+  }
+  return saved;
+}
+
 type Period = 'year' | 1 | 2 | 3 | 4;
 
 // Значение, отстающее от источника на паузу бездействия.
@@ -74,6 +119,9 @@ interface NetworkPlanGridProps {
   brandOptions: string[];
   canEdit: boolean;
   saving: boolean;
+  // Счётчик удачных сохранений: по нему черновик забывается. Сами данные
+  // приходят позже — отдельным запросом после инвалидации.
+  savedTick: number;
   onSave: (request: NetworkPlanSaveRequest) => void;
   onCommentCell: (quarter: number, brand: string | null) => void;
   commentedCells: Set<string>;
@@ -84,6 +132,7 @@ export default function NetworkPlanGrid({
   brandOptions,
   canEdit,
   saving,
+  savedTick,
   onSave,
   onCommentCell,
   commentedCells,
@@ -95,6 +144,19 @@ export default function NetworkPlanGrid({
   const [period, setPeriod] = useState<Period>('year');
   const [yearMetric, setYearMetric] = useState<YearMetric>('plan');
 
+  // Черновик прерванной работы. Читается при рендере — в эффекте с прямым
+  // setState это запрещено правилом react-hooks/set-state-in-effect, да и
+  // предлагать восстановление нужно сразу, а не кадром позже.
+  const [draftKey, setDraftKey] = useState(() => planDraftKey(data));
+  const [draftOffer, setDraftOffer] = useState<SavedDraft<PlanDraftValues> | null>(
+    () => (canEdit ? planDraftOffer(planDraftKey(data), data) : null),
+  );
+  const draftValues = useMemo<PlanDraftValues>(
+    () => ({ draft, brands, periodGroups }),
+    [draft, brands, periodGroups],
+  );
+  useFormDraft({ storageKey: canEdit ? draftKey : null, values: draftValues, dirty });
+
   // Пришли данные другого года или сети — черновик начинается заново.
   // Сброс во время рендера, а не в эффекте: иначе кадр показывает чужие цифры.
   const [loadedData, setLoadedData] = useState(data);
@@ -104,6 +166,22 @@ export default function NetworkPlanGrid({
     setBrands(brandsFromPlans(data.plans));
     setPeriodGroups(buildPeriodGroups(data));
     setDirty(false);
+    const nextKey = planDraftKey(data);
+    setDraftKey(nextKey);
+    // Данные могли смениться и под чужой правкой: тогда несохранённое
+    // расходится с ними, и его есть смысл предложить обратно.
+    setDraftOffer(canEdit ? planDraftOffer(nextKey, data) : null);
+  }
+
+  // Сохранение прошло — черновик больше не нужен. Данные придут следующим
+  // запросом, а dirty снимается сразу: иначе debounce успел бы записать
+  // черновик заново.
+  const [seenSavedTick, setSeenSavedTick] = useState(savedTick);
+  if (seenSavedTick !== savedTick) {
+    setSeenSavedTick(savedTick);
+    setDirty(false);
+    setDraftOffer(null);
+    removeDraft(draftKey);
   }
 
   // Тело запроса собирается один раз: пересчёт и сохранение отправляют
@@ -250,6 +328,20 @@ export default function NetworkPlanGrid({
 
   const handleSave = () => onSave(planRequest);
 
+  const restoreDraft = () => {
+    if (!draftOffer) return;
+    setDraft(draftOffer.values.draft);
+    setBrands(draftOffer.values.brands);
+    setPeriodGroups(draftOffer.values.periodGroups);
+    setDirty(true);
+    setDraftOffer(null);
+  };
+
+  const dismissDraft = () => {
+    removeDraft(draftKey);
+    setDraftOffer(null);
+  };
+
   const changePeriodGroups = (next: NetworkPeriodGroupInput[]) => {
     setPeriodGroups(next);
     setDirty(true);
@@ -259,6 +351,22 @@ export default function NetworkPlanGrid({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Черновик прерванной работы: значения не подставляются молча —
+          пользователь должен понимать, откуда они взялись. */}
+      {draftOffer && (
+        <Alert
+          severity="info"
+          action={
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button size="small" variant="contained" onClick={restoreDraft}>Восстановить</Button>
+              <Button size="small" color="inherit" onClick={dismissDraft}>Отклонить</Button>
+            </Box>
+          }
+        >
+          Остались несохранённые изменения от {draftSavedAtLabel(draftOffer.savedAt)}. Восстановить их?
+        </Alert>
+      )}
+
       {/* Период, показатель и сохранение */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         <ToggleButtonGroup

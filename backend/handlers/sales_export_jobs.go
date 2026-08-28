@@ -8,10 +8,10 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"backend/config"
+	"backend/models"
 	"backend/repository"
 
 	"github.com/gin-gonic/gin"
@@ -23,36 +23,130 @@ const (
 	salesExportJobTTL                   = time.Hour
 	// salesExportJobStuckAfter — после этого срока задание, не отчитавшееся ни
 	// успехом, ни ошибкой, считается зависшим. Без такого потолка «running»
-	// пропускалось чисткой без ограничения по времени и оставалось в памяти
-	// навсегда: горутина уже мертва, а клиент опрашивает статус до перезапуска.
+	// пропускалось чисткой без ограничения по времени и оставалось в реестре
+	// навсегда: горутина уже мертва, а клиент опрашивает статус.
 	salesExportJobStuckAfter = 30 * time.Minute
 	// salesExportDirName — свой подкаталог во временной директории. Файлы
 	// выгрузок лежат отдельно от чужих temp-файлов, поэтому уборку при старте
-	// можно делать по каталогу, а не по карте заданий, которая после
-	// перезапуска пуста.
+	// можно делать по каталогу, сверяясь с реестром заданий.
 	salesExportDirName = "analytics-portal-exports"
+	// salesExportWorkers — сколько выгрузок процесс готовит одновременно.
+	// Ограничение своё у каждой реплики: это защита её собственной памяти и
+	// соединений с БД, а не общий лимит на портал.
+	salesExportWorkers = 2
 )
 
-type salesExportJob struct {
-	ID          string    `json:"id"`
-	Owner       string    `json:"-"`
-	Status      string    `json:"status"`
-	TotalRows   int       `json:"totalRows"`
-	FileName    string    `json:"fileName"`
-	FilePath    string    `json:"-"`
-	Error       string    `json:"error,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	CompletedAt time.Time `json:"completedAt,omitempty"`
+// salesExportJobStore — реестр фоновых выгрузок.
+//
+// За интерфейсом стоит БД: состояние переживает перезапуск и видно всем
+// репликам. Тесты подставляют свою реализацию — им нужны только переходы
+// состояний, а не SQL.
+type salesExportJobStore interface {
+	Create(job models.SalesExportJob) error
+	ForUser(id, owner string) (models.SalesExportJob, bool)
+	SetRunning(id string)
+	SetReady(id, filePath string, completedAt time.Time)
+	SetFailed(id, message string, completedAt time.Time)
+	// CleanExpired закрывает зависшие задания и убирает просроченные вместе с
+	// их файлами.
+	CleanExpired(now time.Time)
+	// LiveFilePaths — файлы, за которыми ещё числится задание. Второе значение
+	// false означает, что реестр прочитать не удалось: удалять в этом случае
+	// нельзя, иначе под чистку попадёт файл живой выгрузки.
+	LiveFilePaths() (map[string]struct{}, bool)
 }
 
-var salesExportJobStore = struct {
-	sync.RWMutex
-	jobs    map[string]*salesExportJob
-	workers chan struct{}
-}{
-	jobs:    make(map[string]*salesExportJob),
-	workers: make(chan struct{}, 2),
+var exportJobs salesExportJobStore = dbSalesExportJobs{}
+
+// salesExportWorkerSlots ограничивает число одновременно готовящихся файлов.
+// Остаётся в памяти процесса: это его собственный ресурс.
+var salesExportWorkerSlots = make(chan struct{}, salesExportWorkers)
+
+// dbSalesExportJobs — реестр в dbo.tbl_SalesExportJobs.
+//
+// Ошибки записи не возвращаются наружу: задание уже идёт, и остановить его
+// поздно — остаётся зафиксировать сбой в логе. Опрос статуса при этом покажет
+// прежнее состояние, а зависшее задание закроет чистка по времени.
+type dbSalesExportJobs struct{}
+
+func (dbSalesExportJobs) Create(job models.SalesExportJob) error {
+	return repository.InsertSalesExportJob(job)
 }
+
+func (dbSalesExportJobs) ForUser(id, owner string) (models.SalesExportJob, bool) {
+	job, found, err := repository.GetSalesExportJob(id, owner)
+	if err != nil {
+		config.Logger.Error("sales_export_job_read_failed", "job_id", id, "error", err.Error())
+		return models.SalesExportJob{}, false
+	}
+	return job, found
+}
+
+func (dbSalesExportJobs) SetRunning(id string) {
+	if err := repository.SetSalesExportJobRunning(id); err != nil {
+		config.Logger.Error("sales_export_job_update_failed", "job_id", id, "status", "running", "error", err.Error())
+	}
+}
+
+func (dbSalesExportJobs) SetReady(id, filePath string, completedAt time.Time) {
+	if err := repository.SetSalesExportJobReady(id, filePath, completedAt); err != nil {
+		config.Logger.Error("sales_export_job_update_failed", "job_id", id, "status", "ready", "error", err.Error())
+	}
+}
+
+func (dbSalesExportJobs) SetFailed(id, message string, completedAt time.Time) {
+	if err := repository.SetSalesExportJobFailed(id, message, completedAt); err != nil {
+		config.Logger.Error("sales_export_job_update_failed", "job_id", id, "status", "failed", "error", err.Error())
+	}
+}
+
+func (dbSalesExportJobs) CleanExpired(now time.Time) {
+	jobs, err := repository.ListSalesExportJobs()
+	if err != nil {
+		config.Logger.Error("sales_export_jobs_list_failed", "error", err.Error())
+		return
+	}
+	policy := repository.SalesExportJobPolicy{TTL: salesExportJobTTL, StuckAfter: salesExportJobStuckAfter}
+	for _, job := range jobs {
+		switch repository.SalesExportJobCleanup(job, now, policy) {
+		case repository.SalesExportJobFail:
+			config.Logger.Warn("sales_background_export_stuck", "job_id", job.ID,
+				"age_minutes", int(now.Sub(job.CreatedAt).Minutes()))
+			if err := repository.SetSalesExportJobFailed(job.ID, salesExportTimeoutMessage, now); err != nil {
+				config.Logger.Error("sales_export_job_update_failed", "job_id", job.ID, "status", "failed", "error", err.Error())
+			}
+		case repository.SalesExportJobDrop:
+			if job.FilePath != "" {
+				_ = os.Remove(job.FilePath)
+			}
+			if err := repository.DeleteSalesExportJob(job.ID); err != nil {
+				config.Logger.Error("sales_export_job_delete_failed", "job_id", job.ID, "error", err.Error())
+			}
+		case repository.SalesExportJobKeep:
+		}
+	}
+}
+
+func (dbSalesExportJobs) LiveFilePaths() (map[string]struct{}, bool) {
+	jobs, err := repository.ListSalesExportJobs()
+	if err != nil {
+		config.Logger.Error("sales_export_jobs_list_failed", "error", err.Error())
+		return nil, false
+	}
+	paths := make(map[string]struct{}, len(jobs))
+	for _, job := range jobs {
+		if job.FilePath != "" {
+			paths[job.FilePath] = struct{}{}
+		}
+	}
+	return paths, true
+}
+
+const (
+	salesExportFailedMessage  = "Не удалось подготовить файл"
+	salesExportTimeoutMessage = "Выгрузка не завершилась вовремя"
+	salesExportLostMessage    = "Файл выгрузки недоступен. Запустите выгрузку заново."
+)
 
 func salesBackgroundExportMaxRows() int {
 	if raw := strings.TrimSpace(os.Getenv("SALES_BACKGROUND_EXPORT_MAX_ROWS")); raw != "" {
@@ -64,8 +158,9 @@ func salesBackgroundExportMaxRows() int {
 }
 
 // salesExportDir — каталог готовых файлов выгрузки.
-// SALES_EXPORT_DIR позволяет вынести их на отдельный том: временная директория
-// контейнера живёт ровно до его пересоздания.
+// SALES_EXPORT_DIR позволяет вынести их на общий том: временная директория
+// контейнера живёт ровно до его пересоздания, а задание теперь переживает и
+// перезапуск, и переезд на другую реплику.
 func salesExportDir() string {
 	if raw := strings.TrimSpace(os.Getenv("SALES_EXPORT_DIR")); raw != "" {
 		return raw
@@ -73,12 +168,12 @@ func salesExportDir() string {
 	return filepath.Join(os.TempDir(), salesExportDirName)
 }
 
-// CleanupSalesExportDir удаляет файлы выгрузок, оставшиеся от прошлого запуска.
+// CleanupSalesExportDir удаляет файлы, за которыми больше не числится задание.
 //
-// Состояние заданий живёт в памяти процесса, поэтому после перезапуска карта
-// пуста — а чистка по расписанию обходит именно её. Файлы предыдущего процесса
-// не удалил бы никто: за ними больше не числится ни одного задания. Вызывается
-// при старте, до приёма запросов.
+// Файлы прошлого запуска не удалил бы никто: чистка по расписанию обходит
+// реестр заданий, а этих файлов там уже нет. Живые задания при этом трогать
+// нельзя — их файлы могли остаться от прошлого процесса или готовиться
+// соседней репликой на общем томе. Вызывается при старте, до приёма запросов.
 func CleanupSalesExportDir() {
 	dir := salesExportDir()
 	entries, err := os.ReadDir(dir)
@@ -88,12 +183,21 @@ func CleanupSalesExportDir() {
 		}
 		return
 	}
+	live, ok := exportJobs.LiveFilePaths()
+	if !ok {
+		// Реестр недоступен: без него любой файл может оказаться нужным.
+		return
+	}
 	removed := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
+		path := filepath.Join(dir, entry.Name())
+		if _, busy := live[path]; busy {
+			continue
+		}
+		if err := os.Remove(path); err == nil {
 			removed++
 		}
 	}
@@ -102,59 +206,9 @@ func CleanupSalesExportDir() {
 	}
 }
 
-func cleanExpiredSalesExportJobs(now time.Time) {
-	salesExportJobStore.Lock()
-	defer salesExportJobStore.Unlock()
-	for id, job := range salesExportJobStore.jobs {
-		if job.Status == "queued" || job.Status == "running" {
-			// Зависшее задание закрываем сами: горутина, которая перевела бы
-			// его в failed, уже не отчитается — процесс мог быть перезапущен
-			// или задание оборвалось иначе.
-			if now.Sub(job.CreatedAt) >= salesExportJobStuckAfter {
-				job.Status = "failed"
-				job.Error = "Выгрузка не завершилась вовремя"
-				job.CompletedAt = now
-				config.Logger.Warn("sales_background_export_stuck", "job_id", id,
-					"age_minutes", int(now.Sub(job.CreatedAt).Minutes()))
-			}
-			continue
-		}
-		if now.Sub(job.CreatedAt) < salesExportJobTTL {
-			continue
-		}
-		if job.FilePath != "" {
-			_ = os.Remove(job.FilePath)
-		}
-		delete(salesExportJobStore.jobs, id)
-	}
-}
-
-func salesExportJobForUser(id, owner string) (salesExportJob, bool) {
-	salesExportJobStore.RLock()
-	defer salesExportJobStore.RUnlock()
-	job, ok := salesExportJobStore.jobs[id]
-	if !ok || job.Owner != owner {
-		return salesExportJob{}, false
-	}
-	return *job, true
-}
-
-func updateSalesExportJob(id string, update func(*salesExportJob)) {
-	salesExportJobStore.Lock()
-	defer salesExportJobStore.Unlock()
-	if job, ok := salesExportJobStore.jobs[id]; ok {
-		update(job)
-	}
-}
-
 func failSalesExportJob(id string, err error) {
-	updateSalesExportJob(id, func(job *salesExportJob) {
-		job.Status = "failed"
-		job.Error = "Не удалось подготовить файл"
-		job.CompletedAt = time.Now()
-	})
+	exportJobs.SetFailed(id, salesExportFailedMessage, time.Now())
 	config.Logger.Error("sales_background_export_failed", "job_id", id, "error", err.Error())
-	time.AfterFunc(salesExportJobTTL, func() { cleanExpiredSalesExportJobs(time.Now()) })
 }
 
 // recoverSalesExportJob перехватывает панику фоновой выгрузки.
@@ -189,10 +243,10 @@ func runSalesExportJob(id string, filter repository.SalesFilter, columns []sales
 	var path string
 	defer recoverSalesExportJob(id, &path)
 
-	salesExportJobStore.workers <- struct{}{}
-	defer func() { <-salesExportJobStore.workers }()
+	salesExportWorkerSlots <- struct{}{}
+	defer func() { <-salesExportWorkerSlots }()
 
-	updateSalesExportJob(id, func(job *salesExportJob) { job.Status = "running" })
+	exportJobs.SetRunning(id)
 	f, err := buildSalesExcel(filter, columns)
 	if err != nil {
 		failSalesExportJob(id, err)
@@ -223,20 +277,16 @@ func runSalesExportJob(id string, filter repository.SalesFilter, columns []sales
 		return
 	}
 
-	updateSalesExportJob(id, func(job *salesExportJob) {
-		job.Status = "ready"
-		job.FilePath = path
-		job.CompletedAt = time.Now()
-	})
+	exportJobs.SetReady(id, path, time.Now())
 	// Файл дошёл до задания: удалять его в обработчике паники больше нельзя.
 	path = ""
-	time.AfterFunc(salesExportJobTTL, func() { cleanExpiredSalesExportJobs(time.Now()) })
+	time.AfterFunc(salesExportJobTTL, func() { exportJobs.CleanExpired(time.Now()) })
 }
 
-// StartSalesExcelExport создаёт фоновую выгрузку. В памяти хранится только
-// состояние задания; готовый файл лежит во временной директории не более часа.
+// StartSalesExcelExport создаёт фоновую выгрузку. Состояние задания хранится в
+// БД; готовый файл лежит в каталоге выгрузок не более часа.
 func StartSalesExcelExport(c *gin.Context) {
-	cleanExpiredSalesExportJobs(time.Now())
+	exportJobs.CleanExpired(time.Now())
 	filter := salesFilterFromQuery(c)
 	totalRows, err := repository.SalesRowsCount(filter)
 	if err != nil {
@@ -258,7 +308,7 @@ func StartSalesExcelExport(c *gin.Context) {
 	}
 
 	username, _ := currentUser(c)
-	job := &salesExportJob{
+	job := models.SalesExportJob{
 		ID:        uuid.NewString(),
 		Owner:     username,
 		Status:    "queued",
@@ -266,18 +316,22 @@ func StartSalesExcelExport(c *gin.Context) {
 		FileName:  fmt.Sprintf("internet-sales_%s.xlsx", time.Now().Format("2006-01-02")),
 		CreatedAt: time.Now(),
 	}
-	salesExportJobStore.Lock()
-	salesExportJobStore.jobs[job.ID] = job
-	salesExportJobStore.Unlock()
+	// Задание заводится до запуска горутины: иначе первый же опрос статуса
+	// пришёл бы к пустому реестру и получил 404 на живую выгрузку.
+	if err := exportJobs.Create(job); err != nil {
+		config.Logger.Error("sales_export_job_create_failed", "error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось запустить выгрузку"})
+		return
+	}
 
 	go runSalesExportJob(job.ID, filter, selectedSalesExcelColumns(c.QueryArray("columns")))
 	c.JSON(http.StatusAccepted, job)
 }
 
 func GetSalesExcelExportJob(c *gin.Context) {
-	cleanExpiredSalesExportJobs(time.Now())
+	exportJobs.CleanExpired(time.Now())
 	username, _ := currentUser(c)
-	job, ok := salesExportJobForUser(c.Param("id"), username)
+	job, ok := exportJobs.ForUser(c.Param("id"), username)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Выгрузка не найдена"})
 		return
@@ -286,15 +340,24 @@ func GetSalesExcelExportJob(c *gin.Context) {
 }
 
 func DownloadSalesExcelExport(c *gin.Context) {
-	cleanExpiredSalesExportJobs(time.Now())
+	exportJobs.CleanExpired(time.Now())
 	username, _ := currentUser(c)
-	job, ok := salesExportJobForUser(c.Param("id"), username)
+	job, ok := exportJobs.ForUser(c.Param("id"), username)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Выгрузка не найдена"})
 		return
 	}
 	if job.Status != "ready" || job.FilePath == "" {
 		c.JSON(http.StatusConflict, gin.H{"error": "Файл ещё не готов"})
+		return
+	}
+	// Задание пережило процесс, а файл — не обязательно: временный каталог
+	// исчезает вместе с контейнером, и на общем томе файл готовила соседняя
+	// реплика. Задание закрываем, чтобы клиент перестал считать его готовым.
+	if _, statErr := os.Stat(job.FilePath); statErr != nil {
+		config.Logger.Warn("sales_export_file_missing", "job_id", job.ID, "path", job.FilePath)
+		exportJobs.SetFailed(job.ID, salesExportLostMessage, time.Now())
+		c.JSON(http.StatusConflict, gin.H{"error": salesExportLostMessage})
 		return
 	}
 	c.FileAttachment(job.FilePath, job.FileName)

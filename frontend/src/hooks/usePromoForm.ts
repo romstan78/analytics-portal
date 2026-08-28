@@ -69,9 +69,61 @@ export const EMPTY_FORM: PromoFormValues = {
   deleted_at: null,
 };
 
+// ─── Строка таблицы → значения формы ────────────────────────────────────────
+// Отдельно от хука: те же значения нужны как точка отсчёта для черновика —
+// с ними сравнивается введённое, чтобы понять, есть ли что восстанавливать.
+export function formFromRow(row: PromoRowLike): PromoFormValues {
+  return {
+    ...EMPTY_FORM,
+    id: row.id,
+    network_name: (row.network_name as string) ?? '',
+    kam: (row.kam as string) ?? '',
+    brand: ((row.brand_as || row.brand) as string) ?? '',
+    sku: (row.sku as string) ?? '',
+    year: row.year as number,
+    month: row.month as number,
+    mechanics: (row.mechanics as string) ?? '',
+    gtn_opex: (row.gtn_opex as string) ?? '',
+    baseline_units: String(row.baseline_units ?? ''),
+    baseline_rub: String(row.baseline_rub ?? ''),
+    plan_promo_units: String(row.plan_promo_units ?? ''),
+    plan_promo_rub: String(row.plan_promo_rub ?? ''),
+    plan_promo_uplift_units: String(row.plan_promo_uplift_units ?? ''),
+    plan_promo_uplift_rub: String(row.plan_promo_uplift_rub ?? ''),
+    plan_investments_rub: String(row.plan_investments_rub ?? ''),
+    contract_price: String(row.contract_price ?? ''),
+    discount_amount: String(row.discount_amount ?? ''),
+    plan_roi: String(row.plan_roi ?? ''),
+    gm: String(row.gm ?? ''),
+    total_pharmacies: String(row.total_pharmacies ?? ''),
+    promo_pharmacies: String(row.promo_pharmacies ?? ''),
+    actual_promo_sales_units: String(row.actual_promo_sales_units ?? ''),
+    actual_investments: String(row.actual_investments ?? ''),
+    actual_promo_rub: String(row.actual_promo_rub ?? ''),
+    actual_promo_uplift_units: String(row.actual_promo_uplift_units ?? ''),
+    actual_promo_uplift_rub: String(row.actual_promo_uplift_rub ?? ''),
+    actual_roi: String(row.actual_roi ?? ''),
+    actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
+    actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
+    agreement1: (row.agreement1 as string) ?? '',
+    agreement2: (row.agreement2 as string) ?? '',
+    conditions: (row.conditions as string) ?? '',
+    comments: (row.comments as string) ?? '',
+    id_directum: (row.id_directum as string) ?? '',
+    ds_number: (row.ds_number as string) ?? '',
+    status: (row.status as string) ?? '',
+    updated_at: (row.updated_at as string) ?? null,
+    deleted_at: (row.deleted_at as string) ?? null,
+  };
+}
+
 interface SaveResult {
   success: boolean;
   message: string;
+  // Форма после ответа сервера. Сохранённые значения он нормализует и
+  // пересчитывает, поэтому точкой отсчёта — в том числе для черновика —
+  // годится только она, а не то, что ушло в запрос.
+  form?: PromoFormValues;
 }
 
 interface UsePromoFormCallbacks {
@@ -89,47 +141,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
   // ─── Загрузка строки в форму (клик по таблице) ──────────────────────────
   const handleRowClick = useCallback((row: PromoRowLike) => {
-    setForm({
-      id: row.id as number,
-      network_name: (row.network_name as string) ?? '',
-      kam: (row.kam as string) ?? '',
-      brand: ((row.brand_as || row.brand) as string) ?? '',
-      sku: (row.sku as string) ?? '',
-      year: row.year as number,
-      month: row.month as number,
-      mechanics: (row.mechanics as string) ?? '',
-      gtn_opex: (row.gtn_opex as string) ?? '',
-      baseline_units: String(row.baseline_units ?? ''),
-      baseline_rub: String(row.baseline_rub ?? ''),
-      plan_promo_units: String(row.plan_promo_units ?? ''),
-      plan_promo_rub: String(row.plan_promo_rub ?? ''),
-      plan_promo_uplift_units: String(row.plan_promo_uplift_units ?? ''),
-      plan_promo_uplift_rub: String(row.plan_promo_uplift_rub ?? ''),
-      plan_investments_rub: String(row.plan_investments_rub ?? ''),
-      contract_price: String(row.contract_price ?? ''),
-      discount_amount: String(row.discount_amount ?? ''),
-      plan_roi: String(row.plan_roi ?? ''),
-      gm: String(row.gm ?? ''),
-      total_pharmacies: String(row.total_pharmacies ?? ''),
-      promo_pharmacies: String(row.promo_pharmacies ?? ''),
-      actual_promo_sales_units: String(row.actual_promo_sales_units ?? ''),
-      actual_investments: String(row.actual_investments ?? ''),
-      actual_promo_rub: String(row.actual_promo_rub ?? ''),
-      actual_promo_uplift_units: String(row.actual_promo_uplift_units ?? ''),
-      actual_promo_uplift_rub: String(row.actual_promo_uplift_rub ?? ''),
-      actual_roi: String(row.actual_roi ?? ''),
-      actual_external_ecom_units: String(row.actual_external_ecom_units ?? ''),
-      actual_corrected_baseline: String(row.actual_corrected_baseline ?? ''),
-      agreement1: (row.agreement1 as string) ?? '',
-      agreement2: (row.agreement2 as string) ?? '',
-      conditions: (row.conditions as string) ?? '',
-      comments: (row.comments as string) ?? '',
-      id_directum: (row.id_directum as string) ?? '',
-      ds_number: (row.ds_number as string) ?? '',
-      status: (row.status as string) ?? '',
-      updated_at: (row.updated_at as string) ?? null,
-      deleted_at: (row.deleted_at as string) ?? null,
-    });
+    setForm(formFromRow(row));
     setEditMode(true);
   }, []);
 
@@ -174,8 +186,13 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
       const result = await promoAPI.save(payload) as { data?: Record<string, unknown>; id: number; message: string };
 
+      // Форма во время сохранения не меняется (кнопка заблокирована), поэтому
+      // ответ накладывается на неё же — и возвращается вызывающему.
+      const savedForm = result.data
+        ? { ...form, ...result.data, id: result.id } as PromoFormValues
+        : form;
       if (result.data) {
-        setForm(prev => ({ ...prev, ...result.data, id: result.id }));
+        setForm(savedForm);
       }
 
       if (form.id && onEditSuccess && result.data) {
@@ -184,7 +201,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         onCreateSuccess();
       }
 
-      return { success: true, message: '✅ Сохранено' };
+      return { success: true, message: '✅ Сохранено', form: savedForm };
     } catch (err: unknown) {
       const apiErr = err as { status?: number; message?: string };
       if (apiErr.status === 409) {

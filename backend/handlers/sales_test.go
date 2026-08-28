@@ -56,19 +56,13 @@ func TestSalesBackgroundExportMaxRows(t *testing.T) {
 
 func TestSalesExportJobIsPrivateToOwner(t *testing.T) {
 	const id = "job-private-test"
-	salesExportJobStore.Lock()
-	salesExportJobStore.jobs[id] = &salesExportJob{ID: id, Owner: "alice", Status: "ready"}
-	salesExportJobStore.Unlock()
-	t.Cleanup(func() {
-		salesExportJobStore.Lock()
-		delete(salesExportJobStore.jobs, id)
-		salesExportJobStore.Unlock()
-	})
+	store := useTestExportJobs(t)
+	putTestExportJob(t, store, models.SalesExportJob{ID: id, Owner: "alice", Status: "ready"})
 
-	if _, ok := salesExportJobForUser(id, "alice"); !ok {
+	if _, ok := exportJobs.ForUser(id, "alice"); !ok {
 		t.Fatal("owner must be able to read own export job")
 	}
-	if _, ok := salesExportJobForUser(id, "bob"); ok {
+	if _, ok := exportJobs.ForUser(id, "bob"); ok {
 		t.Fatal("another user must not be able to read export job")
 	}
 }

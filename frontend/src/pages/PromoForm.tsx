@@ -9,6 +9,7 @@ import type { TextFieldProps } from '@mui/material';
 import { Save as SaveIcon } from '@mui/icons-material';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { promoAPI } from '../api/promo';
+import { newIdempotencyKey } from '../utils/idempotency';
 import type { HistoryRow, LastNetworkDataResponse, LastSKUDataResponse, NetworkGeoResponse, SKUInfoResponse } from '../types/promo';
 
 // Значения формы хранятся строками: поля ввода отдают строки,
@@ -189,6 +190,10 @@ export default function PromoForm({ onSave, onOpenPromo }: PromoFormProps) {
   const [investmentTypes, setInvestmentTypes] = useState<string[]>([]);
   const [historyMetric, setHistoryMetric] = useState<HistoryMetric>('units');
   const [saving, setSaving] = useState(false);
+  // Ключ идемпотентности живёт от открытия формы до удачного сохранения: пока
+  // это одна и та же заполняемая карточка, повтор после потерянного ответа не
+  // должен создавать вторую запись.
+  const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const [manualOverrides, setManualOverrides] = useState<ManualOverrides>({ contract_price: false, total_pharmacies: false });
 
@@ -352,9 +357,12 @@ export default function PromoForm({ onSave, onOpenPromo }: PromoFormProps) {
         actual_external_ecom_units: safeFloatNull(form.actual_external_ecom_units),
         actual_corrected_baseline: safeFloatNull(form.actual_corrected_baseline),
         status: form.status, date: calculated.promo_date,
+        idempotency_key: idempotencyKey,
       };
 
       await promoAPI.save(payload);
+      // Запись создана — следующая карточка сохраняется своим ключом.
+      setIdempotencyKey(newIdempotencyKey());
       handleReset();
       setSnackbar({ open: true, message: '✅ Промо создано. Форма очищена для следующей записи.', severity: 'success' });
       if (onSave) onSave();

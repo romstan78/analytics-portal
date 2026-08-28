@@ -22,8 +22,12 @@ import PromoEditDialog from '../components/PromoEditDialog';
 import { promoAPI, fetchWithAuth, parseJSONResponse, buildParams } from '../api/promo';
 import { usePromoFilters } from '../hooks/usePromoFilters';
 import { usePromoData } from '../hooks/usePromoData';
-import { usePromoForm } from '../hooks/usePromoForm';
+import { usePromoForm, formFromRow, type PromoRowLike } from '../hooks/usePromoForm';
 import { usePromoCalculations } from '../hooks/usePromoCalculations';
+import { useFormDraft } from '../hooks/useFormDraft';
+import { draftDiffers, readDraft, removeDraft, type SavedDraft } from '../utils/formDraft';
+import { promoDraftKey, promoDraftValues, type PromoDraftValues } from '../utils/promoDraft';
+import { getUsername } from '../api/auth';
 import {
   buildPromoDrilldownFilters,
   clonePromoFilters,
@@ -248,6 +252,69 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
     usePromoForm({ onEditSuccess: handleDataChanged, onDeleteSuccess: handleDataChanged, onCreateSuccess: handleDataChanged });
   const { scheduleRecalc } = usePromoCalculations(form, setForm);
 
+  // ─── Черновик карточки ────────────────────────────────────────────────
+  // baseline — значения, пришедшие с сервера при открытии: с ними сравнивается
+  // введённое, иначе черновиком считалась бы нетронутая карточка.
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [draftBaseline, setDraftBaseline] = useState<PromoDraftValues | null>(null);
+  const [draftOffer, setDraftOffer] = useState<SavedDraft<PromoDraftValues> | null>(null);
+  const draftValues = useMemo(() => promoDraftValues(form), [form]);
+  const draftDirty = draftKey != null && draftBaseline != null && draftDiffers(draftValues, draftBaseline);
+  const { saveNow: saveDraftNow } = useFormDraft({ storageKey: draftKey, values: draftValues, dirty: draftDirty });
+
+  // Карточка открывается: черновик предлагается здесь, а не в эффекте.
+  // Подставлять значения молча нельзя — пользователь должен понимать, откуда
+  // они взялись; правило react-hooks/set-state-in-effect такой эффект и запрещает.
+  const openPromoCard = useCallback((row: PromoRowLike, viewOnly: boolean) => {
+    formHandleRowClick(row);
+    setPromoViewOnly(viewOnly);
+    setEditDialogOpen(true);
+
+    const baseline = promoDraftValues(formFromRow(row));
+    // В режиме просмотра черновика нет: править нечего.
+    const key = viewOnly ? null : promoDraftKey(row.id);
+    const saved = readDraft<PromoDraftValues>(key, getUsername());
+    setDraftKey(key);
+    setDraftBaseline(viewOnly ? null : baseline);
+    if (saved && draftDiffers(saved.values, baseline)) {
+      setDraftOffer(saved);
+    } else {
+      // Черновик повторяет сохранённое — предлагать нечего, и держать незачем.
+      if (saved) removeDraft(key);
+      setDraftOffer(null);
+    }
+  }, [formHandleRowClick]);
+
+  const handleDraftRestore = useCallback(() => {
+    if (!draftOffer) return;
+    setForm(prev => ({ ...prev, ...draftOffer.values }));
+    // Расчётные поля в черновике не хранятся: их пересчитывает сервер по
+    // восстановленным значениям.
+    scheduleRecalc(draftOffer.values);
+    setDraftOffer(null);
+  }, [draftOffer, setForm, scheduleRecalc]);
+
+  const handleDraftDismiss = useCallback(() => {
+    removeDraft(draftKey);
+    setDraftOffer(null);
+  }, [draftKey]);
+
+  const forgetPromoCard = useCallback(() => {
+    setEditDialogOpen(false);
+    setPromoViewOnly(false);
+    setDraftOffer(null);
+    setDraftKey(null);
+    setDraftBaseline(null);
+  }, []);
+
+  // Закрытие карточки черновик сохраняет — вернуться к нему как раз и нужно.
+  // Забывается он только при явном отказе, после успешного сохранения и после
+  // удаления промо. Запись немедленная: паузы debounce у закрытой формы не будет.
+  const closePromoCard = useCallback(() => {
+    saveDraftNow();
+    forgetPromoCard();
+  }, [saveDraftNow, forgetPromoCard]);
+
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
   useEffect(() => {
     if (tab === 1) refetch();
@@ -269,17 +336,26 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   }), [meta]);
 
   // ─── Обработчики действий ─────────────────────────────────────────────
-  const handleRowClick = (params: GridRowParams) => { formHandleRowClick(params.row as PromoRow); setPromoViewOnly(false); setEditDialogOpen(true); };
+  const handleRowClick = (params: GridRowParams) => openPromoCard(params.row as PromoRow, false);
 
   const handleSave = async (commentOverride?: string | null) => {
-    const result = await formHandleSave(commentOverride); 
-    setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
+    const result = await formHandleSave(commentOverride);
+    if (result.success) {
+      removeDraft(draftKey);
+      // Точка отсчёта — ответ сервера, а не отправленное: он нормализует
+      // значения и добавляет свои, и от отправленного форма отличалась бы
+      // сразу после сохранения. Черновик тут же завёлся бы снова и был бы
+      // предложен при следующем открытии карточки.
+      setDraftBaseline(promoDraftValues(result.form ?? form));
+      setDraftOffer(null);
+    }
+    setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' });
   };
 
-  const handleDelete = async () => { 
-    const result = await formHandleDelete(); 
-    if (result.success) { setDeleteDialogOpen(false); setEditDialogOpen(false); }
-    setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' }); 
+  const handleDelete = async () => {
+    const result = await formHandleDelete();
+    if (result.success) { setDeleteDialogOpen(false); removeDraft(draftKey); forgetPromoCard(); }
+    setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' });
   };
 
   const handlePromoFormSave = () => {
@@ -317,9 +393,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const handleHistoryPromoOpen = async (id: number) => {
     try {
       const promo = await promoAPI.getById(id);
-      formHandleRowClick(promo);
-      setPromoViewOnly(true);
-      setEditDialogOpen(true);
+      openPromoCard(promo, true);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setSnackbar({ open: true, message: `❌ Не удалось открыть промо: ${message}`, severity: 'error' });
@@ -573,7 +647,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
 
       {/* Карточка доступна и из таблицы, и из истории на форме создания */}
       <PromoEditDialog
-        open={editDialogOpen} onClose={() => { setEditDialogOpen(false); setPromoViewOnly(false); }}
+        open={editDialogOpen} onClose={closePromoCard}
         form={form} setForm={setForm} scheduleRecalc={scheduleRecalc}
         onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
         saving={saving} deleting={deleting} meta={meta}
@@ -581,6 +655,9 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
         investmentTypes={investmentTypes}
         role={role}
         readOnly={promoViewOnly}
+        draftSavedAt={draftOffer?.savedAt ?? null}
+        onRestoreDraft={handleDraftRestore}
+        onDismissDraft={handleDraftDismiss}
       />
 
       <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
