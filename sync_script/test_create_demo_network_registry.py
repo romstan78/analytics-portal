@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from decimal import Decimal
 
 import import_network_facts
@@ -7,6 +8,8 @@ import create_demo_network_registry
 from create_demo_network_registry import (
     MONTH_DISTRIBUTIONS,
     build_fact_rows,
+    is_closed_month,
+    last_closed_quarter,
     build_network_rows,
     build_plan_rows,
     quarter_of,
@@ -16,6 +19,9 @@ from create_demo_network_registry import (
 
 
 SALT = "unit-test-demo-mapping-salt"
+
+# «Сегодня» тестов: 2025 год закрыт целиком, 2026 — по июль включительно.
+TODAY = date(2026, 8, 28)
 
 GEO_ROWS = [
     {"network_name": f"Демо-сеть {index:02d} «Тест»", "kam": f"КАМ {index % 4:02d}",
@@ -64,7 +70,9 @@ def build_registry(fact_year=2026, plan_years=(2025, 2026, 2027), fact_years=(20
         for row in network_rows
     }
     shipments = make_shipments([row["network_name"] for row in GEO_ROWS], fact_years)
-    fact_rows, quarterly = build_fact_rows(synthetic, shipments, network_ids, SKU_BRANDS, {})
+    fact_rows, quarterly = build_fact_rows(
+        synthetic, shipments, network_ids, SKU_BRANDS, {}, TODAY,
+    )
     plan_rows = build_plan_rows(
         synthetic, quarterly, network_ids, profiles, {}, fact_year, plan_years,
     )
@@ -93,6 +101,20 @@ class QuarterTests(unittest.TestCase):
     def test_quarter_of_month(self):
         self.assertEqual([quarter_of(m) for m in (1, 3, 4, 6, 7, 9, 10, 12)],
                          [1, 1, 2, 2, 3, 3, 4, 4])
+
+    def test_closed_month_matches_the_application(self):
+        # Та же граница, что в services.isClosedForecastMonth: текущий месяц
+        # ещё идёт и закрытым не считается.
+        self.assertTrue(is_closed_month(2025, 12, TODAY))
+        self.assertTrue(is_closed_month(2026, 7, TODAY))
+        self.assertFalse(is_closed_month(2026, 8, TODAY))
+        self.assertFalse(is_closed_month(2026, 9, TODAY))
+
+    def test_last_closed_quarter(self):
+        # Август 2026: Q3 идёт, поэтому целиком закрыт только Q2.
+        self.assertEqual(last_closed_quarter(2026, TODAY), 2)
+        self.assertEqual(last_closed_quarter(2025, TODAY), 4)
+        self.assertEqual(last_closed_quarter(2027, TODAY), 0)
 
 
 class NetworkRowTests(unittest.TestCase):
@@ -141,11 +163,29 @@ class FactRowTests(unittest.TestCase):
             self.network_ids,
             SKU_BRANDS,
             {"Демо-сеть 01 «Тест»": Decimal("12")},
+            TODAY,
         )
 
     def test_unknown_network_is_skipped(self):
         self.assertTrue(all(row[0] == 1 for row in self.rows))
-        self.assertEqual(len(self.rows), len(SKU_BRANDS) * 24)
+        # 12 месяцев закрытого 2025 года и 7 месяцев 2026-го до августа.
+        self.assertEqual(len(self.rows), len(SKU_BRANDS) * 19)
+
+    # Отгрузок из будущего не бывает: демо с фактом на год вперёд показывало
+    # выполненный план и «фактические» выплаты в ещё не наступившем квартале.
+    def test_open_months_stay_without_fact(self):
+        for row in self.rows:
+            self.assertTrue(
+                is_closed_month(row[1], row[2], TODAY),
+                f"{row[1]}-{row[2]:02d} ещё не закрыт, факта по нему быть не должно",
+            )
+        self.assertEqual(max(row[2] for row in self.rows if row[1] == 2026), 7)
+
+    # План нужен и на будущие кварталы, поэтому объёмная база собирается по
+    # всему году, а не обрывается на текущем месяце.
+    def test_quarterly_keeps_the_whole_year_for_planning(self):
+        quarters = {key[3] for key in self.quarterly if key[2] == 2026}
+        self.assertEqual(quarters, {1, 2, 3, 4})
 
     def test_facts_are_never_negative(self):
         # CK_NetworkMonthlyFacts_values запрещает отрицательные суммы.
