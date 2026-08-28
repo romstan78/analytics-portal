@@ -47,6 +47,7 @@ export interface InternetSalesDashboardData {
   currencySource: string;
   ecomShare: DashboardEcomShare;
   networkDrivers: DashboardDriver[];
+  brandDrivers: DashboardDriver[];
   productDrivers: DashboardDriver[];
   networkRanking: DashboardRankDetail[];
   productRanking: DashboardRankDetail[];
@@ -177,7 +178,7 @@ export default function InternetSalesDashboard({
 }: InternetSalesDashboardProps) {
   const [trendMode, setTrendMode] = useState<'year' | 'comparison'>('year');
   const [cumulative, setCumulative] = useState(false);
-  const [driverDimension, setDriverDimension] = useState<'network' | 'product'>('network');
+  const [driverDimension, setDriverDimension] = useState<'network' | 'brand' | 'product'>('network');
   const [driverMetric, setDriverMetric] = useState<'delta' | 'percent'>('delta');
   const [bottomTab, setBottomTab] = useState<'ranking' | 'heatmap' | 'detail'>('ranking');
   const [rankDimension, setRankDimension] = useState<'network' | 'product'>('network');
@@ -254,7 +255,14 @@ export default function InternetSalesDashboard({
   const networkFocusNames = new Set(focuses.filter(item => item.type === 'network').map(item => item.name));
   const productFocusNames = new Set(focuses.filter(item => item.type === 'product').map(item => item.name));
   const channels = [...new Set(data.channelTrends.map(point => point.name))];
-  const drivers = driverDimension === 'network' ? data.networkDrivers : data.productDrivers;
+  // Разрезы идут от крупного к мелкому: сеть, её бренды, их SKU. Бренд между
+  // ними — та ступень, на которой разговор о вкладе обычно и ведётся.
+  const driversByDimension = {
+    network: data.networkDrivers,
+    brand: data.brandDrivers ?? [],
+    product: data.productDrivers,
+  };
+  const drivers = driversByDimension[driverDimension];
   const driverRows = drivers.map(item => ({ ...item, chartValue: driverMetric === 'delta' ? item.delta : item.deltaPercent })).filter(item => item.chartValue != null);
   const ranking = rankDimension === 'network' ? data.networkRanking : data.productRanking;
   const selectedRankNames = rankDimension === 'network' ? networkFocusNames : productFocusNames;
@@ -388,7 +396,7 @@ export default function InternetSalesDashboard({
             <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <Box><Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Что изменило результат</Typography><Typography variant="caption" color="text.secondary">Вклад относительно {previousLabel}</Typography></Box>
               <Stack spacing={0.65} sx={{ alignItems: 'flex-end' }}>
-                <ToggleButtonGroup size="small" exclusive value={driverDimension} onChange={(_, value) => value && setDriverDimension(value)}><ToggleButton value="network">Сети</ToggleButton><ToggleButton value="product">SKU</ToggleButton></ToggleButtonGroup>
+                <ToggleButtonGroup size="small" exclusive value={driverDimension} onChange={(_, value) => value && setDriverDimension(value)}><ToggleButton value="network">Сети</ToggleButton><ToggleButton value="brand">Бренды</ToggleButton><ToggleButton value="product">SKU</ToggleButton></ToggleButtonGroup>
                 <ToggleButtonGroup size="small" exclusive value={driverMetric} onChange={(_, value) => value && setDriverMetric(value)}><ToggleButton value="delta">Вклад</ToggleButton><ToggleButton value="percent">YoY %</ToggleButton></ToggleButtonGroup>
               </Stack>
             </Stack>

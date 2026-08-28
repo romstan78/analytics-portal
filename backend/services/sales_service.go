@@ -511,7 +511,7 @@ func (b *dashboardBuilder) fillComparisons(response *models.SalesDashboardRespon
 	return nil
 }
 
-// fillDimensions строит драйверы и рейтинги по сетям и продуктам.
+// fillDimensions строит драйверы и рейтинги по сетям, брендам и продуктам.
 func (b *dashboardBuilder) fillDimensions(response *models.SalesDashboardResponse) error {
 	filter := b.yearRangeFilter()
 
@@ -531,12 +531,19 @@ func (b *dashboardBuilder) fillDimensions(response *models.SalesDashboardRespons
 	if err != nil {
 		return err
 	}
+	brandValues, err := load("brandName", "Dashboard brand analytics query failed")
+	if err != nil {
+		return err
+	}
 	productValues, err := load("productName", "Dashboard product analytics query failed")
 	if err != nil {
 		return err
 	}
 
 	response.NetworkDrivers, response.NetworkRanking = buildDimensionViews(networkValues)
+	// Рейтинг по брендам витрина не показывает, поэтому здесь нужны только
+	// драйверы: строить его впрок значило бы отдавать наружу мёртвое поле.
+	response.BrandDrivers, _ = buildDimensionViews(brandValues)
 	response.ProductDrivers, response.ProductRanking = buildDimensionViews(productValues)
 	return nil
 }

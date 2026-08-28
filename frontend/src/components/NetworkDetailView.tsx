@@ -15,10 +15,12 @@ import {
   Button,
   Chip,
   CircularProgress,
+  FormControlLabel,
   Grid,
   IconButton,
   Paper,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -39,6 +41,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  LabelList,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -91,6 +94,16 @@ const MONTH_FULL = [
 // Что показывает раскрытие строки бренда. Кварталы — те же строки плана,
 // SKU — объяснение снизу, где плановых величин нет.
 type DetailKind = 'quarters' | 'skus';
+
+// Подписи значений — как в витрине по всем сетям: приглушённый цвет, чтобы
+// читались как разметка, а не спорили с самими рядами. Ряды с подписями не
+// анимируются: recharts отдаёт LabelList данные только неанимируемому ряду.
+const BAR_LABEL_STYLE = { fontSize: 9, fontWeight: 700, fill: INK_MUTED } as const;
+
+// Пустое значение не подписываем: у закрытого месяца нет прогноза, у открытого
+// нет факта, и подпись повисла бы в пустоте.
+const labelText = (value: unknown, format: (numeric: number) => string) =>
+  value == null || !Number.isFinite(Number(value)) ? '' : format(Number(value));
 
 interface NetworkDetailViewProps {
   data: NetworkDashboardResponse | null;
@@ -291,6 +304,7 @@ export default function NetworkDetailView({
   data, loading, error, onBackToAll, onBackToKAM, kamCrumb, onOpenCard,
 }: NetworkDetailViewProps) {
   const [unit, setUnit] = useState<Unit>('rub');
+  const [showValues, setShowValues] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [detailKind, setDetailKind] = useState<DetailKind>('quarters');
 
@@ -330,6 +344,24 @@ export default function NetworkDetailView({
       withoutForecast: point.cellsWithoutForecast,
     }));
   }, [data, unit]);
+
+  // Выполнение нарастающим итогом: доля результата к обязательству на конец
+  // каждого месяца. Именно нарастающим, а не помесячно, — карточка показывает
+  // выполнение за период целиком, и ряд обязан приходить к той же цифре;
+  // помесячный процент рассказывал бы про декабрь, а не про период.
+  const completionTrend = useMemo(() => {
+    let plan = 0;
+    let result = 0;
+    const series: number[] = [];
+    months.forEach((point) => {
+      plan += point.plan;
+      result += point.fact ?? point.eac ?? 0;
+      // Месяцы без плана процента не дают: делить на ноль нечем, а тянуть
+      // предыдущее значение значило бы дорисовать выполнение, которого нет.
+      if (plan > 0) series.push((result / plan) * 100);
+    });
+    return series;
+  }, [months]);
 
   // Отклонение от плана по брендам: разрыв прогноза итога к обязательству.
   // Сортировка по величине, а не по знаку — разговор начинается с крупного,
@@ -487,6 +519,11 @@ export default function NetworkDetailView({
               <ToggleButton value="rub">₽</ToggleButton>
               <ToggleButton value="units">уп.</ToggleButton>
             </ToggleButtonGroup>
+            <FormControlLabel
+              control={<Switch size="small" checked={showValues} onChange={(event) => setShowValues(event.target.checked)} />}
+              label={<Typography variant="body2">Значения на графиках</Typography>}
+              sx={{ mr: 0 }}
+            />
             <Button
               variant="contained"
               size="small"
@@ -519,6 +556,8 @@ export default function NetworkDetailView({
             secondary={`${signedShort(summary.gapRub)} ₽ к обязательству`}
             hint="Прогноз итога к плану"
             accent={eacCompletion != null && eacCompletion >= 100 ? POLARITY_POSITIVE : POLARITY_NEGATIVE}
+            trend={completionTrend}
+            trendScale="range"
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 4, lg: 2.4 }}>
@@ -578,7 +617,7 @@ export default function NetworkDetailView({
             height={320}
           >
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={months} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
+              <ComposedChart data={months} margin={{ top: showValues ? 26 : 18, right: 8, left: 0, bottom: 0 }}>
                 {/* Сценарий кодируется заливкой, а не только цветом: план —
                     контур, факт — сплошной, прогноз — штриховка. Так три ряда
                     различимы и при дальтонизме, и в чёрно-белой печати. */}
@@ -599,8 +638,27 @@ export default function NetworkDetailView({
                 />
                 <Tooltip content={<MonthTooltip unit={unit} />} cursor={{ fill: 'rgba(99,102,241,.06)' }} />
                 <Bar dataKey="plan" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                <Bar dataKey="fact" fill={SERIES_FACT} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                <Bar dataKey="eac" fill="url(#detail-hatch-year)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                {/* Подписан результат месяца, а не все три ряда: факт и прогноз
+                    друг друга исключают, поэтому на месяц приходится ровно одна
+                    подпись. План рядом с ними встал бы вплотную и слился. */}
+                <Bar dataKey="fact" fill={SERIES_FACT} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {showValues && (
+                    <LabelList
+                      dataKey="fact" position="top" offset={6}
+                      formatter={(value) => labelText(value, formatRubShort)}
+                      style={BAR_LABEL_STYLE}
+                    />
+                  )}
+                </Bar>
+                <Bar dataKey="eac" fill="url(#detail-hatch-year)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {showValues && (
+                    <LabelList
+                      dataKey="eac" position="top" offset={6}
+                      formatter={(value) => labelText(value, formatRubShort)}
+                      style={BAR_LABEL_STYLE}
+                    />
+                  )}
+                </Bar>
                 <Line
                   dataKey="prevFact"
                   stroke={SERIES_PREV}
@@ -642,6 +700,13 @@ export default function NetworkDetailView({
                 <ReferenceLine x={0} stroke={INK_MUTED} strokeWidth={1} />
                 <Tooltip content={<GapTooltip unit={unit} />} cursor={{ fill: 'rgba(99,102,241,.06)' }} />
                 <Bar dataKey="value" radius={[3, 3, 3, 3]} isAnimationActive={false}>
+                  {showValues && (
+                    <LabelList
+                      dataKey="value" position="right"
+                      formatter={(value) => labelText(value, signedShort)}
+                      style={BAR_LABEL_STYLE}
+                    />
+                  )}
                   {gaps.map((point) => (
                     <Cell key={point.name} fill={gapColor(point.value)} />
                   ))}
@@ -974,7 +1039,7 @@ export default function NetworkDetailView({
         height={290}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={investments} margin={{ top: 18, right: 8, left: 0, bottom: 0 }} maxBarSize={78}>
+          <BarChart data={investments} margin={{ top: showValues ? 26 : 18, right: 8, left: 0, bottom: 0 }} maxBarSize={78}>
             <defs>
               <pattern id="detail-hatch-invest" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
                 <rect width="6" height="6" fill={SERIES_EAC} fillOpacity={0.26} />
@@ -998,8 +1063,26 @@ export default function NetworkDetailView({
               width={66}
             />
             <Tooltip content={<InvestmentTooltip year={data.year} />} cursor={{ fill: 'rgba(99,102,241,.06)' }} />
-            <Bar dataKey="plan" name="План" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-            <Bar dataKey="eac" name="Ожидаемые" fill="url(#detail-hatch-invest)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+            {/* Здесь подписаны оба ряда: кварталов не больше четырёх, места
+                хватает, а весь смысл графика — расхождение плана с ожидаемым. */}
+            <Bar dataKey="plan" name="План" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+              {showValues && (
+                <LabelList
+                  dataKey="plan" position="top" offset={6}
+                  formatter={(value) => labelText(value, formatRubShort)}
+                  style={BAR_LABEL_STYLE}
+                />
+              )}
+            </Bar>
+            <Bar dataKey="eac" name="Ожидаемые" fill="url(#detail-hatch-invest)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+              {showValues && (
+                <LabelList
+                  dataKey="eac" position="top" offset={6}
+                  formatter={(value) => labelText(value, formatRubShort)}
+                  style={BAR_LABEL_STYLE}
+                />
+              )}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </ChartPaper>
