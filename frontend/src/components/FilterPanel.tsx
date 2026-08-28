@@ -1,8 +1,51 @@
 import type { HTMLAttributes, Key, SyntheticEvent } from 'react';
 import {
-  TextField, Stack, Autocomplete,
+  TextField, Stack, Autocomplete, Box,
   FormControlLabel, Checkbox, ListItemText, Button, Switch
 } from '@mui/material';
+
+// Плотность фильтров держится на уровне остальной страницы: текст 0.875rem,
+// как в тулбаре таблицы, а высоту строки списка задаёт текст, а не хитбокс
+// чекбокса — иначе семь значений разворачиваются на треть экрана.
+const FIELD_FONT_SIZE = '0.875rem';
+
+const FIELD_SX = {
+  minWidth: 170,
+  '& .MuiAutocomplete-tag': { display: 'none' },
+  '& .MuiInputBase-input': { fontSize: FIELD_FONT_SIZE },
+};
+
+const YEAR_FIELD_SX = { width: 90, '& .MuiInputBase-input': { fontSize: FIELD_FONT_SIZE } };
+
+// Удвоенный «&» поднимает вес правил: собственные стили Autocomplete приходят
+// селектором из двух классов и иначе перебивают отступы и подсветку.
+const OPTION_SX = {
+  '&&': { gap: 1, px: 1, py: 0.5, borderRadius: '8px' },
+  '&&[aria-selected="true"]': { bgcolor: '#eef2ff' },
+  '&&[aria-selected="true"].Mui-focused': { bgcolor: '#e0e7ff' },
+};
+
+// Невыбранный чекбокс держим в тон рамкам полей, выбранный — в цвет темы.
+const OPTION_CHECKBOX_SX = {
+  p: 0.375,
+  color: '#cbd5e1',
+  '&.Mui-checked': { color: 'primary.main' },
+  '& .MuiSvgIcon-root': { fontSize: 18 },
+};
+
+// Выпадающий список — такая же поверхность, как карточки страницы: светлая
+// рамка и мягкая тень вместо почти плоской тени по умолчанию.
+const popupSlotProps = (minWidth: number) => ({
+  listbox: { sx: { maxHeight: 300, p: 0.5 } },
+  paper: {
+    sx: {
+      minWidth,
+      borderRadius: '12px',
+      border: '1px solid #e2e8f0',
+      boxShadow: '0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.08)',
+    },
+  },
+});
 
 interface NumberOption {
   label: string;
@@ -77,13 +120,14 @@ export default function FilterPanel({
   ) => {
     const { key, ...rest } = props;
     return (
-      <li key={key} {...rest} style={{ padding: '2px 8px' }}>
-        <Checkbox size="small" checked={selected} sx={{ mr: 1 }} />
+      <Box component="li" key={key} {...rest} sx={OPTION_SX}>
+        <Checkbox size="small" disableRipple checked={selected} sx={OPTION_CHECKBOX_SX} />
         <ListItemText
           primary={typeof option === 'string' ? option : option.label}
-          slotProps={{ primary: { sx: { fontSize: 13 } } }}
+          sx={{ my: 0 }}
+          slotProps={{ primary: { sx: { fontSize: FIELD_FONT_SIZE, fontWeight: selected ? 600 : 400 } } }}
         />
-      </li>
+      </Box>
     );
   };
 
@@ -101,7 +145,9 @@ export default function FilterPanel({
   return (
     <Stack spacing={1.5}>
       {/* Строка фильтров */}
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+      {/* useFlexGap — иначе при переносе строки фильтров слипаются: отступ
+          Stack живёт на margin-left и вертикального зазора не даёт. */}
+      <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
 
         {/* Годы и месяцы — один проход */}
         {extraFilters.map((filter) => {
@@ -115,8 +161,8 @@ export default function FilterPanel({
                 type="number"
                 value={typeof filters[filter.field] === 'string' || typeof filters[filter.field] === 'number' ? filters[filter.field] : ''}
                 onChange={handleTextChange(filter.field)}
-                sx={{ width: 90 }} 
-                slotProps={{ htmlInput: { min: 2018, max: 2030 } }} 
+                sx={YEAR_FIELD_SX}
+                slotProps={{ htmlInput: { min: 2018, max: 2030 } }}
               />
             );
           }
@@ -159,11 +205,8 @@ export default function FilterPanel({
                     }}
                   />
                 )}
-                slotProps={{ 
-                  listbox: { style: { maxHeight: 300 } }, 
-                  paper: { sx: { minWidth: 300 } } 
-                }}
-                sx={{ minWidth: 170, '& .MuiAutocomplete-tag': { display: 'none' } }} 
+                slotProps={popupSlotProps(300)}
+                sx={FIELD_SX}
               />
             );
           }
@@ -201,8 +244,8 @@ export default function FilterPanel({
                   }}
                 />
               )}
-              slotProps={{ listbox: { style: { maxHeight: 300 } }, paper: { sx: { minWidth: 350 } } }}
-              sx={{ minWidth: 170, '& .MuiAutocomplete-tag': { display: 'none' } }} />
+              slotProps={popupSlotProps(350)}
+              sx={FIELD_SX} />
           );
         })}
       </Stack>
@@ -225,8 +268,8 @@ export default function FilterPanel({
                 onChange={(e) => onPersistChange(e.target.checked)}
               />
             }
-            label="Сохранять" 
-            sx={{ ml: 1, '& .MuiTypography-root': { fontSize: 13 } }} 
+            label="Сохранять"
+            sx={{ ml: 1, '& .MuiTypography-root': { fontSize: FIELD_FONT_SIZE } }}
           />
         )}
       </Stack>

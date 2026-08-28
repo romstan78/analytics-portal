@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import {
-  Alert, Box, CircularProgress, Grid, MenuItem, Paper, Select, Stack,
-  Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Alert, Box, CircularProgress, FormControlLabel, Grid, MenuItem, Paper, Select, Stack,
+  Switch, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Tabs, ToggleButton, ToggleButtonGroup, Tooltip as MuiTooltip, Typography,
 } from '@mui/material';
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
+  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Scatter, ScatterChart,
   Tooltip, XAxis, YAxis, ZAxis,
 } from 'recharts';
@@ -20,6 +20,17 @@ const MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'И�
 const SERIES_PLAN = '#6366f1';
 const SERIES_FACT = '#149174';
 const SERIES_NEUTRAL = '#8793a5';
+// Подписи значений на графиках — в тон реестру сетей: приглушённый цвет, чтобы
+// они читались как разметка, а не спорили с самими рядами.
+//
+// У всех рядов с подписями анимация выключена намеренно. Recharts отдаёт
+// LabelList данные только когда ряд не анимируется (showLabels: !isAnimating),
+// а состояние «анимируется» снимается лишь по событию конца анимации. Включить
+// анимацию обратно — значит получить подписи, которые то появляются с задержкой,
+// то не появляются вовсе. В витрине реестра она выключена по той же причине.
+const LABEL_INK = '#64748b';
+const BAR_LABEL_STYLE = { fontSize: 9, fontWeight: 700, fill: LABEL_INK } as const;
+const LINE_LABEL_STYLE = { fontSize: 10, fontWeight: 700, fill: LABEL_INK } as const;
 
 type DashboardView = 'overview' | 'calendar';
 type BreakdownDimension = 'network' | 'brand' | 'sku' | 'mechanics';
@@ -77,6 +88,11 @@ const fullNumber = (value: number | null | undefined, digits = 0) => {
 
 const percentLabel = (value: number | null | undefined, digits = 1) =>
   value == null || !Number.isFinite(value) ? '—' : `${fullNumber(value, digits)}%`;
+
+// Пустое значение не подписываем вовсе: у промо без факта столбца нет, и «—»
+// повисло бы в пустоте вместо отсутствующего ряда.
+const labelText = (value: unknown, format: (numeric: number) => string) =>
+  value == null || !Number.isFinite(Number(value)) ? '' : format(Number(value));
 
 // Recharts сортирует легенду по value, а подсказку по name, поэтому факт вставал
 // перед планом независимо от порядка рядов в разметке. Ранжируем явно: план
@@ -142,7 +158,11 @@ function breakdownColor(completion: number, roiValue: number) {
   return '#d18a2e';
 }
 
-function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse; onDrilldown: PromoDashboardProps['onDrilldown'] }) {
+function OverviewDashboard({ data, onDrilldown, showValues }: {
+  data: PromoDashboardResponse;
+  onDrilldown: PromoDashboardProps['onDrilldown'];
+  showValues: boolean;
+}) {
   const [dimension, setDimension] = useState<BreakdownDimension>('network');
   const [driverMetric, setDriverMetric] = useState<DriverMetric>('sales');
 
@@ -218,7 +238,7 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
         <Grid size={{ xs: 12, xl: 6 }}>
           <ChartPaper title="План–факт продаж" subtitle="Общий план периода; отсутствие столбца факта означает незаполненный факт">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trend} margin={{ top: 10, right: 12, left: 4, bottom: 0 }} onClick={(state) => {
+              <BarChart data={trend} margin={{ top: showValues ? 20 : 10, right: 12, left: 4, bottom: 0 }} onClick={(state) => {
                 const row = trend[Number(state?.activeTooltipIndex)];
                 if (row) openPeriod(row);
               }}>
@@ -227,8 +247,12 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
                 <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUnits' ? 'План' : 'Факт']} />
                 <Legend itemSorter={planFirst} formatter={(value) => value === 'planUnits' ? 'План' : 'Факт'} />
-                <Bar dataKey="planUnits" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" />
-                <Bar dataKey="actualUnits" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" />
+                <Bar dataKey="planUnits" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="planUnits" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
+                <Bar dataKey="actualUnits" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="actualUnits" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </ChartPaper>
@@ -236,7 +260,7 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
         <Grid size={{ xs: 12, xl: 6 }}>
           <ChartPaper title="План–факт инвестиций" subtitle="Фактические инвестиции показаны только для сопоставимого фактического среза">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trend} margin={{ top: 10, right: 12, left: 4, bottom: 0 }} onClick={(state) => {
+              <BarChart data={trend} margin={{ top: showValues ? 20 : 10, right: 12, left: 4, bottom: 0 }} onClick={(state) => {
                 const row = trend[Number(state?.activeTooltipIndex)];
                 if (row) openPeriod(row);
               }}>
@@ -245,8 +269,12 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
                 <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} ₽`, name === 'planInvestments' ? 'План' : 'Факт']} />
                 <Legend itemSorter={planFirst} formatter={(value) => value === 'planInvestments' ? 'План' : 'Факт'} />
-                <Bar dataKey="planInvestments" fill="#c57a24" opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" />
-                <Bar dataKey="actualInvestments" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" />
+                <Bar dataKey="planInvestments" fill="#c57a24" opacity={0.72} radius={[3, 3, 0, 0]} cursor="pointer" isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="planInvestments" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
+                <Bar dataKey="actualInvestments" fill={SERIES_FACT} radius={[3, 3, 0, 0]} cursor="pointer" isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="actualInvestments" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </ChartPaper>
@@ -257,15 +285,19 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
         <Grid size={{ xs: 12, xl: 5 }}>
           <ChartPaper title="Weighted ROI по месяцам" subtitle="План и факт рассчитаны на одинаковом фактическом срезе">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trend} margin={{ top: 10, right: 16, left: 6, bottom: 0 }}>
+              <LineChart data={trend} margin={{ top: showValues ? 20 : 10, right: 16, left: 6, bottom: 0 }}>
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} minTickGap={22} />
                 <YAxis tickFormatter={(value) => `${fullNumber(Number(value))}%`} tick={{ fontSize: 10 }} width={62} />
                 <ReferenceLine y={0} stroke={SERIES_NEUTRAL} />
                 <Tooltip itemSorter={planFirst} formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
                 <Legend itemSorter={planFirst} formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
-                <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={false} connectNulls={false} />
-                <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={false} connectNulls={false} />
+                <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={false} connectNulls={false} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="planRoi" position="top" offset={8} formatter={(value) => labelText(value, (numeric) => percentLabel(numeric, 0))} style={LINE_LABEL_STYLE} />}
+                </Line>
+                <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={false} connectNulls={false} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="actualRoi" position="bottom" offset={8} formatter={(value) => labelText(value, (numeric) => percentLabel(numeric, 0))} style={LINE_LABEL_STYLE} />}
+                </Line>
               </LineChart>
             </ResponsiveContainer>
           </ChartPaper>
@@ -287,11 +319,34 @@ function OverviewDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={drivers} layout="vertical" margin={{ top: 8, right: 18, left: 28, bottom: 0 }}>
                   <CartesianGrid stroke="#edf0f4" horizontal={false} />
-                  <XAxis type="number" tickFormatter={driverMetric === 'roi' ? (value) => `${fullNumber(Number(value))} п.п.` : compactNumber} tick={{ fontSize: 10 }} />
+                  {/* Подпись отрицательного столбца recharts рисует слева от него,
+                      за его пределами. Раздвигать под неё домен бессмысленно: при
+                      малых по модулю минусах и крупных плюсах отрицательная
+                      половина оси занимает считанные пиксели, и подпись садится на
+                      названия. padding задаёт запас прямо в пикселях и от разброса
+                      данных не зависит.
+
+                      Слева запас нужен только при отрицательных значениях: без
+                      них он просто отодвинул бы столбцы от нуля. */}
+                  <XAxis
+                    type="number"
+                    padding={showValues ? { left: drivers.some(point => point.value < 0) ? 64 : 0, right: 64 } : undefined}
+                    tickFormatter={driverMetric === 'roi' ? (value) => `${fullNumber(Number(value))} п.п.` : compactNumber}
+                    tick={{ fontSize: 10 }}
+                  />
                   <YAxis type="category" dataKey="name" width={135} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 18)}…` : String(value)} />
                   <ReferenceLine x={0} stroke={SERIES_NEUTRAL} />
                   <Tooltip formatter={(value) => [driverMetric === 'roi' ? `${fullNumber(Number(value), 1)} п.п.` : fullNumber(Number(value)), 'Отклонение']} />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                  <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
+                    {showValues && (
+                      <LabelList
+                        dataKey="value" position="right"
+                        formatter={(value) => labelText(value, driverMetric === 'roi'
+                          ? (numeric) => `${fullNumber(numeric, 1)} п.п.`
+                          : compactNumber)}
+                        style={BAR_LABEL_STYLE}
+                      />
+                    )}
                     {drivers.map(point => <Cell key={point.name} fill={point.value >= 0 ? SERIES_FACT : '#d15d50'} cursor="pointer" onClick={() => openBreakdown(point.breakdown)} />)}
                   </Bar>
                 </BarChart>
@@ -374,7 +429,11 @@ function calendarTooltip(point: PromoDashboardCalendarPoint) {
   );
 }
 
-function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse; onDrilldown: PromoDashboardProps['onDrilldown'] }) {
+function CalendarDashboard({ data, onDrilldown, showValues }: {
+  data: PromoDashboardResponse;
+  onDrilldown: PromoDashboardProps['onDrilldown'];
+  showValues: boolean;
+}) {
   const [dimension, setDimension] = useState<CalendarDimension>('network');
   const [metric, setMetric] = useState<CalendarMetric>('count');
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
@@ -456,14 +515,18 @@ function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
         <Grid size={{ xs: 12, xl: 7 }}>
           <ChartPaper title={`Сезонность uplift · ${activeYear || '—'}`} subtitle="План содержит все промо месяца; факт отсутствует, если сопоставимый срез не заполнен">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={yearTrend} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
+              <BarChart data={yearTrend} margin={{ top: showValues ? 20 : 10, right: 12, left: 4, bottom: 0 }}>
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} />
                 <YAxis tickFormatter={compactNumber} tick={{ fontSize: 10 }} width={60} />
                 <Tooltip itemSorter={planFirst} formatter={(value, name) => [`${fullNumber(Number(value))} уп.`, name === 'planUplift' ? 'План uplift' : 'Факт uplift']} />
                 <Legend itemSorter={planFirst} formatter={(value) => value === 'planUplift' ? 'План uplift' : 'Факт uplift'} />
-                <Bar dataKey="planUplift" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} />
-                <Bar dataKey="actualUplift" fill={SERIES_FACT} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="planUplift" fill={SERIES_PLAN} opacity={0.72} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="planUplift" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
+                <Bar dataKey="actualUplift" fill={SERIES_FACT} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="actualUplift" position="top" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </ChartPaper>
@@ -471,15 +534,19 @@ function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
         <Grid size={{ xs: 12, xl: 5 }}>
           <ChartPaper title={`Сезонность ROI · ${activeYear || '—'}`} subtitle="Weighted ROI на сопоставимом фактическом срезе">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={yearTrend} margin={{ top: 10, right: 16, left: 6, bottom: 0 }}>
+              <LineChart data={yearTrend} margin={{ top: showValues ? 20 : 10, right: 16, left: 6, bottom: 0 }}>
                 <CartesianGrid stroke="#e9edf2" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} />
                 <YAxis tickFormatter={(value) => `${fullNumber(Number(value))}%`} tick={{ fontSize: 10 }} width={62} />
                 <ReferenceLine y={0} stroke={SERIES_NEUTRAL} />
                 <Tooltip itemSorter={planFirst} formatter={(value, name) => [percentLabel(Number(value)), name === 'planRoi' ? 'План ROI' : 'Факт ROI']} />
                 <Legend itemSorter={planFirst} formatter={(value) => value === 'planRoi' ? 'План ROI' : 'Факт ROI'} />
-                <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={{ r: 2 }} connectNulls={false} />
-                <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={{ r: 2 }} connectNulls={false} />
+                <Line dataKey="planRoi" stroke={SERIES_PLAN} strokeWidth={2.4} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="planRoi" position="top" offset={8} formatter={(value) => labelText(value, (numeric) => percentLabel(numeric, 0))} style={LINE_LABEL_STYLE} />}
+                </Line>
+                <Line dataKey="actualRoi" stroke={SERIES_FACT} strokeWidth={2.8} dot={{ r: 2 }} connectNulls={false} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="actualRoi" position="bottom" offset={8} formatter={(value) => labelText(value, (numeric) => percentLabel(numeric, 0))} style={LINE_LABEL_STYLE} />}
+                </Line>
               </LineChart>
             </ResponsiveContainer>
           </ChartPaper>
@@ -491,6 +558,9 @@ function CalendarDashboard({ data, onDrilldown }: { data: PromoDashboardResponse
 
 export default function PromoDashboard({ data, loading, error, onDrilldown }: PromoDashboardProps) {
   const [view, setView] = useState<DashboardView>('overview');
+  // Переключатель живёт здесь, а не внутри вкладок: подписи включают один раз и
+  // ждут их на обеих — как в витрине реестра сетей.
+  const [showValues, setShowValues] = useState(false);
 
   if (loading && !data) return <Box sx={{ flex: 1, display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
   if (error) return <Alert severity="error">{error}</Alert>;
@@ -503,9 +573,17 @@ export default function PromoDashboard({ data, loading, error, onDrilldown }: Pr
           <Tab value="overview" label="План–факт и эффективность" />
           <Tab value="calendar" label="Календарь и сезонность" />
         </Tabs>
-        {loading && <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', pr: 1 }}><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', pr: 1 }}>
+          <FormControlLabel
+            control={<Switch size="small" checked={showValues} onChange={(event) => setShowValues(event.target.checked)} />}
+            label={<Typography variant="body2">Значения на графике</Typography>}
+          />
+          {loading && <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}><CircularProgress size={15} /><Typography variant="caption" color="text.secondary">Обновление</Typography></Stack>}
+        </Stack>
       </Stack>
-      {view === 'overview' ? <OverviewDashboard data={data} onDrilldown={onDrilldown} /> : <CalendarDashboard data={data} onDrilldown={onDrilldown} />}
+      {view === 'overview'
+        ? <OverviewDashboard data={data} onDrilldown={onDrilldown} showValues={showValues} />
+        : <CalendarDashboard data={data} onDrilldown={onDrilldown} showValues={showValues} />}
     </Box>
   );
 }
