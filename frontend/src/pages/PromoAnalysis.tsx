@@ -339,13 +339,14 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const handleRowClick = (params: GridRowParams) => openPromoCard(params.row as PromoRow, false);
 
   const handleSave = async (commentOverride?: string | null) => {
-    // Точка отсчёта для черновика после сохранения — то, что ушло на сервер:
-    // форма снова совпадает с сохранённым, и черновик заводить не с чего.
-    const submitted = draftValues;
     const result = await formHandleSave(commentOverride);
     if (result.success) {
       removeDraft(draftKey);
-      setDraftBaseline(submitted);
+      // Точка отсчёта — ответ сервера, а не отправленное: он нормализует
+      // значения и добавляет свои, и от отправленного форма отличалась бы
+      // сразу после сохранения. Черновик тут же завёлся бы снова и был бы
+      // предложен при следующем открытии карточки.
+      setDraftBaseline(promoDraftValues(result.form ?? form));
       setDraftOffer(null);
     }
     setSnackbar({ open: true, message: result.message, severity: result.success ? 'success' : 'error' });

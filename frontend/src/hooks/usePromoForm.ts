@@ -120,6 +120,10 @@ export function formFromRow(row: PromoRowLike): PromoFormValues {
 interface SaveResult {
   success: boolean;
   message: string;
+  // Форма после ответа сервера. Сохранённые значения он нормализует и
+  // пересчитывает, поэтому точкой отсчёта — в том числе для черновика —
+  // годится только она, а не то, что ушло в запрос.
+  form?: PromoFormValues;
 }
 
 interface UsePromoFormCallbacks {
@@ -182,8 +186,13 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
 
       const result = await promoAPI.save(payload) as { data?: Record<string, unknown>; id: number; message: string };
 
+      // Форма во время сохранения не меняется (кнопка заблокирована), поэтому
+      // ответ накладывается на неё же — и возвращается вызывающему.
+      const savedForm = result.data
+        ? { ...form, ...result.data, id: result.id } as PromoFormValues
+        : form;
       if (result.data) {
-        setForm(prev => ({ ...prev, ...result.data, id: result.id }));
+        setForm(savedForm);
       }
 
       if (form.id && onEditSuccess && result.data) {
@@ -192,7 +201,7 @@ export function usePromoForm({ onEditSuccess, onDeleteSuccess, onCreateSuccess }
         onCreateSuccess();
       }
 
-      return { success: true, message: '✅ Сохранено' };
+      return { success: true, message: '✅ Сохранено', form: savedForm };
     } catch (err: unknown) {
       const apiErr = err as { status?: number; message?: string };
       if (apiErr.status === 409) {
