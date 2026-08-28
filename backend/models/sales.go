@@ -195,6 +195,7 @@ type SalesDashboardResponse struct {
 	EcomShare         SalesDashboardEcomShare         `json:"ecomShare"`
 
 	NetworkDrivers []SalesDashboardDriver     `json:"networkDrivers"`
+	BrandDrivers   []SalesDashboardDriver     `json:"brandDrivers"`
 	ProductDrivers []SalesDashboardDriver     `json:"productDrivers"`
 	NetworkRanking []SalesDashboardRankDetail `json:"networkRanking"`
 	ProductRanking []SalesDashboardRankDetail `json:"productRanking"`

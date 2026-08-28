@@ -5,7 +5,7 @@
 
 import { useMemo } from 'react';
 import { Box, Paper, Stack, Tooltip as MuiTooltip, Typography } from '@mui/material';
-import { Area, AreaChart, ResponsiveContainer } from 'recharts';
+import { Area, AreaChart, ResponsiveContainer, YAxis } from 'recharts';
 import { pluralRu } from '../utils/networkPlan';
 import {
   BORDER,
@@ -20,13 +20,23 @@ import type { NetworkDashboardPromoTag } from '../types/network';
 
 // Спарклайн в карточке: форма ряда без осей и подписей — она отвечает на
 // вопрос «как шло», а точные числа стоят рядом цифрами.
-export function Sparkline({ values, color }: { values: number[]; color: string }) {
+//
+// scale='zero' — шкала от нуля: так суммы честно показывают и свой размер.
+// scale='range' — шкала по размаху самого ряда, для процентов вокруг сотни:
+// на шкале от нуля ряд 95–105 % занял бы десятую часть высоты и выродился
+// в прямую, то есть перестал бы отвечать на вопрос «как шло».
+export function Sparkline({ values, color, scale = 'zero' }: {
+  values: number[];
+  color: string;
+  scale?: 'zero' | 'range';
+}) {
   const points = useMemo(() => values.map((value, index) => ({ index, value })), [values]);
   if (points.length < 2) return null;
   return (
     <Box sx={{ height: 34, mt: 0.5, mx: -0.5 }}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={points} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+          {scale === 'range' && <YAxis hide domain={['dataMin', 'dataMax']} />}
           <defs>
             <linearGradient id={`spark-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity={0.35} />
@@ -48,7 +58,7 @@ export function Sparkline({ values, color }: { values: number[]; color: string }
 }
 
 export function KpiCard({
-  label, primary, secondary, hint, accent, trend, growth,
+  label, primary, secondary, hint, accent, trend, trendScale, growth,
 }: {
   label: string;
   primary: string;
@@ -56,6 +66,7 @@ export function KpiCard({
   hint?: string;
   accent: string;
   trend?: number[];
+  trendScale?: 'zero' | 'range';
   growth?: number | null;
 }) {
   return (
@@ -81,7 +92,7 @@ export function KpiCard({
       {secondary && <Typography variant="body2" sx={{ mt: 0.45, fontWeight: 600 }}>{secondary}</Typography>}
       {hint && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35 }}>{hint}</Typography>}
       <Box sx={{ flex: 1 }} />
-      {trend && trend.length > 1 && <Sparkline values={trend} color={accent} />}
+      {trend && trend.length > 1 && <Sparkline values={trend} color={accent} scale={trendScale} />}
     </Paper>
   );
 }

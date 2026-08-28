@@ -188,6 +188,7 @@ export interface SalesDashboardResponse {
   currencySource: string;
   ecomShare: SalesDashboardEcomShare;
   networkDrivers: SalesDashboardDriver[];
+  brandDrivers: SalesDashboardDriver[];
   productDrivers: SalesDashboardDriver[];
   networkRanking: SalesDashboardRankDetail[];
   productRanking: SalesDashboardRankDetail[];
