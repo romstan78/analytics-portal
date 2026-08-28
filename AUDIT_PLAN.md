@@ -203,7 +203,7 @@ backend/main.go:97, :121
 backend/handlers/auth.go:34
 ```
 
-### [ ] M6. Интернет-продажи не ограничены областью КАМа
+### [x] M6. Интернет-продажи не ограничены областью КАМа
 
 `/api/data`, `/api/sales/*`, `/api/filters`, `/api/drilldown` не применяют ни
 `promoVisibilityScope`, ни `GetOwnKAM` — любой авторизованный видит продажи по всем сетям,
