@@ -11,8 +11,8 @@ import {
   Search as SearchIcon,
 } from '@mui/icons-material';
 import { saveAs } from 'file-saver';
-import { getUsername } from '../api/auth';
 import { fetchWithAuth } from '../api/promo';
+import { userScopedKey } from '../utils/storage';
 
 const EXPORT_WARNING_THRESHOLD = 10000;
 
@@ -50,12 +50,16 @@ export default function DataTable({
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null);
+  // Набор колонок — личная настройка: у каждого свой, и следующему вошедшему
+  // в ту же вкладку он доставаться не должен. Ключ скоупится здесь, а не в
+  // страницах, чтобы про это нельзя было забыть в новой таблице.
+  const columnsKey = preferencesKey ? userScopedKey(preferencesKey) : undefined;
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {};
     columns.forEach(c => { map[c.field] = !defaultHiddenColumns.includes(c.field); });
-    if (preferencesKey) {
+    if (columnsKey) {
       try {
-        const saved = JSON.parse(localStorage.getItem(preferencesKey) || '{}') as Record<string, unknown>;
+        const saved = JSON.parse(localStorage.getItem(columnsKey) || '{}') as Record<string, unknown>;
         columns.forEach(c => { if (typeof saved[c.field] === 'boolean') map[c.field] = saved[c.field] as boolean; });
       } catch { /* используем настройки по умолчанию */ }
     }
@@ -64,7 +68,7 @@ export default function DataTable({
   const apiRef = useRef(null);
   // Индикатор выгрузки: раньше переиспользовался loading от загрузки страницы.
   const [exporting, setExporting] = useState(false);
-  const backgroundStorageKey = `${preferencesKey || exportFileName}_background_export_job:${getUsername() || 'local'}`;
+  const backgroundStorageKey = userScopedKey(`${preferencesKey || exportFileName}_background_export_job`);
   const [backgroundJob, setBackgroundJob] = useState<{
     id: string;
     status: 'queued' | 'running' | 'ready' | 'failed';
@@ -99,9 +103,9 @@ export default function DataTable({
   );
 
   useEffect(() => {
-    if (!preferencesKey) return;
-    try { localStorage.setItem(preferencesKey, JSON.stringify(visibleColumns)); } catch { /* storage недоступен */ }
-  }, [preferencesKey, visibleColumns]);
+    if (!columnsKey) return;
+    try { localStorage.setItem(columnsKey, JSON.stringify(visibleColumns)); } catch { /* storage недоступен */ }
+  }, [columnsKey, visibleColumns]);
 
   const toggleColumn = (field: string) => {
     setVisibleColumns(prev => {
