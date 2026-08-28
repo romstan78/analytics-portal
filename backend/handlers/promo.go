@@ -97,10 +97,14 @@ func GetPromoFilters(c *gin.Context) {
 		Mechanics:   c.QueryArray("mechanics"),
 		Statuses:    c.QueryArray("status"),
 	}
+	// Канал приходит из того же запроса, что и прочие фильтры: он не колонка
+	// промо, а свойство механики, поэтому едет отдельным параметром.
+	channels := c.QueryArray("channel")
 
 	// Кэшируем только дефолтную страницу (без фильтров, кроме года/месяца)
 	hasContentFilters := len(params.Kams) > 0 || len(params.Brands) > 0 || len(params.SKUs) > 0 ||
-		len(params.Networks) > 0 || len(params.Mechanics) > 0 || len(params.Statuses) > 0
+		len(params.Networks) > 0 || len(params.Mechanics) > 0 || len(params.Statuses) > 0 ||
+		len(channels) > 0
 	// Область входит в ключ: без неё срез одного КАМа достался бы другому.
 	cacheKey := "filters:" + strings.Join(scope, "|") + ":" +
 		params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
@@ -125,27 +129,27 @@ func GetPromoFilters(c *gin.Context) {
 	g, _ := errgroup.WithContext(context.Background())
 
 	g.Go(func() error {
-		resKam = repository.GetFilterValues("kam", baseWhere, baseArgs, "kam", mainFilters)
+		resKam = repository.GetFilterValues("kam", baseWhere, baseArgs, "kam", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {
-		resBrand = repository.GetFilterValues("brand_as", baseWhere, baseArgs, "brand_as", mainFilters)
+		resBrand = repository.GetFilterValues("brand_as", baseWhere, baseArgs, "brand_as", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {
-		resSKU = repository.GetFilterValues("sku", baseWhere, baseArgs, "sku", mainFilters)
+		resSKU = repository.GetFilterValues("sku", baseWhere, baseArgs, "sku", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {
-		resNetwork = repository.GetFilterValues("network_name", baseWhere, baseArgs, "network_name", mainFilters)
+		resNetwork = repository.GetFilterValues("network_name", baseWhere, baseArgs, "network_name", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {
-		resMechanics = repository.GetFilterValues("mechanics", baseWhere, baseArgs, "mechanics", mainFilters)
+		resMechanics = repository.GetFilterValues("mechanics", baseWhere, baseArgs, "mechanics", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {
-		resStatus = repository.GetFilterValues("status", baseWhere, baseArgs, "status", mainFilters)
+		resStatus = repository.GetFilterValues("status", baseWhere, baseArgs, "status", mainFilters, channels)
 		return nil
 	})
 	g.Go(func() error {

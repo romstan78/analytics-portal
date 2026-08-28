@@ -160,3 +160,30 @@ func TestSalesDrilldownOrderIsCoveredByGroupBy(t *testing.T) {
 		t.Fatalf("ORDER BY покрывает %d из %d колонок GROUP BY: %q", len(ordered), len(grouped), salesDrilldownOrder)
 	}
 }
+
+// Справочник обязан сужаться остальными фильтрами, но не своим собственным:
+// иначе, выбрав бренд, пользователь увидел бы в списке брендов только его и не
+// смог бы переключиться.
+func TestSalesFilterOptionsExcludesOwnColumn(t *testing.T) {
+	filter := SalesFilter{
+		BrandNames:   []string{"Демо-бренд 06"},
+		NetworkNames: []string{"Демо-сеть 31"},
+		YearFromStr:  "2026",
+	}
+
+	withoutBrands := filter
+	withoutBrands.BrandNames = nil
+	brandWhere, brandArgs := BuildSalesWhere(withoutBrands)
+	if strings.Contains(brandWhere, "brandName") {
+		t.Fatalf("where для списка брендов = %q, свой фильтр применяться не должен", brandWhere)
+	}
+	// Остальные фильтры остаются: сеть и год сужают список брендов.
+	if !strings.Contains(brandWhere, "networkName") || len(brandArgs) != 2 {
+		t.Fatalf("where = %q args = %#v, ожидались сеть и год", brandWhere, brandArgs)
+	}
+
+	full, fullArgs := BuildSalesWhere(filter)
+	if !strings.Contains(full, "brandName") || len(fullArgs) != 3 {
+		t.Fatalf("полный фильтр потерял условия: %q %#v", full, fullArgs)
+	}
+}

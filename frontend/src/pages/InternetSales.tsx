@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -122,11 +122,15 @@ export default function InternetSales() {
     return { ...EMPTY_FILTERS };
   });
   const [appliedFilters, setAppliedFilters] = useState(filters);
+  // Первичная загрузка справочников настраивает год и канал; последующие
+  // только обновляют списки, поэтому их нужно различать.
+  const initialisedRef = useRef(false);
   const [persistFilters, setPersistFilters] = useState(() => localStorage.getItem(persistFlagKey) === 'true');
 
   useEffect(() => {
     salesAPI.getFilters()
       .then(data => {
+        initialisedRef.current = true;
         const years = normalizeStringList(data.year).sort((a, b) => Number(a) - Number(b));
         const segments = normalizeStringList(data.segment);
         const channels = normalizeStringList(data.channel);
@@ -211,6 +215,31 @@ export default function InternetSales() {
   const dashboardError = dashboardQueryError
     ? ((dashboardQueryError as { message?: string }).message || 'Не удалось загрузить дашборд')
     : '';
+
+  // Списки сужаются текущим выбором (filters), а не применёнными фильтрами:
+  // выбрав сеть, пользователь должен увидеть её бренды сразу, а не после
+  // «Применить». Первичная загрузка выше настраивает год, канал и сегменты,
+  // поэтому здесь обновляются только сами списки.
+  useEffect(() => {
+    if (!initialisedRef.current) return;
+    salesAPI.getFilters({
+      yearFrom: filters.yearFrom,
+      yearTo: filters.yearTo,
+      months: filters.months,
+      quarters: filters.quarters,
+      kam: filters.kam,
+      brandName: filters.brandName,
+      productName: filters.productName,
+      networkName: filters.networkName,
+    })
+      .then(data => setMeta(current => ({
+        ...current,
+        kam: normalizeStringList(data.kam),
+        brandName: normalizeStringList(data.brandName),
+        productName: normalizeStringList(data.productName),
+      })))
+      .catch(() => { /* панель остаётся с прежними списками */ });
+  }, [filters]);
 
   const segmentOptions = useMemo(
     () => meta.channelSegmentMap[focusChannel] || meta.segment,

@@ -354,3 +354,24 @@ func TestBuildPromoWhereIgnoresBlankSearch(t *testing.T) {
 		t.Fatalf("where = %q args = %#v, пустой поиск не должен попадать в условие", where, args)
 	}
 }
+
+// Канал живёт в справочнике механик, а не в строке промо, поэтому сужает
+// выборку подзапросом. Без него выбор канала не влиял ни на один другой список.
+func TestChannelConditionLimitsByMechanics(t *testing.T) {
+	cond, args := channelCondition([]string{"онлайн", "оффлайн"})
+	if !strings.Contains(cond, "mechanics IN (SELECT mechanics FROM dbo.tbl_MechanicsChannelMapping") {
+		t.Fatalf("условие = %q", cond)
+	}
+	if strings.Count(cond, "?") != 2 || len(args) != 2 {
+		t.Fatalf("условие = %q args = %#v, ожидались два канала", cond, args)
+	}
+}
+
+func TestChannelConditionIgnoresEmptyInput(t *testing.T) {
+	for _, channels := range [][]string{nil, {}, {""}, {"  ", ""}} {
+		cond, args := channelCondition(channels)
+		if cond != "" || len(args) != 0 {
+			t.Fatalf("channelCondition(%#v) = %q %#v, пустой выбор ничего не ограничивает", channels, cond, args)
+		}
+	}
+}

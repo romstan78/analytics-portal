@@ -320,8 +320,11 @@ export const promoAPI = {
 
 // ─── API: Интернет-продажи ─────────────────────────────────────────────────
 export const salesAPI = {
-  getFilters: (): Promise<SalesFilterOptions> =>
-    fetchWithAuth(`${API_BASE}/api/filters`).then(readJSON<SalesFilterOptions>),
+  // Справочники панели. Фильтры передаются, чтобы списки сужались текущим
+  // выбором: каждый список считается без своего собственного фильтра, поэтому
+  // переключиться внутри него по-прежнему можно.
+  getFilters: (filters: Record<string, unknown> = {}): Promise<SalesFilterOptions> =>
+    fetchWithAuth(`${API_BASE}/api/filters?${buildParams(filters)}`).then(readJSON<SalesFilterOptions>),
 
   getData: (filters: Record<string, unknown> = {}): Promise<SalesDataResponse> =>
     fetchWithAuth(`${API_BASE}/api/data?${buildParams(filters)}`).then(readJSON<SalesDataResponse>),

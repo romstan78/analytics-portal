@@ -168,7 +168,7 @@ func ExecDistinct(query string, args []interface{}) []string {
 }
 
 // GetFilterValues возвращает список уникальных значений для конкретной колонки
-func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, excludeCol string, filters map[string][]string) []string {
+func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, excludeCol string, filters map[string][]string, channels []string) []string {
 	where := baseWhere
 	args := make([]interface{}, len(baseArgs))
 	copy(args, baseArgs)
@@ -181,8 +181,32 @@ func GetFilterValues(col string, baseWhere string, baseArgs []interface{}, exclu
 			}
 		}
 	}
+	// Канал живёт в справочнике механик, а не в самой строке промо, поэтому
+	// сужает выборку через подзапрос. Без этого выбор канала не влиял ни на
+	// один другой список: фильтр стоял, а справочники его не замечали.
+	cond, channelArgs := channelCondition(channels)
+	where += cond
+	args = append(args, channelArgs...)
+
 	query := "SELECT DISTINCT " + col + " FROM dbo.tbl_PromoActivities " + where + " AND " + col + " IS NOT NULL ORDER BY " + col
 	return ExecDistinct(query, args)
+}
+
+// channelCondition ограничивает промо механиками выбранных каналов.
+// Пустой список каналов ничего не ограничивает.
+func channelCondition(channels []string) (string, []interface{}) {
+	values := make([]interface{}, 0, len(channels))
+	for _, channel := range channels {
+		if strings.TrimSpace(channel) != "" {
+			values = append(values, channel)
+		}
+	}
+	if len(values) == 0 {
+		return "", nil
+	}
+	placeholders := strings.Repeat(",?", len(values))[1:]
+	return " AND mechanics IN (SELECT mechanics FROM dbo.tbl_MechanicsChannelMapping" +
+		" WHERE channel IN (" + placeholders + "))", values
 }
 
 // GetChannelFilterValues — специальный запрос для канала через JOIN
