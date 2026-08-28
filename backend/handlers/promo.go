@@ -180,6 +180,25 @@ func GetPromoFilters(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// PreviewPromoCalculations пересчитывает черновик карточки промо.
+//
+// Единственный источник формул — services: до этого ROI и uplift считались
+// дважды — здесь и построчно в браузере (frontend/src/utils/calcUtils.ts), —
+// и синхронизировать две копии было некому. Тот же приём уже применён к
+// реестру сетей: PreviewNetworkPlan считает черновик на сервере, а TypeScript
+// отвечает только за форматирование.
+//
+// В базу ничего не пишется: это расчёт по присланным числам.
+func PreviewPromoCalculations(c *gin.Context) {
+	var input services.PromoInputDTO
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "некорректный запрос"})
+		return
+	}
+	calcCtx := services.EnrichFromRepo(&input)
+	c.JSON(http.StatusOK, services.CalculateFields(&input, calcCtx))
+}
+
 func GetPromoData(c *gin.Context) {
 	deletedFilter := c.DefaultQuery("deletedFilter", "")
 	if deletedFilter != "" {

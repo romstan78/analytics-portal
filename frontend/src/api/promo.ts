@@ -15,6 +15,7 @@ import type {
   PromoDashboardResponse,
   PromoDataResponse,
   PromoHistoryResponse,
+  PromoCalculatedFields,
   PromoRow,
   PromoSaveResponse,
   SKUInfoResponse,
@@ -181,6 +182,14 @@ export const promoAPI = {
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       return data;
     }),
+
+  // Пересчёт черновика карточки. Формулы живут только на сервере
+  // (services/promo_service.go); браузер получает готовые числа.
+  calculate: (draft: Record<string, unknown>): Promise<PromoCalculatedFields> =>
+    fetchWithAuth(`${API_BASE}/api/promo/calculate`, {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    }).then(r => parseJSONResponse<PromoCalculatedFields>(r, 'Не удалось пересчитать показатели')),
 
   // История промо по SKU/сети/механике
   getHistory: (params: Record<string, string> = {}): Promise<PromoHistoryResponse> =>

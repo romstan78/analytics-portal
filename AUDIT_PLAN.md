@@ -230,7 +230,7 @@ backend/handlers/promo.go:101          mainFilters без channel
 backend/repository/sales_repo.go:305   SalesFilterOptions
 ```
 
-### [ ] M9. Формула ROI живёт в двух местах — в Go и в TypeScript
+### [x] M9. Формула ROI живёт в двух местах — в Go и в TypeScript
 
 `(uplift_rub / investments) * gm * 100 - 100` продублирована построчно в браузере и на сервере.
 Синхронизировать их некому — теста, сравнивающего два результата, нет.

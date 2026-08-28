@@ -9,7 +9,6 @@ import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon, RestoreOutl
 import { promoAPI } from '../api/promo';
 import type { CommentRow } from '../types/promo';
 import type { PromoFormValues } from '../hooks/usePromoForm';
-import type { ActualFields, PlanFields } from '../hooks/usePromoCalculations';
 import type { FilterMeta } from '../hooks/usePromoFilters';
 
 // ─── Месяцы ────────────────────────────────────────────────────────────────
@@ -113,8 +112,9 @@ interface PromoEditDialogProps {
   onClose: () => void;
   form: PromoFormValues | null;
   setForm: React.Dispatch<React.SetStateAction<PromoFormValues>>;
-  recalcPlan: (updates: Partial<PromoFormValues>) => PlanFields;
-  recalcActual: (updates: Partial<PromoFormValues>) => ActualFields;
+  // Пересчёт черновика: формулы живут на сервере, поэтому расчётные поля
+  // приходят с задержкой и подставляются в форму отдельно от ввода.
+  scheduleRecalc: (updates: Partial<PromoFormValues>) => void;
   onSave: (commentOverride?: string | null) => Promise<void> | void;
   onDelete: () => void;
   saving: boolean;
@@ -128,7 +128,7 @@ interface PromoEditDialogProps {
 }
 
 export default function PromoEditDialog({
-  open, onClose, form, setForm, recalcPlan, recalcActual,
+  open, onClose, form, setForm, scheduleRecalc,
   onSave, onDelete, saving,
   meta, allSkuOptions, investmentTypes,
   role, readOnly = false,
@@ -181,10 +181,12 @@ export default function PromoEditDialog({
   const handleFieldChange = (field: FormField) => (e: { target: { value: string } }) => {
     const rawValue = e.target.value;
     const cleanValue = rawValue.replace(/\s/g, '').replace(',', '.');
-    if (planTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcPlan({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
-    } else if (actualTriggers.includes(field)) {
-      setForm(prev => { const calc = recalcActual({ [field]: cleanValue }); return { ...prev, [field]: cleanValue, ...calc }; });
+    if (planTriggers.includes(field) || actualTriggers.includes(field)) {
+      // Введённое значение показываем сразу, расчётные поля обновит ответ
+      // сервера: ждать его, чтобы отрисовать саму цифру, значило бы подтормаживать
+      // ввод.
+      setForm(prev => ({ ...prev, [field]: cleanValue }));
+      scheduleRecalc({ [field]: cleanValue });
     } else {
       setForm(prev => ({ ...prev, [field]: textFields.includes(field) ? rawValue : cleanValue }));
     }

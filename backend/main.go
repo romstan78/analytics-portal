@@ -186,6 +186,8 @@ func main() {
 		api.GET("/promo/last-sku-data", handlers.GetLastSKUData)
 		api.GET("/promo/comments/:id", handlers.GetPromoCommentsHandler)
 		api.GET("/promo/export-xlsx", handlers.ExportPromoExcel)
+		// Пересчёт черновика карточки: формулы живут только в services.
+		api.POST("/promo/calculate", handlers.PreviewPromoCalculations)
 
 		// Промо — запись. Промо ведёт КАМ, поэтому его роль здесь обязательна;
 		// кем именно можно править и заводить, решает область ведения в

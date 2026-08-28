@@ -1,57 +1,92 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { PromoFormValues } from './usePromoForm';
-import { calcPlan, calcActual } from '../utils/calcUtils';
+import { promoAPI } from '../api/promo';
 
-export interface PlanFields {
-  plan_promo_rub: string;
-  plan_promo_uplift_units: string;
-  plan_promo_uplift_rub: string;
-  plan_roi: string;
-  baseline_rub: string;
-}
+/**
+ * Пересчёт плановых и фактических показателей карточки промо.
+ *
+ * Считает сервер, а не браузер: формулы (ROI, uplift, доли) жили в двух местах
+ * сразу — в services/promo_service.go и построчно здесь, — и синхронизировать
+ * две копии было некому. Тот же приём уже применён к реестру сетей, где расчёт
+ * живёт только в services, а TypeScript отвечает за форматирование.
+ *
+ * На сохранённые данные это не влияло и раньше: SavePromo всё равно
+ * пересчитывает всё сам, а браузерная копия была только предпросмотром.
+ */
 
-export interface ActualFields {
-  actual_promo_rub: string;
-  actual_promo_uplift_units: string;
-  actual_promo_uplift_rub: string;
-  actual_roi: string;
-}
+// Поля, которые заполняет расчёт. Остальное в ответе форму не касается.
+const PLAN_FIELDS = [
+  'plan_promo_rub', 'plan_promo_uplift_units', 'plan_promo_uplift_rub', 'baseline_rub',
+] as const;
+const ACTUAL_FIELDS = [
+  'actual_promo_rub', 'actual_promo_uplift_units', 'actual_promo_uplift_rub',
+] as const;
 
-export function usePromoCalculations(form: PromoFormValues) {
-  const recalcPlan = useCallback((updates: Partial<PromoFormValues>): PlanFields => {
-    const f = { ...form, ...updates };
-    const r = calcPlan({
-      plan_promo_units: parseFloat(f.plan_promo_units) || 0,
-      contract_price: parseFloat(f.contract_price) || 0,
-      baseline_units: parseFloat(f.baseline_units) || 0,
-      plan_investments_rub: parseFloat(f.plan_investments_rub) || 0,
-      gm: parseFloat(f.gm) || 1,
-    });
-    return {
-      plan_promo_rub: r.plan_promo_rub.toFixed(2),
-      plan_promo_uplift_units: r.plan_promo_uplift_units.toFixed(2),
-      plan_promo_uplift_rub: r.plan_promo_uplift_rub.toFixed(2),
-      plan_roi: r.plan_roi.toFixed(1),
-      baseline_rub: r.baseline_rub.toFixed(2),
-    };
-  }, [form]);
+const RECALC_DELAY_MS = 300;
 
-  const recalcActual = useCallback((updates: Partial<PromoFormValues>): ActualFields => {
-    const f = { ...form, ...updates };
-    const r = calcActual({
-      actual_promo_sales_units: parseFloat(f.actual_promo_sales_units) || 0,
-      contract_price: parseFloat(f.contract_price) || 0,
-      baseline_units: parseFloat(f.baseline_units) || 0,
-      actual_investments: parseFloat(f.actual_investments) || 0,
-      gm: parseFloat(f.gm) || 1,
-    });
-    return {
-      actual_promo_rub: r.actual_promo_rub.toFixed(2),
-      actual_promo_uplift_units: r.actual_promo_uplift_units.toFixed(2),
-      actual_promo_uplift_rub: r.actual_promo_uplift_rub.toFixed(2),
-      actual_roi: r.actual_roi.toFixed(1),
-    };
-  }, [form]);
+const num = (value: unknown): number => {
+  const parsed = parseFloat(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
-  return { recalcPlan, recalcActual };
+export function usePromoCalculations(
+  form: PromoFormValues,
+  setForm: (update: (prev: PromoFormValues) => PromoFormValues) => void,
+) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Номер запроса: ответы приходят по сети и могут разминуться с порядком
+  // ввода, а устаревший ответ вернул бы в поля прошлые цифры.
+  const requestId = useRef(0);
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+
+  const scheduleRecalc = useCallback((updates: Partial<PromoFormValues>) => {
+    const draft = { ...form, ...updates };
+    if (timer.current) clearTimeout(timer.current);
+
+    timer.current = setTimeout(() => {
+      const currentRequest = ++requestId.current;
+      void promoAPI.calculate({
+        year: num(draft.year),
+        month: num(draft.month),
+        sku: draft.sku ?? '',
+        network_name: draft.network_name ?? '',
+        mechanics: draft.mechanics ?? '',
+        gm: num(draft.gm),
+        contract_price: num(draft.contract_price),
+        baseline_units: num(draft.baseline_units),
+        plan_promo_units: num(draft.plan_promo_units),
+        plan_investments_rub: num(draft.plan_investments_rub),
+        actual_promo_sales_units: num(draft.actual_promo_sales_units),
+        actual_investments: num(draft.actual_investments),
+        actual_promo_uplift_units: num(draft.actual_promo_uplift_units),
+        actual_external_ecom_units: num(draft.actual_external_ecom_units),
+        promo_pharmacies: num(draft.promo_pharmacies),
+        total_pharmacies: num(draft.total_pharmacies),
+      })
+        .then((calc) => {
+          if (currentRequest !== requestId.current) return;
+          setForm((prev) => {
+            const next = { ...prev };
+            for (const field of PLAN_FIELDS) {
+              next[field] = (calc[field] ?? 0).toFixed(2);
+            }
+            for (const field of ACTUAL_FIELDS) {
+              next[field] = (calc[field] ?? 0).toFixed(2);
+            }
+            next.plan_roi = (calc.plan_roi ?? 0).toFixed(1);
+            next.actual_roi = (calc.actual_roi ?? 0).toFixed(1);
+            return next;
+          });
+        })
+        .catch(() => {
+          // Расчёт не состоялся — поля остаются прежними. Значения всё равно
+          // пересчитает сервер при сохранении, поэтому расходиться им не с чем.
+        });
+    }, RECALC_DELAY_MS);
+  }, [form, setForm]);
+
+  return { scheduleRecalc };
 }

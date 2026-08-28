@@ -246,7 +246,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   // ─── Форма редактирования ─────────────────────────────────────────────
   const { form, setForm, saving, deleting, handleRowClick: formHandleRowClick, handleSave: formHandleSave, handleDelete: formHandleDelete } = 
     usePromoForm({ onEditSuccess: handleDataChanged, onDeleteSuccess: handleDataChanged, onCreateSuccess: handleDataChanged });
-  const { recalcPlan, recalcActual } = usePromoCalculations(form);
+  const { scheduleRecalc } = usePromoCalculations(form, setForm);
 
   // ─── Refetch при возврате на вкладку "Просмотр данных" ────────────────
   useEffect(() => {
@@ -574,7 +574,7 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       {/* Карточка доступна и из таблицы, и из истории на форме создания */}
       <PromoEditDialog
         open={editDialogOpen} onClose={() => { setEditDialogOpen(false); setPromoViewOnly(false); }}
-        form={form} setForm={setForm} recalcPlan={recalcPlan} recalcActual={recalcActual}
+        form={form} setForm={setForm} scheduleRecalc={scheduleRecalc}
         onSave={handleSave} onDelete={() => setDeleteDialogOpen(true)}
         saving={saving} deleting={deleting} meta={meta}
         allSkuOptions={allSkuOptions} allNetworkOptions={allNetworkOptions}
