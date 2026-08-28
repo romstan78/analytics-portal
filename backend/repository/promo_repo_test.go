@@ -375,3 +375,34 @@ func TestChannelConditionIgnoresEmptyInput(t *testing.T) {
 		}
 	}
 }
+
+// AddFilter собирает IN-условие и отбрасывает пустые значения: пустая строка в
+// списке означала бы «показать записи без значения», а не «не фильтровать».
+func TestAddFilterSkipsEmptyValues(t *testing.T) {
+	cond, args := AddFilter("p.kam", []string{"Ершов Максим", "", "Жукова Ольга"})
+	if cond != " AND p.kam IN (?,?)" {
+		t.Fatalf("условие = %q", cond)
+	}
+	if len(args) != 2 || args[0] != "Ершов Максим" || args[1] != "Жукова Ольга" {
+		t.Fatalf("args = %#v", args)
+	}
+
+	for _, values := range [][]string{nil, {}, {""}, {"", ""}} {
+		if cond, args := AddFilter("p.kam", values); cond != "" || len(args) != 0 {
+			t.Fatalf("AddFilter(%#v) = %q %#v, ожидалось пустое условие", values, cond, args)
+		}
+	}
+}
+
+// Пустое имя КАМа означает «владельца нет»: в базу должен уйти NULL, иначе сеть
+// получила бы владельца с пустым именем и пропала из фильтров.
+func TestNullIfEmpty(t *testing.T) {
+	if got := nullIfEmpty("Ершов Максим"); got != "Ершов Максим" {
+		t.Fatalf("nullIfEmpty(имя) = %v", got)
+	}
+	for _, blank := range []string{"", "   ", "\t"} {
+		if got := nullIfEmpty(blank); got != nil {
+			t.Fatalf("nullIfEmpty(%q) = %v, ожидался NULL", blank, got)
+		}
+	}
+}

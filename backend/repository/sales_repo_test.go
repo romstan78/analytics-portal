@@ -187,3 +187,31 @@ func TestSalesFilterOptionsExcludesOwnColumn(t *testing.T) {
 		t.Fatalf("полный фильтр потерял условия: %q %#v", full, fullArgs)
 	}
 }
+
+// Имя колонки в ORDER BY нельзя подставить плейсхолдером, поэтому оно берётся
+// только из белого списка. Тот же приём — в промо (promoRowsOrderBy).
+func TestSalesRowOrderAllowsOnlyKnownColumns(t *testing.T) {
+	if got := SalesRowOrder(SalesFilter{SortField: "brandName", SortDirection: "desc"}); got != " ORDER BY n.brandName DESC, n.id ASC" {
+		t.Fatalf("order = %q", got)
+	}
+	// Тай-брейк по id обязателен: без него OFFSET/FETCH терял бы строки.
+	if got := SalesRowOrder(SalesFilter{SortField: "year"}); got != " ORDER BY n.[year] ASC, n.id ASC" {
+		t.Fatalf("order = %q", got)
+	}
+	for _, field := range []string{"", "unknown", "n.brandName; DROP TABLE dbo.tbl_EcomSalesNormalized", "1=1"} {
+		if got := SalesRowOrder(SalesFilter{SortField: field}); got != salesRowOrder {
+			t.Fatalf("SortField=%q дал %q, ожидался порядок по умолчанию", field, got)
+		}
+	}
+}
+
+// Квартал вне 1..4 — заведомо мусор, и в условие он попадать не должен.
+func TestBuildSalesWhereValidatesQuarters(t *testing.T) {
+	where, args := BuildSalesWhere(SalesFilter{Quarters: []string{"1", "0", "5", "abc", "4"}})
+	if len(args) != 2 || args[0] != 1 || args[1] != 4 {
+		t.Fatalf("args = %#v, ожидались только кварталы 1 и 4", args)
+	}
+	if !strings.Contains(where, "month") {
+		t.Fatalf("where = %q, условие по кварталам потеряно", where)
+	}
+}
