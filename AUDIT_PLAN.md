@@ -179,7 +179,7 @@ backend/handlers/sales_export_jobs.go:171, :96
 backend/handlers/sales_export_jobs.go:36, :54, :108
 ```
 
-### [ ] M3. Внутренние детали БД уходят в текст ошибки клиенту
+### [x] M3. Внутренние детали БД уходят в текст ошибки клиенту
 
 При сохранении промо с несуществующим ID клиент получает `config.GetDBInfo()` —
 это `DB_USER@DB_SERVER/DB_NAME`. Строкой выше в ответ уходит `err.Error()` целиком.

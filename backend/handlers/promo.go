@@ -652,11 +652,16 @@ func SavePromo(c *gin.Context) {
 					if err2 := config.DB.QueryRow("SELECT COUNT(*) FROM dbo.tbl_PromoActivities WHERE id = ?", idInt).Scan(&exists); err2 == nil && exists > 0 {
 						c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Запись удалена (soft-delete). ID=%d", idInt)})
 					} else {
-						c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Запись ID=%d не найдена в БД %s", idInt, config.GetDBInfo())})
+						// Ни имени базы, ни учётной записи сервера в ответе:
+						// клиенту хватает того, что записи нет, а строка
+						// подключения — подсказка тому, кто ищет вход.
+						c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Запись ID=%d не найдена", idInt)})
 					}
 				} else {
+					// Текст ошибки БД остаётся в логе: в ответе он раскрывает
+					// схему и устройство запроса, а пользователю не помогает.
 					config.Logger.Error("promo_update_fetch_failed", "error", err.Error(), "id", idInt)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка чтения записи: " + err.Error()})
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось прочитать запись"})
 				}
 				return
 			}
@@ -722,7 +727,7 @@ func SavePromo(c *gin.Context) {
 			}
 			if err != nil {
 				config.Logger.Error("promo_update_failed", "error", err.Error(), "id", idInt)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось сохранить промо"})
 				return
 			}
 			if rowsAffected == 0 {
@@ -789,7 +794,7 @@ func SavePromo(c *gin.Context) {
 			"sku", dto.SKU,
 			"network", dto.NetworkName,
 		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось создать промо"})
 		return
 	}
 
