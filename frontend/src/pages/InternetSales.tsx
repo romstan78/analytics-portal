@@ -21,10 +21,11 @@ import InternetSalesDashboard, { type DashboardFocus, type InternetSalesDashboar
 import InternetSalesSummaryTable, { type SalesPivotGranularity } from '../components/InternetSalesSummaryTable';
 import InternetSalesSavedViews, { type InternetSalesViewSnapshot } from '../components/InternetSalesSavedViews';
 import { salesAPI } from '../api/promo';
+import { userScopedKey } from '../utils/storage';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
-const FILTERS_STORAGE_KEY = 'internet_sales_filters_v9';
-const PERSIST_FLAG_KEY = 'internet_sales_persist_v9';
+const FILTERS_STORAGE_BASE = 'internet_sales_filters_v9';
+const PERSIST_FLAG_BASE = 'internet_sales_persist_v9';
 const TABLE_PREFERENCES_KEY = 'internet_sales_table_columns_v1';
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
@@ -82,6 +83,13 @@ interface SalesMeta {
 const normalizeStringList = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
 export default function InternetSales() {
+  // Ключи привязаны к пользователю и считаются при рендере, а не на уровне
+  // модуля: страница загружается лениво один раз, и модульная константа
+  // запомнила бы того, кто открыл её первым. Фильтр — это выбор данных, и
+  // следующему вошедшему в ту же вкладку он доставаться не должен; хранилище
+  // здесь локальное, так что чужой выбор пережил бы и перезапуск браузера.
+  const filtersStorageKey = userScopedKey(FILTERS_STORAGE_BASE);
+  const persistFlagKey = userScopedKey(PERSIST_FLAG_BASE);
   const navigate = useNavigate();
   // Первым открывается дашборд: он отвечает на вопрос «что происходит»,
   // а сводная нужна уже под разбор конкретных цифр.
@@ -103,8 +111,8 @@ export default function InternetSales() {
 
   const [filters, setFilters] = useState<SalesFilters>(() => {
     try {
-      if (localStorage.getItem(PERSIST_FLAG_KEY) === 'true') {
-        const saved = localStorage.getItem(FILTERS_STORAGE_KEY);
+      if (localStorage.getItem(persistFlagKey) === 'true') {
+        const saved = localStorage.getItem(filtersStorageKey);
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed && Array.isArray(parsed.months)) return { ...EMPTY_FILTERS, ...parsed };
@@ -114,7 +122,7 @@ export default function InternetSales() {
     return { ...EMPTY_FILTERS };
   });
   const [appliedFilters, setAppliedFilters] = useState(filters);
-  const [persistFilters, setPersistFilters] = useState(() => localStorage.getItem(PERSIST_FLAG_KEY) === 'true');
+  const [persistFilters, setPersistFilters] = useState(() => localStorage.getItem(persistFlagKey) === 'true');
 
   useEffect(() => {
     salesAPI.getFilters()
@@ -148,10 +156,10 @@ export default function InternetSales() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setAppliedFilters(filters);
-      if (persistFilters) localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
+      if (persistFilters) localStorage.setItem(filtersStorageKey, JSON.stringify(filters));
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [filters, persistFilters]);
+  }, [filters, persistFilters, filtersStorageKey]);
 
   useEffect(() => {
     if (focusSegments.length === 0 || !analysisYear) return;
@@ -235,8 +243,8 @@ export default function InternetSales() {
     setSummaryGranularity('year');
     setDashboardFocus([]);
     setRowCount(0);
-    localStorage.removeItem(FILTERS_STORAGE_KEY);
-  }, [analysisYear, meta.channel, meta.channelSegmentMap, meta.segment, meta.year]);
+    localStorage.removeItem(filtersStorageKey);
+  }, [analysisYear, meta.channel, meta.channelSegmentMap, meta.segment, meta.year, filtersStorageKey]);
 
   const handleChannelChange = useCallback((value: string) => {
     const nextSegments = meta.channelSegmentMap[value] || [];
@@ -258,10 +266,10 @@ export default function InternetSales() {
 
   const handlePersistChange = useCallback((checked: boolean) => {
     setPersistFilters(checked);
-    localStorage.setItem(PERSIST_FLAG_KEY, String(checked));
-    if (checked) localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(filters));
-    else localStorage.removeItem(FILTERS_STORAGE_KEY);
-  }, [filters]);
+    localStorage.setItem(persistFlagKey, String(checked));
+    if (checked) localStorage.setItem(filtersStorageKey, JSON.stringify(filters));
+    else localStorage.removeItem(filtersStorageKey);
+  }, [filters, filtersStorageKey, persistFlagKey]);
 
   const savedViewSnapshot = useMemo<InternetSalesViewSnapshot>(() => ({
     view,
@@ -300,7 +308,7 @@ export default function InternetSales() {
   const activeFilterCount = filters.kam.length + filters.brandName.length + filters.productName.length + filters.networkName.length + filters.months.length + filters.quarters.length;
 
   return (
-    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: '#f6f8fb' }}>
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column', p: 2, bgcolor: 'background.default' }}>
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 1.5 }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/')}>На главную</Button>
         <Box>

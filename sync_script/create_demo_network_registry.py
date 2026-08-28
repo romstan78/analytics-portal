@@ -13,6 +13,11 @@
 
 Помесячный факт сводится в квартальные fact_rub и fact_investments_rub плана
 тем же запросом, что и рабочий загрузчик (import_network_facts.ROLLUP_SQL).
+
+Факт пишется только за закрытые месяцы — те, что уже прошли. Отгрузок из
+будущего не бывает, а демо с фактом на год вперёд показывало перевыполненный
+план в ещё не наступившем квартале и «фактические» выплаты по нему. План при
+этом строится на весь год: обязательство на будущий квартал — это норма.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import json
 import os
 import sys
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Sequence
@@ -105,6 +111,20 @@ def require_demo_target(target_db: str) -> None:
 
 def quarter_of(month: int) -> int:
     return (month - 1) // 3 + 1
+
+
+# Закрытым считается прошедший месяц — ровно как в приложении
+# (services.isClosedForecastMonth): текущий месяц ещё идёт, его факт неполон.
+def is_closed_month(year: int, month: int, today: date) -> bool:
+    return year < today.year or (year == today.year and month < today.month)
+
+
+# Последний квартал года, закрытый целиком; 0 — если не закрыт ни один.
+def last_closed_quarter(year: int, today: date) -> int:
+    for quarter in (4, 3, 2, 1):
+        if is_closed_month(year, quarter * 3, today):
+            return quarter
+    return 0
 
 
 # ─── Чтение демо-справочников ──────────────────────────────────────────────
@@ -257,11 +277,16 @@ def build_fact_rows(
     network_ids: dict[str, int],
     sku_brands: dict[str, str],
     investment_pct: dict[str, Decimal],
+    today: date,
 ) -> tuple[list[tuple[Any, ...]], dict[tuple[int, str, int, int], dict[str, Decimal]]]:
     """SKU-строки факта и квартальные итоги бренда для расчёта плана.
 
     Пишутся только строки по SKU: приложение само собирает из них итог бренда
     (aggregateFacts), а лишняя строка бренда дала бы вторую, расходящуюся сумму.
+
+    В факт идут только закрытые месяцы, а квартальные итоги собираются по всему
+    году: план нужен и на будущие кварталы, иначе год обрывался бы на текущем
+    месяце и планировать было бы нечего.
     """
     rows: list[tuple[Any, ...]] = []
     quarterly: dict[tuple[int, str, int, int], dict[str, Decimal]] = defaultdict(
@@ -288,11 +313,12 @@ def build_fact_rows(
         )
         investments = quantize_money(rub * pct / Decimal(100) * jitter)
 
-        rows.append((
-            network_id, year, month, brand, sku,
-            quantize_money(rub), quantize_money(units), investments,
-            1, "demo-shipments",
-        ))
+        if is_closed_month(year, month, today):
+            rows.append((
+                network_id, year, month, brand, sku,
+                quantize_money(rub), quantize_money(units), investments,
+                1, "demo-shipments",
+            ))
         bucket = quarterly[(network_id, brand, year, quarter_of(month))]
         bucket["rub"] += rub
         bucket["units"] += units
@@ -454,7 +480,12 @@ def clear_registry(cursor) -> None:
         cursor.execute(f"DELETE FROM {table}")
 
 
-def verify_target(cursor, fact_years: Sequence[int], plan_years: Sequence[int]) -> dict[str, Any]:
+def verify_target(
+    cursor,
+    fact_years: Sequence[int],
+    plan_years: Sequence[int],
+    today: date,
+) -> dict[str, Any]:
     cursor.execute(
         """
         SELECT COUNT_BIG(*),
@@ -518,23 +549,29 @@ def verify_target(cursor, fact_years: Sequence[int], plan_years: Sequence[int]) 
     for year in plan_years:
         if year not in fact_years:
             continue
+        # Незакрытые кварталы факта не имеют по построению, поэтому и сверяются
+        # только закрытые: год, начавшийся недавно, проверять ещё не на чем.
+        closed_quarter = last_closed_quarter(year, today)
+        if closed_quarter == 0:
+            continue
 
-        # Вкладка «План и факт» читает квартальный факт из самой tbl_NetworkPlans,
-        # поэтому без свода она показывает планы вообще без факта.
+        # Свод квартального факта держится совместимым с загрузчиком: колонку
+        # читает не приложение, а внешние потребители, и пустой она быть не должна.
         cursor.execute(
             """
             SELECT COUNT_BIG(*), SUM(CASE WHEN fact_rub IS NULL THEN 1 ELSE 0 END)
             FROM dbo.tbl_NetworkPlans
-            WHERE [year] = ? AND brand_as IS NOT NULL
+            WHERE [year] = ? AND brand_as IS NOT NULL AND [quarter] <= ?
             """,
-            (year,),
+            (year, closed_quarter),
         )
         brand_plans, without_fact = (int(value or 0) for value in cursor.fetchone())
         if brand_plans == 0:
             raise RuntimeError(f"Нет строк плана по брендам за {year} год")
         if without_fact:
             raise RuntimeError(
-                f"У {without_fact} из {brand_plans} строк плана {year} года нет квартального факта"
+                f"У {without_fact} из {brand_plans} строк плана {year} года "
+                f"нет квартального факта за закрытые кварталы Q1–Q{closed_quarter}"
             )
 
         # Свод обязан совпадать с помесячной таблицей: расхождение означало бы,
@@ -567,16 +604,19 @@ def verify_target(cursor, fact_years: Sequence[int], plan_years: Sequence[int]) 
             SELECT SUM(CASE WHEN fact_rub > plan_rub THEN 1 ELSE 0 END),
                    SUM(CASE WHEN fact_rub <= plan_rub THEN 1 ELSE 0 END)
             FROM dbo.tbl_NetworkPlans
-            WHERE [year] = ? AND plan_rub > 0 AND fact_rub IS NOT NULL
+            WHERE [year] = ? AND [quarter] <= ? AND plan_rub > 0 AND fact_rub IS NOT NULL
             """,
-            (year,),
+            (year, closed_quarter),
         )
         over, under = (int(value or 0) for value in cursor.fetchone())
         if over == 0 or under == 0:
             raise RuntimeError(
                 f"План {year} года выполнен односторонне: перевыполнено {over}, провалено {under}"
             )
-        plan_vs_fact[str(year)] = {"above": over, "below": under, "with_fact": brand_plans}
+        plan_vs_fact[str(year)] = {
+            "above": over, "below": under, "with_fact": brand_plans,
+            "closed_quarters": closed_quarter,
+        }
 
     return {
         "networks": networks,
@@ -606,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     require_demo_target(target_db)
 
     synthetic = StableSynthetic(salt)
+    today = date.today()
     target = connect(args.target_server, target_db, password, readonly=False)
     cursor = target.cursor()
 
@@ -648,7 +689,7 @@ def main(argv: list[str] | None = None) -> int:
         network_ids = insert_networks(cursor, network_rows)
         periods = insert_periods(cursor, network_ids, profiles, plan_years)
         fact_rows, quarterly = build_fact_rows(
-            synthetic, shipments, network_ids, sku_brands, investment_pct,
+            synthetic, shipments, network_ids, sku_brands, investment_pct, today,
         )
         facts = insert_facts(cursor, fact_rows)
         target.commit()
@@ -662,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         target.commit()
 
         try:
-            verification = verify_target(cursor, fact_years, plan_years)
+            verification = verify_target(cursor, fact_years, plan_years, today)
         except Exception:
             clear_registry(cursor)
             target.commit()
@@ -675,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             "target_database": target_db,
             "fact_years": list(fact_years),
             "plan_years": list(plan_years),
+            "fact_through": f"{today.year}-{today.month:02d} (не включая текущий месяц)",
             "inserted": {
                 "networks": len(network_rows),
                 "periods": periods,

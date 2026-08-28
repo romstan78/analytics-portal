@@ -46,6 +46,7 @@ import NetworkDetailView from '../components/NetworkDetailView';
 import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkVATEditor from '../components/NetworkVATEditor';
+import NetworkInvestmentPaymentModes from '../components/NetworkInvestmentPaymentModes';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
 import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
@@ -53,6 +54,7 @@ import type { NewNetworkValues } from '../components/NewNetworkDialog';
 import type {
   Network,
   NetworkAuditRow,
+	NetworkInvestmentPaymentModesSaveRequest,
   NetworkPlanChange,
   NetworkPlanSaveRequest,
   NetworkType,
@@ -92,6 +94,7 @@ const FIELD_LABELS: Record<string, string> = {
   period: 'Квартал открыт',
   month_distribution: 'Распределение по месяцам',
   period_group: 'Объединение кварталов',
+  pay_investments_from_fact: 'Оплата от факта',
   name: 'Название',
   network_type: 'Тип сети',
   kam: 'КАМ',
@@ -127,6 +130,7 @@ function formatAuditValue(field: string, value: unknown): string {
   if (field === 'is_active') return value ? 'активна' : 'скрыта';
   if (field === 'has_annual_investment_cumulative') return value ? 'включён' : 'выключен';
   if (field === 'in_gross') return value ? 'в валовом объёме' : 'отдельно';
+  if (field === 'pay_investments_from_fact') return value ? 'включена' : 'выключена';
   if (field === 'network_type') return TYPE_LABELS[String(value)] ?? String(value);
   if (field === 'investments_pct' || field === 'vat_rate' || field.startsWith('vat_rate_q')) {
     return formatPct(Number(value));
@@ -345,6 +349,17 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     mutationFn: (request: NetworkPlanSaveRequest) => networkAPI.savePlan(selectedId!, request),
     onSuccess: () => {
       setToast({ text: 'Планы сохранены', severity: 'success' });
+      void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
+      void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
+    },
+    onError: showError,
+  });
+
+  const paymentModesMutation = useMutation({
+    mutationFn: (request: NetworkInvestmentPaymentModesSaveRequest) =>
+      networkAPI.saveInvestmentPaymentModes(selectedId!, request),
+    onSuccess: () => {
+      setToast({ text: 'Режим оплаты инвестиций сохранён', severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
     },
@@ -849,6 +864,15 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                       [MONTH_DISTRIBUTION_FIELDS[index]]: value,
                     }))}
                   />
+                  {planQuery.data && (
+                    <NetworkInvestmentPaymentModes
+                      year={year}
+                      plans={planQuery.data.plans}
+                      canEdit={canEdit}
+                      saving={paymentModesMutation.isPending}
+                      onSave={(request) => paymentModesMutation.mutate(request)}
+                    />
+                  )}
                   <FormControlLabel
                     control={
                       <Switch

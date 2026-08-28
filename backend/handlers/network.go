@@ -100,10 +100,45 @@ func respondNetworkError(c *gin.Context, err error, logEvent string) {
 	case errors.Is(err, repository.ErrNetworkPeriodGroupInvalid):
 		message := strings.TrimPrefix(err.Error(), repository.ErrNetworkPeriodGroupInvalid.Error()+": ")
 		c.JSON(http.StatusBadRequest, gin.H{"error": message})
+	case errors.Is(err, repository.ErrNetworkBrandNotPlanned):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Бренд отсутствует в плане выбранного года"})
 	default:
 		config.Logger.Error(logEvent, "error", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки запроса"})
 	}
+}
+
+type investmentPaymentModesInput struct {
+	Year int                                            `json:"year"`
+	Rows []repository.NetworkInvestmentPaymentModeInput `json:"rows"`
+}
+
+// UpdateNetworkInvestmentPaymentModes сохраняет компактную матрицу профиля,
+// не затрагивая суммы и прогнозы вкладки «План и факт».
+func UpdateNetworkInvestmentPaymentModes(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	var input investmentPaymentModesInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Year < 2000 || input.Year > 2100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный год"})
+		return
+	}
+	username, _ := currentUser(c)
+	diff, err := repository.UpdateNetworkInvestmentPaymentModes(id, input.Year, input.Rows, username)
+	if err != nil {
+		respondNetworkError(c, err, "network_investment_payment_modes_failed")
+		return
+	}
+	if diff != "" {
+		_ = repository.InsertEntityAuditLog("network_plan", id, username, "UPDATE", diff)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Updated"})
 }
 
 // ─── Карточка сети ──────────────────────────────────────────────────────────
@@ -561,6 +596,38 @@ func UpdateNetwork(c *gin.Context) {
 
 // GetNetworkPlan отдаёт всё, что нужно вкладке «Планы»: карточку, кварталы,
 // строки плана с расчётом НДС и итоги по кварталам.
+// planForecastRollup подставляет в строки плана факт и EAC из помесячного слоя.
+// Три входа во вкладку «План и факт» — чтение, пересчёт черновика и ответ на
+// сохранение — обязаны показывать одни и те же числа, поэтому свод у них общий.
+func planForecastRollup(
+	network models.Network,
+	year int,
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+) ([]models.NetworkPlan, error) {
+	// Прошлый год нужен системной рекомендации: открытый месяц без введённого
+	// прогноза оценивается по своему месяцу год назад.
+	facts, err := repository.GetNetworkMonthlyFacts(network.ID, year-1, year)
+	if err != nil {
+		return nil, err
+	}
+	forecasts, err := repository.GetNetworkForecastLines(network.ID, year, repository.AllQuarters)
+	if err != nil {
+		return nil, err
+	}
+	promos, err := repository.GetNetworkPromoIndicators(network.Name, year, repository.AllQuarters)
+	if err != nil {
+		return nil, err
+	}
+	prices, err := repository.GetNetworkContractPrices(network.ID, year)
+	if err != nil {
+		return nil, err
+	}
+	return services.ApplyForecastRollup(
+		network, year, plans, periods, facts, forecasts, promos, prices, time.Now(),
+	), nil
+}
+
 func GetNetworkPlan(c *gin.Context) {
 	id, ok := networkIDParam(c)
 	if !ok {
@@ -588,13 +655,17 @@ func GetNetworkPlan(c *gin.Context) {
 		return
 	}
 
-	plans = services.EnrichNetworkPlans(plans, periods)
-	totals := services.CalculateNetworkTotals(plans, periods)
 	periodGroups, err := repository.GetNetworkPeriodGroups(id, year)
 	if err != nil {
 		respondNetworkError(c, err, "network_period_groups_failed")
 		return
 	}
+	plans, err = planForecastRollup(network, year, plans, periods)
+	if err != nil {
+		respondNetworkError(c, err, "network_plan_rollup_failed")
+		return
+	}
+	plans, totals := services.BuildNetworkPlanCalculations(plans, periods, periodGroups)
 	c.JSON(http.StatusOK, models.NetworkPlanResponse{
 		Network:                    network,
 		Year:                       year,
@@ -672,13 +743,17 @@ func SaveNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_plans_failed")
 		return
 	}
-	updatedPlans = services.EnrichNetworkPlans(updatedPlans, updatedPeriods)
-	totals := services.CalculateNetworkTotals(updatedPlans, updatedPeriods)
 	periodGroups, err := repository.GetNetworkPeriodGroups(id, input.Year)
 	if err != nil {
 		respondNetworkError(c, err, "network_period_groups_failed")
 		return
 	}
+	updatedPlans, err = planForecastRollup(network, input.Year, updatedPlans, updatedPeriods)
+	if err != nil {
+		respondNetworkError(c, err, "network_plan_rollup_failed")
+		return
+	}
+	updatedPlans, totals := services.BuildNetworkPlanCalculations(updatedPlans, updatedPeriods, periodGroups)
 
 	config.Logger.Info("network_plan_saved", "network_id", id, "year", input.Year, "user", username)
 	c.JSON(http.StatusOK, models.NetworkPlanSaveResponse{
@@ -741,7 +816,6 @@ func PreviewNetworkPlan(c *gin.Context) {
 			BrandAS:        p.BrandAS,
 			InGross:        p.InGross,
 			PlanRub:        p.PlanRub,
-			ForecastRub:    p.ForecastRub,
 			InvestmentsPct: p.InvestmentsPct,
 			Month1Pct:      network.Month1Pct,
 			Month2Pct:      network.Month2Pct,
@@ -765,15 +839,22 @@ func PreviewNetworkPlan(c *gin.Context) {
 		})
 	}
 
-	// Факт в черновик не входит: он приходит загрузкой, поэтому берётся
-	// из сохранённых строк, а не из тела запроса.
+	// Факт и прогноз в черновик не входят: они считаются из помесячного слоя,
+	// поэтому берутся из сохранённых строк, а не из тела запроса.
 	stored, err := repository.GetNetworkPlans(id, input.Year)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_preview_failed")
 		return
 	}
+	stored, err = planForecastRollup(network, input.Year, stored, periods)
+	if err != nil {
+		respondNetworkError(c, err, "network_plan_rollup_failed")
+		return
+	}
 
-	plans, totals, yearTotals := services.PreviewNetworkPlans(draft, stored, periods)
+	plans, _, _ := services.PreviewNetworkPlans(draft, stored, periods)
+	plans, totals := services.BuildNetworkPlanCalculations(plans, periods, periodGroups)
+	yearTotals := services.SumYearTotals(totals)
 	c.JSON(http.StatusOK, models.NetworkPlanPreviewResponse{
 		Year:                       input.Year,
 		Periods:                    periods,

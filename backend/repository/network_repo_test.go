@@ -83,7 +83,7 @@ func TestPlanRowsToWriteClearsRowWithFactInsteadOfRemoving(t *testing.T) {
 		t.Fatalf("write = %v, want пришедшую строку и две очищенные", writeKeys(write))
 	}
 	cleared := write[1]
-	if cleared.PlanRub != nil || cleared.ForecastRub != nil || cleared.InvestmentsPct != nil || cleared.InGross {
+	if cleared.PlanRub != nil || cleared.InvestmentsPct != nil || cleared.InGross {
 		t.Fatalf("cleared = %#v, want пустые значения", cleared)
 	}
 	if cleared.UpdatedAt != "2026-01-01 00:00:00" {

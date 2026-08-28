@@ -66,13 +66,26 @@ type NetworkPlan struct {
 	FactInvestmentsRub *float64 `json:"fact_investments_rub"`
 	FactInvestmentsNet *float64 `json:"fact_investments_rub_net"` // расчётное
 	InvestmentsPct     *float64 `json:"investments_pct"`
-	InvestmentsRub     *float64 `json:"investments_rub"`     // расчётное: pct от plan_rub, до вычета НДС
-	InvestmentsNet     *float64 `json:"investments_rub_net"` // расчётное: инвестиции с вычетом НДС
+	// Оплата от факта — безусловный режим для конкретных бренда и квартала:
+	// сумма считается от fact_rub и не зависит от выполнения плана.
+	PayInvestmentsFromFact bool     `json:"pay_investments_from_fact"`
+	InvestmentsRub         *float64 `json:"investments_rub"`     // расчётное: pct от plan_rub, до вычета НДС
+	InvestmentsNet         *float64 `json:"investments_rub_net"` // расчётное: инвестиции с вычетом НДС
 	// Расчётное: тот же процент, применённый к прогнозу объёма.
 	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
 	ForecastInvestmentsNet *float64 `json:"forecast_investments_rub_net"`
-	UpdatedBy              *string  `json:"updated_by"`
-	UpdatedAt              string   `json:"updated_at"`
+	// Фактическая сумма к выплате. В обычном режиме база — EAC и нужен порог
+	// 100% за применённый квартал/объединённый период; в режиме от факта порога нет.
+	PaymentBaseRub            *float64 `json:"payment_base_rub"`
+	PaymentCompletionPct      *float64 `json:"payment_completion_pct"`
+	PaymentEligible           bool     `json:"payment_eligible"`
+	PaymentPeriodStartQuarter int      `json:"payment_period_start_quarter"`
+	PaymentPeriodEndQuarter   int      `json:"payment_period_end_quarter"`
+	PaymentScope              string   `json:"payment_scope"` // portfolio | gross | brand | fact
+	PayableInvestmentsRub     *float64 `json:"payable_investments_rub"`
+	PayableInvestmentsRubNet  *float64 `json:"payable_investments_rub_net"`
+	UpdatedBy                 *string  `json:"updated_by"`
+	UpdatedAt                 string   `json:"updated_at"`
 }
 
 // NetworkPlanTotals — итоги квартала для шапки сетки планов.
@@ -103,12 +116,17 @@ type NetworkPlanTotals struct {
 	// Инвестиции: от плана и от прогноза, до вычета НДС и с вычетом.
 	// Факт инвестиций приходит загрузкой и процентом не пересчитывается,
 	// поэтому база «без НДС» считается по ставке того же квартала.
-	InvestmentsRub            float64 `json:"investments_rub"`
-	InvestmentsRubNet         float64 `json:"investments_rub_net"`
-	ForecastInvestmentsRub    float64 `json:"forecast_investments_rub"`
-	ForecastInvestmentsRubNet float64 `json:"forecast_investments_rub_net"`
-	FactInvestmentsRub        float64 `json:"fact_investments_rub"`
-	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
+	InvestmentsRub            float64  `json:"investments_rub"`
+	InvestmentsRubNet         float64  `json:"investments_rub_net"`
+	ForecastInvestmentsRub    float64  `json:"forecast_investments_rub"`
+	ForecastInvestmentsRubNet float64  `json:"forecast_investments_rub_net"`
+	FactInvestmentsRub        float64  `json:"fact_investments_rub"`
+	FactInvestmentsRubNet     float64  `json:"fact_investments_rub_net"`
+	EACRub                    float64  `json:"eac_rub"`
+	CompletionPct             *float64 `json:"completion_pct"`
+	Completed                 bool     `json:"completed"`
+	PayableInvestmentsRub     float64  `json:"payable_investments_rub"`
+	PayableInvestmentsRubNet  float64  `json:"payable_investments_rub_net"`
 }
 
 // NetworkPeriodGroup — правило совместного зачёта смежных кварталов.
@@ -138,12 +156,17 @@ type NetworkPeriodGroupTotals struct {
 	FactRub     float64 `json:"fact_rub"`
 	ForecastRub float64 `json:"forecast_rub"`
 
-	InvestmentsRub            float64 `json:"investments_rub"`
-	InvestmentsRubNet         float64 `json:"investments_rub_net"`
-	ForecastInvestmentsRub    float64 `json:"forecast_investments_rub"`
-	ForecastInvestmentsRubNet float64 `json:"forecast_investments_rub_net"`
-	FactInvestmentsRub        float64 `json:"fact_investments_rub"`
-	FactInvestmentsRubNet     float64 `json:"fact_investments_rub_net"`
+	InvestmentsRub            float64  `json:"investments_rub"`
+	InvestmentsRubNet         float64  `json:"investments_rub_net"`
+	ForecastInvestmentsRub    float64  `json:"forecast_investments_rub"`
+	ForecastInvestmentsRubNet float64  `json:"forecast_investments_rub_net"`
+	FactInvestmentsRub        float64  `json:"fact_investments_rub"`
+	FactInvestmentsRubNet     float64  `json:"fact_investments_rub_net"`
+	EACRub                    float64  `json:"eac_rub"`
+	CompletionPct             *float64 `json:"completion_pct"`
+	Completed                 bool     `json:"completed"`
+	PayableInvestmentsRub     float64  `json:"payable_investments_rub"`
+	PayableInvestmentsRubNet  float64  `json:"payable_investments_rub_net"`
 }
 
 // NetworkAnnualInvestmentRow — одна область годового кумулятива: общий
@@ -160,14 +183,16 @@ type NetworkAnnualInvestmentRow struct {
 	Completed     bool     `json:"completed"`
 	Eligible      bool     `json:"eligible"`
 
-	AccruedInvestmentsRub    float64 `json:"accrued_investments_rub"`
-	AccruedInvestmentsRubNet float64 `json:"accrued_investments_rub_net"`
-	PaidInvestmentsRub       float64 `json:"paid_investments_rub"`
-	PaidInvestmentsRubNet    float64 `json:"paid_investments_rub_net"`
-	Q4ForecastInvestmentsRub float64 `json:"q4_forecast_investments_rub"`
-	Q4ForecastInvestmentsNet float64 `json:"q4_forecast_investments_rub_net"`
-	SupplementRub            float64 `json:"supplement_rub"`
-	SupplementRubNet         float64 `json:"supplement_rub_net"`
+	AccruedInvestmentsRub             float64 `json:"accrued_investments_rub"`
+	AccruedInvestmentsRubNet          float64 `json:"accrued_investments_rub_net"`
+	FactBasedAccruedInvestmentsRub    float64 `json:"fact_based_accrued_investments_rub"`
+	FactBasedAccruedInvestmentsRubNet float64 `json:"fact_based_accrued_investments_rub_net"`
+	PaidInvestmentsRub                float64 `json:"paid_investments_rub"`
+	PaidInvestmentsRubNet             float64 `json:"paid_investments_rub_net"`
+	Q4ForecastInvestmentsRub          float64 `json:"q4_forecast_investments_rub"`
+	Q4ForecastInvestmentsNet          float64 `json:"q4_forecast_investments_rub_net"`
+	SupplementRub                     float64 `json:"supplement_rub"`
+	SupplementRubNet                  float64 `json:"supplement_rub_net"`
 }
 
 // NetworkAnnualInvestmentCumulative — расчёт годовой доплаты. Сначала сеть

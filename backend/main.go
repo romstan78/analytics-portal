@@ -192,6 +192,7 @@ func main() {
 		api.POST("/networks", middleware.RoleRequired("admin", "kam"), handlers.CreateNetwork)
 		api.PATCH("/networks/:id", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.UpdateNetwork)
 		api.POST("/networks/:id/plan", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkPlan)
+		api.POST("/networks/:id/investment-payment-modes", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.UpdateNetworkInvestmentPaymentModes)
 		api.POST("/networks/:id/forecast", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.SaveNetworkForecast)
 		api.POST("/networks/:id/forecast/import/preview", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.PreviewNetworkForecastImport)
 		api.POST("/networks/:id/forecast/import", handlers.NetworkAccessRequired(), middleware.RoleRequired("admin", "kam"), handlers.ImportNetworkForecast)

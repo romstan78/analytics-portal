@@ -4,7 +4,7 @@ import {
   Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import { BookmarkAdd as BookmarkAddIcon } from '@mui/icons-material';
-import { getUsername } from '../api/auth';
+import { userScopedKey } from '../utils/storage';
 
 export interface InternetSalesViewSnapshot {
   view: 'dashboard' | 'summary' | 'details';
@@ -41,7 +41,7 @@ interface InternetSalesSavedViewsProps {
 const MAX_SAVED_VIEWS = 12;
 
 function storageKey() {
-  return `internet_sales_saved_views_v1:${getUsername() || 'local'}`;
+  return userScopedKey('internet_sales_saved_views_v1');
 }
 
 function loadSavedViews(): SavedView[] {

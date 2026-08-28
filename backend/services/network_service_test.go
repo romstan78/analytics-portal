@@ -472,6 +472,88 @@ func TestCalculateNetworkAnnualInvestmentCumulativeForNetworkUsesProfileFlag(t *
 	}
 }
 
+func TestCalculateNetworkInvestmentPaymentsRequiresOneHundredPercent(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 3}, {Quarter: 4}}
+	plans := []models.NetworkPlan{
+		{Quarter: 3, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(99), InvestmentsPct: models.PtrFloat(10)},
+		{Quarter: 4, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(101), InvestmentsPct: models.PtrFloat(10)},
+	}
+
+	got, totals := BuildNetworkPlanCalculations(plans, periods, nil)
+	if got[0].PaymentEligible || got[0].PayableInvestmentsRub != nil {
+		t.Errorf("Q3 ниже 100%% не должен оплачиваться: %#v", got[0])
+	}
+	if !got[1].PaymentEligible || models.ValFloat(got[1].PayableInvestmentsRub) != 10.1 {
+		t.Errorf("Q4 выше 100%% должен оплачиваться от EAC: %#v", got[1])
+	}
+	if totals[2].PayableInvestmentsRub != 0 || totals[3].PayableInvestmentsRub != 10.1 {
+		t.Errorf("квартальные выплаты рассчитаны неверно: %#v", totals)
+	}
+}
+
+func TestCalculateNetworkInvestmentPaymentsUsesCombinedPeriod(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 3}, {Quarter: 4}}
+	plans := []models.NetworkPlan{
+		{Quarter: 3, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(99), InvestmentsPct: models.PtrFloat(10)},
+		{Quarter: 4, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+			ForecastRub: models.PtrFloat(101), InvestmentsPct: models.PtrFloat(10)},
+	}
+	groups := []models.NetworkPeriodGroup{{StartQuarter: 3, EndQuarter: 4, BrandAS: brandPtr("Альфа")}}
+
+	got, totals := BuildNetworkPlanCalculations(plans, periods, groups)
+	if !got[0].PaymentEligible || !got[1].PaymentEligible ||
+		models.ValFloat(got[0].PayableInvestmentsRub) != 9.9 ||
+		models.ValFloat(got[1].PayableInvestmentsRub) != 10.1 {
+		t.Errorf("объединённый период ровно 100%% должен оплатить оба квартала: %#v", got)
+	}
+	combined := CalculateNetworkPeriodGroupTotals(groups, got, totals)
+	if len(combined) != 1 || !combined[0].Completed || combined[0].PayableInvestmentsRub != 20 {
+		t.Errorf("итог объединённого периода рассчитан неверно: %#v", combined)
+	}
+}
+
+func TestCalculateNetworkInvestmentPaymentsFromFactBypassesThreshold(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
+	plans := []models.NetworkPlan{{
+		Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+		FactRub: models.PtrFloat(40), ForecastRub: models.PtrFloat(50),
+		InvestmentsPct: models.PtrFloat(10), PayInvestmentsFromFact: true,
+	}}
+
+	got, totals := BuildNetworkPlanCalculations(plans, periods, nil)
+	if !got[0].PaymentEligible || models.ValFloat(got[0].PaymentBaseRub) != 40 ||
+		models.ValFloat(got[0].PayableInvestmentsRub) != 4 ||
+		models.ValFloat(got[0].PayableInvestmentsRubNet) != 3.33 {
+		t.Errorf("оплата от факта должна считаться без порога: %#v", got[0])
+	}
+	if totals[0].Completed || totals[0].PayableInvestmentsRub != 4 {
+		t.Errorf("план может быть не выполнен, но оплата от факта остаётся: %#v", totals[0])
+	}
+}
+
+func TestAnnualCumulativeIncludesFactBasedAccrualWithoutYearCompletion(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1}}
+	plans := []models.NetworkPlan{{
+		Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+		FactRub: models.PtrFloat(40), ForecastRub: models.PtrFloat(50),
+		InvestmentsPct: models.PtrFloat(10), PayInvestmentsFromFact: true,
+	}}
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, nil)
+	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
+
+	if got.PortfolioCompleted || len(got.Rows) != 1 {
+		t.Fatalf("годовой план должен быть не выполнен: %#v", got)
+	}
+	row := got.Rows[0]
+	if row.Eligible || row.FactBasedAccruedInvestmentsRub != 4 || row.SupplementRub != 4 ||
+		got.TotalSupplementRub != 4 {
+		t.Errorf("безусловное начисление от факта потерялось в кумулятиве: %#v", got)
+	}
+}
+
 func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	stored := []models.NetworkPlan{{

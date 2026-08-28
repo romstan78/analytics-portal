@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import {
-  Alert, Box, Chip, CircularProgress, Grid, Paper, Stack, Tab, Table, TableBody,
+  Alert, Box, Chip, CircularProgress, FormControlLabel, Grid, Paper, Stack, Switch, Tab, Table, TableBody,
   TableCell, TableHead, TableRow, Tabs, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine,
+  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart, ReferenceLine,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 
@@ -76,6 +76,23 @@ interface InternetSalesDashboardProps {
 const MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
 const SERIES_COLORS = ['#5b5bd6', '#d14f8a', '#d58a20', '#168b7a', '#7a52b3'];
 const CHANNEL_COLORS = ['#087f8c', '#1875c1', '#08705f', '#8b4bb3', '#bd6428'];
+
+// Подписи значений на графиках — как в витринах промо и реестра: приглушённый
+// цвет, чтобы читались как разметка, а не спорили с самими рядами.
+//
+// У всех рядов с подписями анимация выключена намеренно. Recharts отдаёт
+// LabelList данные только когда ряд не анимируется (showLabels: !isAnimating),
+// а состояние «анимируется» снимается лишь по событию конца анимации. Вернуть
+// анимацию — значит получить подписи, которые то появляются с задержкой, то не
+// появляются вовсе.
+const LABEL_INK = '#64748b';
+const BAR_LABEL_STYLE = { fontSize: 9, fontWeight: 700, fill: LABEL_INK } as const;
+const LINE_LABEL_STYLE = { fontSize: 10, fontWeight: 700, fill: LABEL_INK } as const;
+
+// Пустое значение не подписываем: у месяца без данных точки нет, и подпись
+// повисла бы в пустоте.
+const labelText = (value: unknown, format: (numeric: number) => string) =>
+  value == null || !Number.isFinite(Number(value)) ? '' : format(Number(value));
 
 const compactNumber = (value: number) => new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value) || 0);
 const rawNumber = (value: number, digits = 0) => Number(value || 0).toLocaleString('ru-RU', { maximumFractionDigits: digits });
@@ -164,6 +181,7 @@ export default function InternetSalesDashboard({
   const [driverMetric, setDriverMetric] = useState<'delta' | 'percent'>('delta');
   const [bottomTab, setBottomTab] = useState<'ranking' | 'heatmap' | 'detail'>('ranking');
   const [rankDimension, setRankDimension] = useState<'network' | 'product'>('network');
+  const [showValues, setShowValues] = useState(false);
 
   // Появление фокусов или трендов по каналам переключает режим на сравнение.
   // Синхронизация во время рендера вместо эффекта — правило set-state-in-effect.
@@ -264,6 +282,12 @@ export default function InternetSalesDashboard({
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pr: 0.5 }}>
+      <Stack direction="row" sx={{ justifyContent: 'flex-end', mb: 0.25 }}>
+        <FormControlLabel
+          control={<Switch size="small" checked={showValues} onChange={(event) => setShowValues(event.target.checked)} />}
+          label={<Typography variant="body2">Значения на графике</Typography>}
+        />
+      </Stack>
       <Grid container spacing={1.25} sx={{ mb: 1.25 }}>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}><KpiCard label={data.unit === 'евро' ? 'Продажи в EUR' : 'Продажи'} value={`${compactNumber(salesComparison.current)} ${data.unit === 'евро' ? '€' : '₽'}`} previous={`${compactNumber(salesComparison.previous)} ${data.unit === 'евро' ? '€' : '₽'}`} change={salesChange} accent="#5558d5" /></Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}><KpiCard label="Количество" value={`${compactNumber(data.metricComparisons.units.current)} шт.`} previous={`${compactNumber(data.metricComparisons.units.previous)} шт.`} change={unitsChange} accent="#228b7e" /></Grid>
@@ -302,41 +326,57 @@ export default function InternetSalesDashboard({
             {trendMode === 'year' ? (
               <>
                 <ResponsiveContainer width="100%" height={270}>
-                  <LineChart data={yearTrend} margin={{ top: 18, right: 18, left: 4, bottom: 0 }}>
+                  <LineChart data={yearTrend} margin={{ top: showValues ? 26 : 18, right: 18, left: 4, bottom: 0 }}>
                     <CartesianGrid stroke="#e8ebf0" strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                     <YAxis tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />
                     <Tooltip formatter={(value, name) => [fullNumber(Number(value), data.unit), name === 'current' ? String(data.analysisYear) : previousLabel]} />
                     <Legend formatter={(value) => value === 'current' ? String(data.analysisYear) : previousLabel} />
-                    <Line type="monotone" dataKey="current" connectNulls={false} stroke="#5558d5" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
-                    <Line type="monotone" dataKey="previous" connectNulls stroke="#64748b" strokeWidth={2.2} strokeDasharray="7 5" dot={false} />
+                    {/* Текущий год подписан сверху, прошлый снизу: в местах
+                        схождения линий подписи иначе наезжают друг на друга. */}
+                    <Line type="monotone" dataKey="current" connectNulls={false} stroke="#5558d5" strokeWidth={3} dot={false} activeDot={{ r: 5 }} isAnimationActive={false}>
+                      {showValues && <LabelList dataKey="current" position="top" offset={8} formatter={(value) => labelText(value, compactNumber)} style={LINE_LABEL_STYLE} />}
+                    </Line>
+                    <Line type="monotone" dataKey="previous" connectNulls stroke="#64748b" strokeWidth={2.2} strokeDasharray="7 5" dot={false} isAnimationActive={false}>
+                      {showValues && <LabelList dataKey="previous" position="bottom" offset={8} formatter={(value) => labelText(value, compactNumber)} style={LINE_LABEL_STYLE} />}
+                    </Line>
                   </LineChart>
                 </ResponsiveContainer>
                 <Box sx={{ height: 100, mt: -0.5 }}>
                   <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>Изменение год к году, %</Typography>
                   <ResponsiveContainer width="100%" height="86%">
-                    <BarChart data={yearTrend} margin={{ top: 4, right: 18, left: 4, bottom: 0 }}>
+                    <BarChart data={yearTrend} margin={{ top: showValues ? 14 : 4, right: 18, left: 4, bottom: 0 }}>
                       <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
                       <YAxis tickFormatter={(value) => `${value}%`} tick={{ fontSize: 9 }} width={58} domain={['auto', 'auto']} />
                       <ReferenceLine y={0} stroke="#94a3b8" />
                       <Tooltip formatter={(value) => [`${Number(value).toFixed(1)}%`, 'YoY']} />
-                      <Bar dataKey="yoy" radius={[3, 3, 0, 0]}>{yearTrend.map((row) => <Cell key={row.month} fill={(row.yoy || 0) >= 0 ? '#2b9a78' : '#dc6b55'} />)}</Bar>
+                      <Bar dataKey="yoy" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                      {showValues && <LabelList dataKey="yoy" position="top" formatter={(value) => labelText(value, (numeric) => `${numeric.toFixed(0)}%`)} style={BAR_LABEL_STYLE} />}
+                      {yearTrend.map((row) => <Cell key={row.month} fill={(row.yoy || 0) >= 0 ? '#2b9a78' : '#dc6b55'} />)}
+                    </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </Box>
               </>
             ) : (
               <ResponsiveContainer width="100%" height={360}>
-                <LineChart data={comparisonData} margin={{ top: 22, right: 18, left: 4, bottom: 8 }}>
+                <LineChart data={comparisonData} margin={{ top: showValues ? 30 : 22, right: 18, left: 4, bottom: 8 }}>
                   <CartesianGrid stroke="#e8ebf0" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="period" tick={{ fontSize: 11 }} minTickGap={24} />
                   <YAxis yAxisId="main" tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />
                   {useFocusAxis && <YAxis yAxisId="selected" orientation="right" tickFormatter={compactNumber} tick={{ fontSize: 11 }} width={58} />}
                   <Tooltip formatter={comparisonTooltip} />
                   <Legend />
-                  <Line yAxisId="main" type="monotone" dataKey="overall" name="Общий срез" stroke="#a0a8b5" strokeWidth={2} strokeDasharray="6 4" dot={false} />
-                  {channels.map((name, index) => <Line key={name} yAxisId="main" type="monotone" dataKey={`channel_${index}`} name={`Канал: ${name}`} stroke={CHANNEL_COLORS[index % CHANNEL_COLORS.length]} strokeWidth={2.5} dot={false} connectNulls />)}
-                  {focuses.map((focus, index) => <Line key={`${focus.type}:${focus.name}`} yAxisId={useFocusAxis ? 'selected' : 'main'} type="monotone" dataKey={`focus_${index}`} name={focus.name} stroke={SERIES_COLORS[index % SERIES_COLORS.length]} strokeWidth={3} dot={false} connectNulls />)}
+                  {/* Подписан только выбранный срез: общий ряд и каналы — фон
+                      сравнения, а рядов тут бывает под десяток, и подписи ко
+                      всем сразу превращают график в кашу. */}
+                  <Line yAxisId="main" type="monotone" dataKey="overall" name="Общий срез" stroke="#a0a8b5" strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} />
+                  {channels.map((name, index) => <Line key={name} yAxisId="main" type="monotone" dataKey={`channel_${index}`} name={`Канал: ${name}`} stroke={CHANNEL_COLORS[index % CHANNEL_COLORS.length]} strokeWidth={2.5} dot={false} connectNulls isAnimationActive={false} />)}
+                  {focuses.map((focus, index) => (
+                    <Line key={`${focus.type}:${focus.name}`} yAxisId={useFocusAxis ? 'selected' : 'main'} type="monotone" dataKey={`focus_${index}`} name={focus.name} stroke={SERIES_COLORS[index % SERIES_COLORS.length]} strokeWidth={3} dot={false} connectNulls isAnimationActive={false}>
+                      {showValues && <LabelList dataKey={`focus_${index}`} position="top" offset={8} formatter={(value) => labelText(value, compactNumber)} style={LINE_LABEL_STYLE} />}
+                    </Line>
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -355,11 +395,28 @@ export default function InternetSalesDashboard({
             <ResponsiveContainer width="100%" height={365}>
               <BarChart data={[...driverRows].reverse()} layout="vertical" margin={{ top: 12, right: 16, left: 20, bottom: 0 }}>
                 <CartesianGrid stroke="#edf0f4" horizontal={false} />
-                <XAxis type="number" tickFormatter={driverMetric === 'delta' ? compactNumber : (value) => `${value}%`} tick={{ fontSize: 10 }} />
+                {/* Подпись отрицательного столбца recharts рисует слева от него,
+                    за его пределами. Раздвигать под неё домен бессмысленно: при
+                    малых по модулю минусах и крупных плюсах отрицательная
+                    половина оси занимает считанные пиксели, и подпись садится на
+                    названия. padding задаёт запас прямо в пикселях и от разброса
+                    данных не зависит.
+
+                    Слева запас нужен только при отрицательных значениях: без них
+                    он просто отодвинул бы столбцы от нуля. */}
+                <XAxis
+                  type="number"
+                  padding={showValues ? { left: driverRows.some(item => Number(item.chartValue) < 0) ? 64 : 0, right: 64 } : undefined}
+                  tickFormatter={driverMetric === 'delta' ? compactNumber : (value) => `${value}%`}
+                  tick={{ fontSize: 10 }}
+                />
                 <YAxis type="category" dataKey="name" width={128} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 18)}…` : String(value)} />
                 <ReferenceLine x={0} stroke="#7b8797" />
                 <Tooltip formatter={(value) => [driverMetric === 'delta' ? `${rawNumber(Number(value))} ${unitLabel}` : `${Number(value).toFixed(1)}%`, driverMetric === 'delta' ? 'Вклад' : 'YoY']} />
-                <Bar dataKey="chartValue" radius={[0, 4, 4, 0]}>{[...driverRows].reverse().map(item => <Cell key={item.name} fill={Number(item.chartValue) >= 0 ? '#2b9a78' : '#dc6b55'} />)}</Bar>
+                <Bar dataKey="chartValue" radius={[0, 4, 4, 0]} isAnimationActive={false}>
+                  {showValues && <LabelList dataKey="chartValue" position="right" formatter={(value) => labelText(value, driverMetric === 'delta' ? compactNumber : (numeric) => `${numeric.toFixed(1)}%`)} style={BAR_LABEL_STYLE} />}
+                  {[...driverRows].reverse().map(item => <Cell key={item.name} fill={Number(item.chartValue) >= 0 ? '#2b9a78' : '#dc6b55'} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </Paper>
@@ -399,14 +456,20 @@ export default function InternetSalesDashboard({
             data.networkBreakdown.length > 0 ? (
               <><Typography variant="subtitle2" sx={{ fontWeight: 750 }}>Сеть по каналам и сегментам</Typography><Typography variant="caption" color="text.secondary">Пересекающиеся срезы показаны отдельно и не складываются.</Typography>
                 <ResponsiveContainer width="100%" height={255}>
-                  <BarChart data={[...data.networkBreakdown].sort((a, b) => a.value - b.value).map(item => ({ ...item, label: `${item.network} · ${item.channel} · ${item.segment}` }))} layout="vertical" margin={{ top: 12, right: 24, left: 30, bottom: 0 }}>
+                  <BarChart data={[...data.networkBreakdown].sort((a, b) => a.value - b.value).map(item => ({ ...item, label: `${item.network} · ${item.channel} · ${item.segment}` }))} layout="vertical" margin={{ top: 12, right: showValues ? 56 : 24, left: 30, bottom: 0 }}>
                     <CartesianGrid stroke="#edf0f4" horizontal={false} /><XAxis type="number" tickFormatter={compactNumber} tick={{ fontSize: 10 }} /><YAxis type="category" dataKey="label" width={270} tick={{ fontSize: 10 }} />
-                    <Tooltip formatter={(value) => [fullNumber(Number(value), data.unit), 'Продажи']} /><Bar dataKey="value" fill="#187f75" radius={[0, 4, 4, 0]} />
+                    <Tooltip formatter={(value) => [fullNumber(Number(value), data.unit), 'Продажи']} />
+                    <Bar dataKey="value" fill="#187f75" radius={[0, 4, 4, 0]} isAnimationActive={false}>
+                      {showValues && <LabelList dataKey="value" position="right" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer></>
             ) : data.segmentTotals.length > 1 ? (
               <><Typography variant="subtitle2" sx={{ fontWeight: 750 }}>Сегменты канала «{data.channel}»</Typography><Typography variant="caption" color="text.secondary">Нажмите на сегмент, чтобы перестроить дашборд.</Typography>
-                <ResponsiveContainer width="100%" height={255}><BarChart data={[...data.segmentTotals].reverse()} layout="vertical" margin={{ top: 12, right: 24, left: 20, bottom: 0 }}><CartesianGrid stroke="#edf0f4" horizontal={false} /><XAxis type="number" tickFormatter={compactNumber} /><YAxis type="category" dataKey="name" width={220} /><Tooltip formatter={(value) => [fullNumber(Number(value), data.unit), 'Продажи']} /><Bar dataKey="value" fill="#5558d5" cursor="pointer" onClick={(entry) => onSegmentSelect((entry as DashboardRank).name)} /></BarChart></ResponsiveContainer></>
+                <ResponsiveContainer width="100%" height={255}><BarChart data={[...data.segmentTotals].reverse()} layout="vertical" margin={{ top: 12, right: showValues ? 56 : 24, left: 20, bottom: 0 }}><CartesianGrid stroke="#edf0f4" horizontal={false} /><XAxis type="number" tickFormatter={compactNumber} /><YAxis type="category" dataKey="name" width={220} /><Tooltip formatter={(value) => [fullNumber(Number(value), data.unit), 'Продажи']} />
+                  <Bar dataKey="value" fill="#5558d5" cursor="pointer" isAnimationActive={false} onClick={(entry) => onSegmentSelect((entry as DashboardRank).name)}>
+                    {showValues && <LabelList dataKey="value" position="right" formatter={(value) => labelText(value, compactNumber)} style={BAR_LABEL_STYLE} />}
+                  </Bar></BarChart></ResponsiveContainer></>
             ) : <Box sx={{ height: 260, display: 'grid', placeItems: 'center', textAlign: 'center' }}><Box><Typography sx={{ fontWeight: 700 }}>Выберите сеть</Typography><Typography variant="body2" color="text.secondary">Детализация покажет её данные по каналам и сегментам.</Typography></Box></Box>
           )}
         </Box>

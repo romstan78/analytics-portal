@@ -50,10 +50,23 @@ func GetNetworkMonthlyFacts(networkID, yearFrom, yearTo int) ([]models.NetworkMo
 	return result, rows.Err()
 }
 
+// AllQuarters читает помесячный слой за весь год, а не за один квартал.
+// Сетка планов показывает все четыре квартала сразу, и четыре запроса на один
+// экран были бы просто четырьмя обращениями к базе вместо одного.
+const AllQuarters = 0
+
+// forecastMonthRange — границы месяцев запроса. AllQuarters означает год целиком.
+func forecastMonthRange(quarter int) (int, int) {
+	if quarter < 1 || quarter > 4 {
+		return 1, 12
+	}
+	monthFrom := (quarter-1)*3 + 1
+	return monthFrom, monthFrom + 2
+}
+
 // GetNetworkForecastLines читает официальный и SKU-прогноз выбранного квартала.
 func GetNetworkForecastLines(networkID, year, quarter int) ([]models.NetworkForecastLine, error) {
-	monthFrom := (quarter-1)*3 + 1
-	monthTo := monthFrom + 2
+	monthFrom, monthTo := forecastMonthRange(quarter)
 	rows, err := config.DB.Query(
 		`SELECT id, network_id, [year], [month], brand_as, sku,
 			forecast_rub, forecast_units, forecast_investments_rub,
@@ -88,8 +101,7 @@ func GetNetworkForecastLines(networkID, year, quarter int) ([]models.NetworkFore
 // GetNetworkPromoIndicators собирает только компактные признаки прогноза.
 // В суммы входят согласованные на обоих этапах промо; черновики видны счётчиком.
 func GetNetworkPromoIndicators(networkName string, year, quarter int) ([]models.NetworkPromoIndicator, error) {
-	monthFrom := (quarter-1)*3 + 1
-	monthTo := monthFrom + 2
+	monthFrom, monthTo := forecastMonthRange(quarter)
 	rows, err := config.DB.Query(
 		`SELECT p.[year], p.[month], p.brand_as,
 			COUNT(*) AS promo_count,

@@ -43,6 +43,7 @@ const EDITABLE: Record<YearMetric, EditableField | null> = {
   investPlan: null,
   investForecast: null,
   investFact: null,
+	payable: null,
 };
 
 const COLUMNS = ['22%', '15%', '13%', '13%', '13%', '13%', '11%', '44px'];
@@ -91,6 +92,7 @@ export default function NetworkYearTable({
       case 'investPlan': return row.investPlan;
       case 'investForecast': return row.investForecast;
       case 'investFact': return row.investFact;
+		case 'payable': return row.payable;
       case 'plan': return row.plan;
       case 'forecast': return row.forecast;
       case 'pct': return null;
@@ -198,6 +200,7 @@ export default function NetworkYearTable({
       case 'investPlan': return t.investments_rub || null;
       case 'investForecast': return t.forecast_investments_rub || null;
       case 'investFact': return t.fact_investments_rub || null;
+		case 'payable': return t.payable_investments_rub || null;
       case 'pct': return t.plan_rub > 0 ? round2((t.investments_rub / t.plan_rub) * 100) : null;
       default: return null;
     }

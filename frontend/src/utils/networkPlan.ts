@@ -119,10 +119,10 @@ export function pluralRu(count: number, one: string, few: string, many: string):
 }
 
 // Значение строки сетки во время редактирования.
-// Факт объёма и факт инвестиций приходят загрузкой и в интерфейсе не правятся.
+// Факта и прогноза здесь нет: факт приходит загрузкой, прогноз ведётся помесячно
+// во вкладке «Прогноз», и оба показываются готовыми суммами из ответа сервера.
 export interface DraftCell {
   planRub: string;
-  forecastRub: string;
   investmentsPct: string;
   inGross: boolean;
   factRub: number | null;
@@ -131,7 +131,6 @@ export interface DraftCell {
 
 export const EMPTY_CELL: DraftCell = {
   planRub: '',
-  forecastRub: '',
   investmentsPct: '',
   inGross: false,
   factRub: null,
@@ -155,6 +154,13 @@ export interface CellAmounts {
   investForecastNet: number | null;
   investFact: number | null;
   investFactNet: number | null;
+	payable: number | null;
+	payableNet: number | null;
+	paymentEligible: boolean;
+	payFromFact: boolean;
+	paymentCompletionPct: number | null;
+	paymentPeriodStart: number;
+	paymentPeriodEnd: number;
 }
 
 export const EMPTY_AMOUNTS: CellAmounts = {
@@ -167,6 +173,13 @@ export const EMPTY_AMOUNTS: CellAmounts = {
   investForecastNet: null,
   investFact: null,
   investFactNet: null,
+	payable: null,
+	payableNet: null,
+	paymentEligible: false,
+	payFromFact: false,
+	paymentCompletionPct: null,
+	paymentPeriodStart: 0,
+	paymentPeriodEnd: 0,
 };
 
 // Расчётные суммы одной ячейки — так, как их вернул бэкенд.
@@ -182,6 +195,13 @@ export function amountsOfPlan(plan: NetworkPlan | undefined): CellAmounts {
     investForecastNet: plan.forecast_investments_rub_net,
     investFact: plan.fact_investments_rub,
     investFactNet: plan.fact_investments_rub_net,
+		payable: plan.payable_investments_rub,
+		payableNet: plan.payable_investments_rub_net,
+		paymentEligible: plan.payment_eligible,
+		payFromFact: plan.pay_investments_from_fact,
+		paymentCompletionPct: plan.payment_completion_pct,
+		paymentPeriodStart: plan.payment_period_start_quarter,
+		paymentPeriodEnd: plan.payment_period_end_quarter,
   };
 }
 
@@ -202,7 +222,6 @@ export function buildDraft(plans: NetworkPlan[]): Record<string, DraftCell> {
   plans.forEach((plan) => {
     draft[planKey(plan.quarter, plan.brand_as)] = {
       planRub: asInput(plan.plan_rub),
-      forecastRub: asInput(plan.forecast_rub),
       investmentsPct: asInput(plan.investments_pct),
       inGross: plan.brand_as != null && plan.in_gross,
       factRub: plan.fact_rub,
@@ -234,7 +253,6 @@ export function shiftGrossPool(pool: DraftCell | undefined, brand: DraftCell, in
   return {
     ...base,
     planRub: shift(base.planRub, brand.planRub),
-    forecastRub: shift(base.forecastRub, brand.forecastRub),
   };
 }
 

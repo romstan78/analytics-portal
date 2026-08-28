@@ -23,6 +23,7 @@ import ApprovalDetailPanel from '../components/ApprovalDetailPanel';
 import { promoAPI } from '../api/promo';
 import type { ApprovalRow, ApprovalsResponse } from '../types/promo';
 import { FIELD_GROUPS, DEFAULT_VISIBLE_FIELDS, normalizeVisibleFields } from '../utils/cardFields';
+import { userScopedKey } from '../utils/storage';
 
 type ApprovalRoleName = 'agreement1' | 'agreement2';
 
@@ -80,9 +81,13 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
   // Настройка карточек (Drawer)
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchField, setSearchField] = useState('');
+  // Набор полей карточки — личная настройка согласующего, поэтому ключ
+  // привязан к пользователю: следующему вошедшему в ту же вкладку достаётся
+  // его собственный набор, а не чужой.
+  const visibleFieldsKey = userScopedKey('promo_approval_fields_v3');
   const [visibleFields, setVisibleFields] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('promo_approval_fields_v3');
+      const saved = localStorage.getItem(visibleFieldsKey);
       return saved ? normalizeVisibleFields(JSON.parse(saved)) : [...DEFAULT_VISIBLE_FIELDS];
     } catch { return DEFAULT_VISIBLE_FIELDS; }
   });
@@ -90,14 +95,14 @@ export default function PromoApproval({ role, onDataChanged }: PromoApprovalProp
   const toggleField = (id: string) => {
     setVisibleFields(prev => {
       const next = prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id];
-      localStorage.setItem('promo_approval_fields_v3', JSON.stringify(next));
+      localStorage.setItem(visibleFieldsKey, JSON.stringify(next));
       return next;
     });
   };
 
   const resetVisibleFields = () => {
     const defaults = [...DEFAULT_VISIBLE_FIELDS];
-    localStorage.setItem('promo_approval_fields_v3', JSON.stringify(defaults));
+    localStorage.setItem(visibleFieldsKey, JSON.stringify(defaults));
     setVisibleFields(defaults);
   };
 

@@ -381,3 +381,76 @@ func TestBuildNetworkForecastKeepsManualInvestmentsOverrideVisible(t *testing.T)
 		t.Fatalf("источник инвестиций = %q, ожидался override", mar.InvestmentsSource)
 	}
 }
+
+// Ровно описанная жалоба: до правки квартальная строка показывала ноль, пока
+// колонку не наполнял загрузчик или сохранение прогноза, и тогда EAC проявлялся
+// сразу по всем брендам. Свод обязан отдавать факт и EAC всем брендам сразу,
+// не заглядывая в сохранённые fact_rub и forecast_rub.
+func TestApplyForecastRollupFillsFactAndEACWithoutSavedColumns(t *testing.T) {
+	alpha, beta := "Альфа", "Бета"
+	network := models.Network{ID: 1, Name: "Сеть", Month1Pct: 30, Month2Pct: 30, Month3Pct: 40}
+	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: false}}
+	plans := []models.NetworkPlan{
+		{Quarter: 1, BrandAS: &alpha, PlanRub: models.PtrFloat(300), InvestmentsPct: models.PtrFloat(10)},
+		{Quarter: 1, BrandAS: &beta, PlanRub: models.PtrFloat(200), InvestmentsPct: models.PtrFloat(10)},
+		// Строка пула брендом не ведётся и остаётся нетронутой.
+		{Quarter: 1, BrandAS: nil, PlanRub: models.PtrFloat(500)},
+	}
+	facts := []models.NetworkMonthlyFact{
+		// Январь и февраль закрыты — в EAC идёт факт.
+		{Year: 2026, Month: 1, BrandAS: alpha, FactRub: models.PtrFloat(100), FactInvestmentsRub: models.PtrFloat(9)},
+		{Year: 2026, Month: 2, BrandAS: alpha, FactRub: models.PtrFloat(110)},
+		{Year: 2026, Month: 1, BrandAS: beta, FactRub: models.PtrFloat(60)},
+		{Year: 2026, Month: 2, BrandAS: beta, FactRub: models.PtrFloat(70)},
+	}
+	// Прогноз введён только у «Альфы» — «Бета» обязана получить свой EAC всё равно.
+	forecasts := []models.NetworkForecastLine{
+		{Year: 2026, Month: 3, BrandAS: alpha, ForecastRub: models.PtrFloat(130)},
+	}
+
+	got := ApplyForecastRollup(
+		network, 2026, plans, periods, facts, forecasts, nil, nil,
+		time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
+	)
+
+	if v := models.ValFloat(got[0].FactRub); v != 210 {
+		t.Errorf("факт «Альфы» = %v, ожидалось 210", v)
+	}
+	if v := models.ValFloat(got[0].ForecastRub); v != 340 {
+		t.Errorf("EAC «Альфы» = %v, ожидалось 340 (100 + 110 факта и 130 прогноза)", v)
+	}
+	if v := models.ValFloat(got[0].FactInvestmentsRub); v != 9 {
+		t.Errorf("факт инвестиций «Альфы» = %v, ожидалось 9", v)
+	}
+	// У бренда без введённого прогноза EAC собирается из факта закрытых месяцев
+	// и системной рекомендации открытого — ноль здесь и был жалобой.
+	if v := models.ValFloat(got[1].FactRub); v != 130 {
+		t.Errorf("факт «Беты» = %v, ожидалось 130", v)
+	}
+	if models.ValFloat(got[1].ForecastRub) <= 130 {
+		t.Errorf("EAC «Беты» = %v, ожидалось больше факта закрытых месяцев",
+			models.ValFloat(got[1].ForecastRub))
+	}
+	if got[2].FactRub != nil || got[2].ForecastRub != nil {
+		t.Errorf("строка пула = %#v, ожидалось без факта и прогноза", got[2])
+	}
+}
+
+// Квартал без единой строки помесячного слоя обязан остаться прочерком,
+// а не превратиться в ноль: план на будущее ещё не факт и не прогноз.
+func TestApplyForecastRollupLeavesUntouchedQuarterEmpty(t *testing.T) {
+	alpha := "Альфа"
+	plans := []models.NetworkPlan{
+		{Quarter: 4, BrandAS: &alpha, PlanRub: models.PtrFloat(300)},
+	}
+
+	got := ApplyForecastRollup(
+		models.Network{ID: 1, Month1Pct: 30, Month2Pct: 30, Month3Pct: 40},
+		2026, plans, nil, nil, nil, nil, nil,
+		time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
+	)
+
+	if got[0].FactRub != nil || got[0].ForecastRub != nil {
+		t.Errorf("строка = %#v, ожидались пустые факт и прогноз", got[0])
+	}
+}

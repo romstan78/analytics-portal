@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { promoAPI } from '../api/promo';
+import { userScopedKey } from '../utils/storage';
 
 export interface FilterMeta {
   kam: string[];
@@ -14,11 +15,18 @@ export interface FilterMeta {
   error: string | null;
 }
 
+// Ключи скоупятся по пользователю здесь, а не в вызывающих страницах: сохранить
+// чужой фильтр не должен ни один из них, и забыть про это в новой странице
+// нельзя. Пересчёт при рендере достаточен — смена пользователя перемонтирует
+// дерево, и хук стартует уже с ключами вошедшего.
 export function usePromoFilters(
   initialFilters: Record<string, unknown>,
-  storageKey: string,
-  persistFlagKey: string,
+  baseStorageKey: string,
+  basePersistFlagKey: string,
 ) {
+  const storageKey = userScopedKey(baseStorageKey);
+  const persistFlagKey = userScopedKey(basePersistFlagKey);
+
   const [filters, setFilters] = useState<Record<string, unknown>>(() => {
     try {
       if (localStorage.getItem(persistFlagKey) === 'true') {
