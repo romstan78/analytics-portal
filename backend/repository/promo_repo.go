@@ -1792,6 +1792,14 @@ func buildApprovalWhere(params ApprovalFilterParams, excludeCol string) (string,
 	return where, args
 }
 
+// FilterQueryConcurrency — сколько запросов справочников идут в базу
+// одновременно в рамках одного HTTP-запроса.
+//
+// Пул соединений один на всех (config/db.go), и неограниченный веер означал,
+// что несколько одновременно открытых панелей вычерпывают его целиком, а
+// остальные запросы ждут свободного соединения.
+const FilterQueryConcurrency = 3
+
 // GetApprovalFilters — перекрёстная фильтрация: 4 горутины, excludeCol для каждой колонки.
 func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanics, kams []string, err error) {
 	var (
@@ -1799,6 +1807,7 @@ func GetApprovalFilters(params ApprovalFilterParams) (networks, brands, mechanic
 	)
 
 	g, _ := errgroup.WithContext(context.Background())
+	g.SetLimit(FilterQueryConcurrency)
 
 	g.Go(func() error {
 		where, args := buildApprovalWhere(params, "network_name")

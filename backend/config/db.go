@@ -43,6 +43,19 @@ func dbTrustServerCert() (trust bool, explicit bool) {
 	return true, false
 }
 
+// envPositiveInt читает положительное целое из окружения.
+// Ноль, отрицательное и мусор игнорируются: пул с нулём соединений остановил бы
+// приложение молча, а разбираться пришлось бы по таймаутам запросов.
+func envPositiveInt(name string, fallback int) int {
+	if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			return value
+		}
+		Logger.Warn("db_pool_setting_ignored", "variable", name, "value", raw)
+	}
+	return fallback
+}
+
 func buildConnString(database string) string {
 	port := strings.TrimSpace(os.Getenv("DB_PORT"))
 	if port == "" {
@@ -205,8 +218,12 @@ func Init() error {
 		return fmt.Errorf("открытие основного пула БД: %w", err)
 	}
 
-	DB.SetMaxOpenConns(25)
-	DB.SetMaxIdleConns(10)
+	// Размер пула настраивается: 25 соединений хватает демо-контуру, но под
+	// нагрузкой его поднимают, не пересобирая образ. Простаивающих держим
+	// вчетверо меньше, чтобы не занимать сервер БД впустую.
+	maxOpen := envPositiveInt("DB_MAX_OPEN_CONNS", 25)
+	DB.SetMaxOpenConns(maxOpen)
+	DB.SetMaxIdleConns(envPositiveInt("DB_MAX_IDLE_CONNS", maxOpen/2))
 	DB.SetConnMaxLifetime(5 * 60 * 1e9)
 	DB.SetConnMaxIdleTime(5 * time.Minute)
 

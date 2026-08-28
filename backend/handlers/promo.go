@@ -101,18 +101,20 @@ func GetPromoFilters(c *gin.Context) {
 	// промо, а свойство механики, поэтому едет отдельным параметром.
 	channels := c.QueryArray("channel")
 
-	// Кэшируем только дефолтную страницу (без фильтров, кроме года/месяца)
-	hasContentFilters := len(params.Kams) > 0 || len(params.Brands) > 0 || len(params.SKUs) > 0 ||
-		len(params.Networks) > 0 || len(params.Mechanics) > 0 || len(params.Statuses) > 0 ||
-		len(channels) > 0
+	// Кэшируется любой набор фильтров, а не только дефолтная страница: раньше
+	// при первом же выборе КАМа или сети семь запросов уходили в базу заново
+	// на каждое открытие панели.
+	//
 	// Область входит в ключ: без неё срез одного КАМа достался бы другому.
 	cacheKey := "filters:" + strings.Join(scope, "|") + ":" +
-		params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",")
-	if !hasContentFilters {
-		if cached, ok := config.FiltersCache.Get(cacheKey); ok {
-			c.JSON(http.StatusOK, cached)
-			return
-		}
+		params.YearFromStr + ":" + params.YearToStr + ":" + strings.Join(params.Months, ",") +
+		":" + strings.Join(params.Kams, ",") + ":" + strings.Join(params.Brands, ",") +
+		":" + strings.Join(params.SKUs, ",") + ":" + strings.Join(params.Networks, ",") +
+		":" + strings.Join(params.Mechanics, ",") + ":" + strings.Join(params.Statuses, ",") +
+		":" + strings.Join(channels, ",")
+	if cached, ok := config.FiltersCache.Get(cacheKey); ok {
+		c.JSON(http.StatusOK, cached)
+		return
 	}
 
 	baseWhere, baseArgs := repository.BuildBaseWhere(params)
@@ -127,6 +129,12 @@ func GetPromoFilters(c *gin.Context) {
 	)
 
 	g, _ := errgroup.WithContext(context.Background())
+	// Семь справочников считаются параллельно, но не все сразу: пул на 25
+	// соединений один на всех, и веер в семь запросов означал, что четвёртая
+	// одновременно открытая панель упирается в его дно. Три — компромисс:
+	// панель собирается заметно быстрее последовательной, а один пользователь
+	// занимает восьмую часть пула вместо трети.
+	g.SetLimit(repository.FilterQueryConcurrency)
 
 	g.Go(func() error {
 		resKam = repository.GetFilterValues("kam", baseWhere, baseArgs, "kam", mainFilters, channels)
@@ -173,9 +181,7 @@ func GetPromoFilters(c *gin.Context) {
 		"channel":      resChannel,
 	}
 
-	if !hasContentFilters {
-		config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
-	}
+	config.FiltersCache.Set(cacheKey, result, config.FilterCacheTTL)
 
 	c.JSON(http.StatusOK, result)
 }
