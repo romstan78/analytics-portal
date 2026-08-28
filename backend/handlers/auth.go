@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"backend/config"
@@ -12,6 +14,47 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// bcryptCost повторяет стоимость, с которой заводятся пароли
+// (cmd/bootstrap_user). Сравнение с фиктивным хешем обязано занимать столько
+// же времени, сколько с настоящим, иначе разница выдаёт существование логина.
+const bcryptCost = 12
+
+// dummyPasswordHash — хеш случайного пароля, который никто не знает. Нужен
+// ветке «пользователь не найден»: без него bcrypt там не вызывался вовсе, и
+// несуществующий логин отвечал мгновенно, а существующий — через ~250 мс. По
+// этой разнице имена учётных записей перебираются, не зная ни одного пароля.
+var dummyPasswordHash = sync.OnceValue(func() []byte {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		// Случайности нет — берём заведомо неподходящее значение: важно лишь,
+		// чтобы сравнение не совпало и заняло обычное время.
+		secret = []byte("fallback-secret-for-timing-only")
+	}
+	hash, err := bcrypt.GenerateFromPassword(secret, bcryptCost)
+	if err != nil {
+		return []byte("$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidin")
+	}
+	return hash
+})
+
+// WarmUpPasswordHashing готовит фиктивный хеш заранее, при старте.
+//
+// Он считается лениво, и без прогрева первый в жизни процесса вход по
+// несуществующему логину занимал бы вдвое дольше обычного: генерация хеша плюс
+// сравнение. Ровно та разница во времени, ради устранения которой он и заведён.
+func WarmUpPasswordHashing() {
+	_ = dummyPasswordHash()
+}
+
+// passwordHashFor возвращает хеш для сравнения: настоящий у найденного
+// пользователя и фиктивный у ненайденного.
+func passwordHashFor(user *repository.UserRecord) []byte {
+	if user == nil {
+		return dummyPasswordHash()
+	}
+	return []byte(user.PasswordHash)
+}
 
 func Login(c *gin.Context) {
 	var req struct {
@@ -31,7 +74,12 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	if user == nil || bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)) != nil {
+	// Сравнение выполняется всегда, в том числе когда пользователя нет:
+	// короткое замыкание по user == nil делало бы ответ на несуществующий
+	// логин заметно быстрее.
+	passwordMatches := bcrypt.CompareHashAndPassword(passwordHashFor(user), []byte(req.Password)) == nil
+	if user == nil || !passwordMatches {
+		config.Logger.Warn("login_failed", "username", req.Username, "ip", c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "неверный логин или пароль"})
 		return
 	}
