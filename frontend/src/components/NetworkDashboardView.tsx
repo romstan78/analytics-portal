@@ -396,8 +396,8 @@ export default function NetworkDashboardView({
       {summary.openCellsWithoutForecast > 0 && (
         <Alert severity="warning" sx={{ mb: 1.25, borderRadius: 3 }}>
           В {summary.openCellsWithoutForecast} {pluralRu(summary.openCellsWithoutForecast, 'ячейке', 'ячейках', 'ячейках')}
-          {' '}открытых месяцев нет официального прогноза. Планом они не достраиваются, поэтому прогноз итога
-          занижен ровно на эту незаполненную часть. Покрытие фактом закрытых месяцев — {pctLabel(summary.factCoveragePct)}.
+          {' '}открытых месяцев нет официального прогноза. В прогноз итога для них включена системная рекомендация;
+          заполните официальный прогноз, чтобы зафиксировать ожидание КАМа. Покрытие фактом закрытых месяцев — {pctLabel(summary.factCoveragePct)}.
         </Alert>
       )}
 

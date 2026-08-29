@@ -81,16 +81,18 @@ type NetworkDashboardPeriodData struct {
 // NetworkDashboardPromoRow — промо, проведённое в срезе. Канал приходит из
 // справочника механик, где он размечен как онлайн/оффлайн.
 type NetworkDashboardPromoRow struct {
-	NetworkName string
-	Year        int
-	Month       int
-	BrandAS     *string
-	Mechanics   *string
-	Channel     *string
-	ShortCode   *string
-	PromoCount  int
-	PlanRub     float64
-	InvestRub   float64
+	NetworkName     string
+	Year            int
+	Month           int
+	BrandAS         *string
+	Mechanics       *string
+	Channel         *string
+	ShortCode       *string
+	PromoCount      int
+	PlanRub         float64
+	InvestRub       float64
+	PlanUpliftRub   float64
+	PlanUpliftUnits float64
 }
 
 // NetworkDashboardData — сырые строки, из которых собирается витрина.
@@ -409,7 +411,11 @@ func dashboardPromos(
 			p.brand_as, p.mechanics, m.channel, m.short_code,
 			COUNT(*) AS promo_count,
 			SUM(ISNULL(p.plan_promo_rub, 0)),
-			SUM(ISNULL(p.plan_investments_rub, 0))
+			SUM(ISNULL(p.plan_investments_rub, 0)),
+			SUM(CASE WHEN p.agreement1_status = 'approved' AND p.agreement2_status = 'approved'
+				THEN ISNULL(p.plan_promo_uplift_rub, 0) ELSE 0 END),
+			SUM(CASE WHEN p.agreement1_status = 'approved' AND p.agreement2_status = 'approved'
+				THEN ISNULL(p.plan_promo_uplift_units, 0) ELSE 0 END)
 		FROM dbo.tbl_PromoActivities p
 		JOIN dbo.tbl_Networks n ON n.name = p.network_name
 		LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON m.mechanics = p.mechanics
@@ -431,7 +437,8 @@ func dashboardPromos(
 	for rows.Next() {
 		var row NetworkDashboardPromoRow
 		if err := rows.Scan(&row.NetworkName, &row.Year, &row.Month, &row.BrandAS,
-			&row.Mechanics, &row.Channel, &row.ShortCode, &row.PromoCount, &row.PlanRub, &row.InvestRub); err != nil {
+			&row.Mechanics, &row.Channel, &row.ShortCode, &row.PromoCount,
+			&row.PlanRub, &row.InvestRub, &row.PlanUpliftRub, &row.PlanUpliftUnits); err != nil {
 			return nil, fmt.Errorf("scan dashboard promo: %w", err)
 		}
 		result = append(result, row)

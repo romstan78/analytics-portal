@@ -242,4 +242,8 @@ type NetworkDashboardResponse struct {
 	BrandQuarters []NetworkDashboardBrandQuarter `json:"brandQuarters"`
 	BrandMonths   []NetworkDashboardBrandMonth   `json:"brandMonths"`
 	SKUs          []NetworkDashboardSKU          `json:"skus"`
+
+	// AnnualInvestmentCumulative заполняется только для одиночной сети за
+	// полный год и только когда режим включён в её профиле.
+	AnnualInvestmentCumulative *NetworkAnnualInvestmentCumulative `json:"annualInvestmentCumulative,omitempty"`
 }

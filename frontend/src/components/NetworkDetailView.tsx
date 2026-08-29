@@ -82,6 +82,7 @@ import {
 } from '../utils/networkDashboard';
 import type { Unit } from '../utils/networkDashboard';
 import { ChartPaper, KpiCard, PromoTags, SeriesLegend } from './NetworkDashboardParts';
+import NetworkAnnualInvestmentCumulative from './NetworkAnnualInvestmentCumulative';
 import type {
   NetworkDashboardBrandMonth,
   NetworkDashboardBrandQuarter,
@@ -1229,6 +1230,15 @@ export default function NetworkDetailView({
             </Box>
           </Box>
         </Paper>
+      )}
+
+      {data.annualInvestmentCumulative && (
+        <Box sx={{ mb: 1.25 }}>
+          <NetworkAnnualInvestmentCumulative
+            year={data.year}
+            data={data.annualInvestmentCumulative}
+          />
+        </Box>
       )}
 
       {/* ── Полоса 5: инвестиции ─────────────────────────────────────────── */}

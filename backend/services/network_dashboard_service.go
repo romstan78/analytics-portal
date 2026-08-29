@@ -310,14 +310,10 @@ func aggregateForecastLines(lines []models.NetworkForecastLine) map[string]forec
 	return brandRows
 }
 
-// dashboardMonthEAC — ожидаемый итог месяца.
-//
-// Отличие от valueForEAC в рабочем месте прогноза одно: здесь нет системной
-// рекомендации, и открытый месяц без официального прогноза не достраивается
-// ничем. Иначе сеть, которую никто не открывал, показала бы ровно свой план и
-// выглядела бы благополучной — а именно её и нужно увидеть. Такие месяцы
-// считаются отдельно, в OpenCellsWithoutForecast.
-func dashboardMonthEAC(closed bool, fact, official *float64) *float64 {
+// dashboardSKUMonthEAC — ожидаемый итог SKU в детализации dashboard.
+// Системная рекомендация считается на уровне бренда и уже входит в его итог;
+// раскладывать её по SKU без подтверждённого микса означало бы придумать доли.
+func dashboardSKUMonthEAC(closed bool, fact, official *float64) *float64 {
 	if closed {
 		return fact
 	}
@@ -393,6 +389,8 @@ type networkSlice struct {
 	monthFact  map[int]quarterFact
 	monthEAC   map[int]quarterFact
 	monthCells map[int]dashboardCells
+
+	annualInvestmentCumulative *models.NetworkAnnualInvestmentCumulative
 }
 
 // buildNetworkSlice дополняет строки плана фактом и EAC из помесячных таблиц
@@ -404,12 +402,15 @@ func buildNetworkSlice(
 	plans []models.NetworkPlan,
 	persistedPeriods []models.NetworkPeriod,
 	facts []models.NetworkMonthlyFact,
+	recommendationFacts []models.NetworkMonthlyFact,
 	forecasts []models.NetworkForecastLine,
+	promoUplifts map[promoForecastKey]forecastPromoTotals,
 	groups []models.NetworkPeriodGroup,
 	now time.Time,
 ) networkSlice {
 	periods := NetworkPeriodsWithDefaults(network, year, persistedPeriods)
 	brandFacts, skuFacts := aggregateFacts(facts)
+	recommendationBrandFacts, _ := aggregateFacts(recommendationFacts)
 	brandForecasts := aggregateForecastLines(forecasts)
 
 	filled := make([]models.NetworkPlan, 0, len(plans))
@@ -470,6 +471,15 @@ func buildNetworkSlice(
 			key := forecastMonthKey(year, month, brand)
 			fact := brandFacts[key]
 			official := brandForecasts[key]
+			uplift := promoUplifts[promoForecastKey{
+				network: network.Name, brand: strings.TrimSpace(brand), month: month,
+			}]
+			systemRub, _ := recommendedForecastMetric(
+				recommendationBrandFacts, year, month, brand, uplift.rub, rubMetric,
+			)
+			systemUnits, _ := recommendedForecastMetric(
+				recommendationBrandFacts, year, month, brand, uplift.units, unitsMetric,
+			)
 			closed := isClosedForecastMonth(year, month, now)
 
 			if visible {
@@ -491,12 +501,12 @@ func buildNetworkSlice(
 				monthCells[month] = monthCell
 			}
 
-			eac := dashboardMonthEAC(closed, fact.rub, official.rub)
+			eac := valueForEAC(closed, fact.rub, official.rub, systemRub)
 			eacInvest, investSource := investmentsForEAC(closed, fact.investments, official.investments, eac, plan.InvestmentsPct)
 			if investSource == "override" {
 				overridden = true
 			}
-			eacUnits := dashboardMonthEAC(closed, fact.units, official.units)
+			eacUnits := valueForEAC(closed, fact.units, official.units, systemUnits)
 
 			if visible {
 				factPoint := monthFact[month]
@@ -571,6 +581,9 @@ func buildNetworkSlice(
 	// витрине отдельным упрощённым правилом значило бы завести вторую
 	// арифметику, которая разойдётся с карточкой.
 	enriched, totals := BuildNetworkPlanCalculations(filled, periods, groups)
+	annualInvestmentCumulative := CalculateNetworkAnnualInvestmentCumulativeForNetwork(
+		network, enriched, periods, totals,
+	)
 
 	// SKU объясняют бренд снизу: плана на них не заводят, поэтому здесь только
 	// факт и прогноз, посчитанные тем же правилом закрытого месяца, что и всё
@@ -623,26 +636,27 @@ func buildNetworkSlice(
 				totals.factRub = round2(totals.factRub + valueOrZero(fact.rub))
 				totals.factUnits = round2(totals.factUnits + valueOrZero(fact.units))
 				totals.factInvest = round2(totals.factInvest + valueOrZero(fact.investments))
-				totals.eacRub = round2(totals.eacRub + valueOrZero(dashboardMonthEAC(closed, fact.rub, official.rub)))
-				totals.eacUnits = round2(totals.eacUnits + valueOrZero(dashboardMonthEAC(closed, fact.units, official.units)))
+				totals.eacRub = round2(totals.eacRub + valueOrZero(dashboardSKUMonthEAC(closed, fact.rub, official.rub)))
+				totals.eacUnits = round2(totals.eacUnits + valueOrZero(dashboardSKUMonthEAC(closed, fact.units, official.units)))
 			}
 		}
 		skuTotals[pair] = totals
 	}
 
 	slice := networkSlice{
-		quarterTotals:      map[int]models.NetworkPlanTotals{},
-		quarterCells:       cells,
-		quarterUnits:       map[int]unitTotals{},
-		brandValues:        map[string]*networkDashboardValues{},
-		brandQuarterValues: map[brandQuarterKey]*networkDashboardValues{},
-		brandQuarterUnits:  brandQuarterUnits,
-		brandQuarterCells:  brandQuarterCells,
-		skuTotals:          skuTotals,
-		monthPlan:          map[int]quarterFact{},
-		monthFact:          monthFact,
-		monthEAC:           monthEAC,
-		monthCells:         monthCells,
+		quarterTotals:              map[int]models.NetworkPlanTotals{},
+		quarterCells:               cells,
+		quarterUnits:               map[int]unitTotals{},
+		brandValues:                map[string]*networkDashboardValues{},
+		brandQuarterValues:         map[brandQuarterKey]*networkDashboardValues{},
+		brandQuarterUnits:          brandQuarterUnits,
+		brandQuarterCells:          brandQuarterCells,
+		skuTotals:                  skuTotals,
+		monthPlan:                  map[int]quarterFact{},
+		monthFact:                  monthFact,
+		monthEAC:                   monthEAC,
+		monthCells:                 monthCells,
+		annualInvestmentCumulative: annualInvestmentCumulative,
 	}
 	for _, total := range totals {
 		if !quarters[total.Quarter] {
@@ -1024,6 +1038,20 @@ type promoBrandKey struct {
 	period int
 }
 
+// promoForecastKey связывает согласованный uplift с рекомендацией той же
+// сети, бренда и месяца. Названия сети недостаточно держать снаружи: общий
+// dashboard рассчитывает много сетей одним проходом.
+type promoForecastKey struct {
+	network string
+	brand   string
+	month   int
+}
+
+type forecastPromoTotals struct {
+	rub   float64
+	units float64
+}
+
 // promoIndex — промо среза в разрезах, которые нужны экранам: по ячейке
 // тепловой карты, по месяцу для тренда и по бренду для разбора одной сети.
 type promoIndex struct {
@@ -1035,6 +1063,7 @@ type promoIndex struct {
 	tagsByBrandMonth   map[promoBrandKey][]models.NetworkDashboardPromoTag
 	byBrandQuarter     map[promoBrandKey]dashboardPromoTotals
 	tagsByBrandQuarter map[promoBrandKey][]models.NetworkDashboardPromoTag
+	forecastUplifts    map[promoForecastKey]forecastPromoTotals
 }
 
 // indexPromos сворачивает промо в счётчики и в набор меток.
@@ -1045,6 +1074,7 @@ func indexPromos(rows []repository.NetworkDashboardPromoRow) promoIndex {
 	byMonth := map[int]dashboardPromoTotals{}
 	byBrandMonth := map[promoBrandKey]dashboardPromoTotals{}
 	byBrandQuarter := map[promoBrandKey]dashboardPromoTotals{}
+	forecastUplifts := map[promoForecastKey]forecastPromoTotals{}
 
 	cellTags := map[promoCellKey]map[string]*models.NetworkDashboardPromoTag{}
 	brandMonthTags := map[promoBrandKey]map[string]*models.NetworkDashboardPromoTag{}
@@ -1057,6 +1087,13 @@ func indexPromos(rows []repository.NetworkDashboardPromoRow) promoIndex {
 		brand := strings.TrimSpace(valueOrEmpty(row.BrandAS))
 		monthKey := promoBrandKey{brand: brand, period: row.Month}
 		quarterKey := promoBrandKey{brand: brand, period: quarter}
+		if brand != "" {
+			forecastKey := promoForecastKey{network: row.NetworkName, brand: brand, month: row.Month}
+			uplift := forecastUplifts[forecastKey]
+			uplift.rub = round2(uplift.rub + row.PlanUpliftRub)
+			uplift.units = round2(uplift.units + row.PlanUpliftUnits)
+			forecastUplifts[forecastKey] = uplift
+		}
 
 		// Один и тот же вклад ложится в четыре разреза, поэтому счёт сведён в
 		// одно место: разойтись между разрезами он не должен.
@@ -1119,6 +1156,7 @@ func indexPromos(rows []repository.NetworkDashboardPromoRow) promoIndex {
 		tagsByBrandMonth:   sortedPromoTags(brandMonthTags),
 		byBrandQuarter:     byBrandQuarter,
 		tagsByBrandQuarter: sortedPromoTags(brandQuarterTags),
+		forecastUplifts:    forecastUplifts,
 	}
 }
 
@@ -1184,6 +1222,7 @@ func AggregateNetworkDashboard(
 	brandQuarters := make([]models.NetworkDashboardBrandQuarter, 0)
 	brandMonths := make([]models.NetworkDashboardBrandMonth, 0)
 	skus := make([]models.NetworkDashboardSKU, 0)
+	var annualInvestmentCumulative *models.NetworkAnnualInvestmentCumulative
 	months := map[int]*monthAccumulator{}
 	monthOf := func(month int) *monthAccumulator {
 		acc := months[month]
@@ -1199,12 +1238,20 @@ func AggregateNetworkDashboard(
 		if len(plans) == 0 {
 			continue
 		}
+		recommendationFacts := make([]models.NetworkMonthlyFact, 0,
+			len(previous.facts[network.ID])+len(current.facts[network.ID]))
+		recommendationFacts = append(recommendationFacts, previous.facts[network.ID]...)
+		recommendationFacts = append(recommendationFacts, current.facts[network.ID]...)
 		slice := buildNetworkSlice(
 			network, filter.Year, quarterSet,
 			plans, current.periods[network.ID],
-			current.facts[network.ID], current.forecasts[network.ID],
+			current.facts[network.ID], recommendationFacts, current.forecasts[network.ID],
+			promos.forecastUplifts,
 			current.groups[network.ID], now,
 		)
+		if len(data.Networks) == 1 && len(selectedQuarters) == 4 {
+			annualInvestmentCumulative = slice.annualInvestmentCumulative
+		}
 
 		// Факт прошлого года берётся прямо из помесячных строк: план для
 		// сравнения факта с фактом не нужен и в прошлом году может отсутствовать.
@@ -1222,7 +1269,8 @@ func AggregateNetworkDashboard(
 			built := buildNetworkSlice(
 				network, data.Prev.Year, quarterSet,
 				prevPlans, previous.periods[network.ID],
-				previous.facts[network.ID], previous.forecasts[network.ID],
+				previous.facts[network.ID], previous.facts[network.ID], previous.forecasts[network.ID],
+				nil,
 				previous.groups[network.ID], now,
 			)
 			prevSlice = &built
@@ -1423,19 +1471,20 @@ func AggregateNetworkDashboard(
 	}
 
 	return &models.NetworkDashboardResponse{
-		Year:             filter.Year,
-		SelectedQuarters: selectedQuarters,
-		AvailableYears:   years,
-		Summary:          summary.metrics(),
-		Quarters:         trend,
-		Months:           monthTrend,
-		Networks:         networks,
-		Brands:           brands,
-		KAMs:             kams,
-		NetworkQuarters:  cellsList,
-		BrandQuarters:    brandQuarters,
-		BrandMonths:      brandMonths,
-		SKUs:             skus,
+		Year:                       filter.Year,
+		SelectedQuarters:           selectedQuarters,
+		AvailableYears:             years,
+		Summary:                    summary.metrics(),
+		Quarters:                   trend,
+		Months:                     monthTrend,
+		Networks:                   networks,
+		Brands:                     brands,
+		KAMs:                       kams,
+		NetworkQuarters:            cellsList,
+		BrandQuarters:              brandQuarters,
+		BrandMonths:                brandMonths,
+		SKUs:                       skus,
+		AnnualInvestmentCumulative: annualInvestmentCumulative,
 	}
 }
 

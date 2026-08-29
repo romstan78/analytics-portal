@@ -733,6 +733,7 @@ export interface NetworkDashboardResponse {
   brandQuarters: NetworkDashboardBrandQuarter[];
   brandMonths: NetworkDashboardBrandMonth[];
   skus: NetworkDashboardSKU[];
+  annualInvestmentCumulative?: NetworkAnnualInvestmentCumulative;
 }
 
 export interface NetworkPlanInput {

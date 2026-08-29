@@ -119,8 +119,8 @@ func TestAggregateNetworkDashboardTakesFactFromMonthlyRows(t *testing.T) {
 	}
 }
 
-// Открытый месяц без официального прогноза не достраивается планом: иначе сеть,
-// которую никто не вёл, выглядела бы выполняющей план ровно на 100%.
+// Открытый месяц без официального прогноза берёт ту же системную рекомендацию,
+// что и вкладка «Прогноз». Сам план рекомендацией не является.
 func TestAggregateNetworkDashboardKeepsOpenMonthsWithoutForecastVisible(t *testing.T) {
 	testCase := dashboardCase{
 		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
@@ -132,18 +132,51 @@ func TestAggregateNetworkDashboardKeepsOpenMonthsWithoutForecastVisible(t *testi
 		},
 		// Апрель закрыт и отгружен; май и июнь открыты и не спрогнозированы.
 		facts: []models.NetworkMonthlyFact{dashboardFact(1, 4, "Альфа", 300000, 30000)},
+		promos: []repository.NetworkDashboardPromoRow{{
+			NetworkName: "Аптека Плюс", Year: 2026, Month: 5,
+			BrandAS: brandPtr("Альфа"), PlanUpliftRub: 50000,
+		}},
 	}
 
 	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(2), dashboardNow)
 
-	if got.Summary.EACRub != 300000 {
-		t.Errorf("EAC = %v, ожидалось 300000: план не должен достраивать пустые месяцы", got.Summary.EACRub)
+	// Для мая и июня доступен trailing average по апрелю: по 300000; в мае к
+	// нему добавляется согласованный promo uplift 50000. Итог обязан совпасть с
+	// рабочим местом прогноза: 300000 факт + 350000 + 300000 рекомендаций.
+	if got.Summary.EACRub != 950000 {
+		t.Errorf("EAC = %v, ожидалось 950000: должны примениться рекомендации и uplift", got.Summary.EACRub)
 	}
 	if got.Summary.OpenCellsWithoutForecast != 2 {
 		t.Errorf("открытых месяцев без прогноза = %d, ожидалось 2", got.Summary.OpenCellsWithoutForecast)
 	}
 	if got.Summary.ClosedCells != 1 {
 		t.Errorf("закрытых ячеек = %d, ожидалось 1", got.Summary.ClosedCells)
+	}
+}
+
+func TestAggregateNetworkDashboardReturnsEnabledAnnualCumulativeForSingleNetwork(t *testing.T) {
+	network := dashboardNetwork(1, "Аптека Плюс", "Иванов")
+	network.HasAnnualInvestmentCumulative = true
+	testCase := dashboardCase{
+		networks: []models.Network{network},
+		plans: []models.NetworkPlan{{
+			NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+			PlanRub: models.PtrFloat(300000), InvestmentsPct: models.PtrFloat(10),
+		}},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 100000, 10000),
+			dashboardFact(1, 2, "Альфа", 100000, 10000),
+			dashboardFact(1, 3, "Альфа", 100000, 10000),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(), dashboardNow)
+	if got.AnnualInvestmentCumulative == nil {
+		t.Fatal("годовой кумулятив отсутствует у одиночной сети с включённым режимом")
+	}
+	if got.AnnualInvestmentCumulative.PortfolioEACRub != 300000 {
+		t.Errorf("EAC кумулятива = %v, ожидалось 300000",
+			got.AnnualInvestmentCumulative.PortfolioEACRub)
 	}
 }
 
@@ -237,6 +270,12 @@ func TestAggregateNetworkDashboardCountsUnitsWithPoolRule(t *testing.T) {
 		facts: []models.NetworkMonthlyFact{
 			dashboardFactUnits(1, 1, "Альфа", 300000, 3000),
 			dashboardFactUnits(1, 2, "Бета", 100000, 1200),
+		},
+		forecasts: []models.NetworkForecastLine{
+			{NetworkID: 1, Year: 2026, Month: 2, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0), ForecastUnits: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0), ForecastUnits: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 1, BrandAS: "Бета", ForecastRub: models.PtrFloat(0), ForecastUnits: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Бета", ForecastRub: models.PtrFloat(0), ForecastUnits: models.PtrFloat(0)},
 		},
 	}
 
@@ -595,7 +634,10 @@ func TestAggregateNetworkDashboardMatchesCardTotals(t *testing.T) {
 	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
 
 	// Тот же расчёт «руками», как его делает карточка сети.
-	slice := buildNetworkSlice(network, 2026, map[int]bool{1: true}, plans, nil, facts, nil, nil, dashboardNow)
+	slice := buildNetworkSlice(
+		network, 2026, map[int]bool{1: true}, plans, nil,
+		facts, facts, nil, nil, nil, dashboardNow,
+	)
 	want := slice.quarterTotals[1]
 
 	if got.Summary.PlanRub != want.ContractPlanRub {
@@ -1503,6 +1545,12 @@ func TestDashboardChecksThresholdPerBrandNotOnAggregate(t *testing.T) {
 			dashboardFact(1, 1, "Альфа", 1500000, 0),
 			dashboardFact(1, 1, "Бета", 400000, 0),
 		},
+		forecasts: []models.NetworkForecastLine{
+			{NetworkID: 1, Year: 2026, Month: 2, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 2, BrandAS: "Бета", ForecastRub: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Бета", ForecastRub: models.PtrFloat(0)},
+		},
 	}
 
 	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
@@ -1546,12 +1594,18 @@ func TestDashboardEvaluatesThresholdOverPeriodGroup(t *testing.T) {
 		dashboardFact(1, 1, "Альфа", 800000, 0),  // Q1: 800 тыс из 1 млн
 		dashboardFact(1, 4, "Альфа", 1300000, 0), // Q2: 1,3 млн из 1 млн
 	}
+	forecasts := []models.NetworkForecastLine{
+		{NetworkID: 1, Year: 2026, Month: 2, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+		{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+		{NetworkID: 1, Year: 2026, Month: 5, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+		{NetworkID: 1, Year: 2026, Month: 6, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+	}
 
 	// Без правила Q1 порога не проходит.
 	alone := AggregateNetworkDashboard(
 		dashboardCase{
 			networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
-			plans:    plans, facts: facts,
+			plans:    plans, facts: facts, forecasts: forecasts,
 		}.data(),
 		dashboardFilter(1), dashboardNow,
 	)
@@ -1563,7 +1617,7 @@ func TestDashboardEvaluatesThresholdOverPeriodGroup(t *testing.T) {
 	grouped := AggregateNetworkDashboard(
 		dashboardCase{
 			networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
-			plans:    plans, facts: facts,
+			plans:    plans, facts: facts, forecasts: forecasts,
 			groups: []models.NetworkPeriodGroup{
 				{NetworkID: 1, Year: 2026, StartQuarter: 1, EndQuarter: 2},
 			},
@@ -1597,6 +1651,10 @@ func TestDashboardPaysFromFactWithoutThreshold(t *testing.T) {
 		},
 		facts: []models.NetworkMonthlyFact{
 			dashboardFact(1, 1, "Альфа", 500000, 0),
+		},
+		forecasts: []models.NetworkForecastLine{
+			{NetworkID: 1, Year: 2026, Month: 2, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
+			{NetworkID: 1, Year: 2026, Month: 3, BrandAS: "Альфа", ForecastRub: models.PtrFloat(0)},
 		},
 	}
 
