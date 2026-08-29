@@ -170,6 +170,19 @@ func main() {
 		api.GET("/filters", handlers.GetFilterOptions)
 		api.GET("/drilldown", handlers.GetDrilldown)
 
+		// Администрирование мастер-справочников. Ключевые названия у уже
+		// созданных записей не переименовываются этим API: так история промо и
+		// продаж не теряет связи с мастер-данными.
+		api.GET("/admin/dictionaries", middleware.RoleRequired("admin"), handlers.GetDictionaries)
+		api.POST("/admin/dictionaries/skus", middleware.RoleRequired("admin"), handlers.CreateSKUReference)
+		api.PATCH("/admin/dictionaries/skus/:id", middleware.RoleRequired("admin"), handlers.UpdateSKUReference)
+		api.POST("/admin/dictionaries/networks", middleware.RoleRequired("admin"), handlers.CreateNetworkReference)
+		api.PATCH("/admin/dictionaries/networks/:id", middleware.RoleRequired("admin"), handlers.UpdateNetworkReference)
+		api.POST("/admin/dictionaries/kam-networks", middleware.RoleRequired("admin"), handlers.CreateKAMNetworkReference)
+		api.PATCH("/admin/dictionaries/kam-networks/:id", middleware.RoleRequired("admin"), handlers.UpdateKAMNetworkReference)
+		api.POST("/admin/dictionaries/mechanics", middleware.RoleRequired("admin"), handlers.CreateMechanicReference)
+		api.PATCH("/admin/dictionaries/mechanics/:id", middleware.RoleRequired("admin"), handlers.UpdateMechanicReference)
+
 		// Промо — чтение
 		api.GET("/promo/filters", handlers.GetPromoFilters)
 		api.GET("/promo/data", handlers.GetPromoData)

@@ -10,6 +10,7 @@ import {
   Campaign as CampaignIcon,
   CompareArrows as CompareIcon,
   ScheduleOutlined as SoonIcon,
+  MenuBookOutlined as DictionaryIcon,
 } from '@mui/icons-material';
 
 interface HomeBlock {
@@ -77,9 +78,10 @@ const soonBlocks = blocks.filter((b) => !b.ready);
 
 interface HomeProps {
   onLogout: () => void;
+  role: string | null;
 }
 
-export default function Home({ onLogout }: HomeProps) {
+export default function Home({ onLogout, role }: HomeProps) {
   const navigate = useNavigate();
 
   return (
@@ -158,6 +160,17 @@ export default function Home({ onLogout }: HomeProps) {
             </CardActionArea>
           </Card>
         ))}
+        {role === 'admin' && (
+          <Card elevation={1} sx={{ borderRadius: 5, border: '1px solid #e0e7ff', transition: 'all 0.3s', '&:hover': { transform: 'translateY(-6px)', boxShadow: '0 20px 25px -5px rgba(0,0,0,.1)' } }}>
+            <CardActionArea onClick={() => navigate('/admin/dictionaries')} sx={{ p: { xs: 3, md: 4.5 }, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+              <Box sx={{ width: 88, height: 88, borderRadius: '22px', mb: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#4f46e515', color: '#4f46e5' }}>
+                <DictionaryIcon sx={{ fontSize: 48 }} />
+              </Box>
+              <Typography variant="h5" gutterBottom sx={{ fontWeight: 700 }}>Справочники</Typography>
+              <Typography variant="body1" color="text.secondary" sx={{ lineHeight: 1.6 }}>SKU, сети, КАМ и механики промо</Typography>
+            </CardActionArea>
+          </Card>
+        )}
       </Box>
 
       <Typography variant="overline" sx={{ color: 'text.disabled', fontWeight: 700, letterSpacing: '0.08em' }}>

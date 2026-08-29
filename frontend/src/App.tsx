@@ -14,6 +14,7 @@ const Home = lazy(() => import('./pages/Home'));
 const InternetSales = lazy(() => import('./pages/InternetSales'));
 const PromoAnalysis = lazy(() => import('./pages/PromoAnalysis'));
 const NetworkRegistry = lazy(() => import('./pages/NetworkRegistry'));
+const AdminDictionaries = lazy(() => import('./pages/AdminDictionaries'));
 
 function PageLoader() {
   return (
@@ -142,11 +143,12 @@ export default function App() {
         <ErrorBoundary resetKey={location.pathname}>
           <Suspense fallback={<PageLoader />}>
             <Routes>
-              <Route path="/" element={<Home onLogout={handleLogout} />} />
+              <Route path="/" element={<Home onLogout={handleLogout} role={auth.role} />} />
               <Route path="/internet-sales" element={<InternetSales />} />
               <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
               <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
               <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
+              <Route path="/admin/dictionaries" element={auth.role === 'admin' ? <AdminDictionaries /> : <Navigate to="/" replace />} />
               <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />
               <Route path="/like-for-like" element={<PlaceholderPage title="Продажи Like For Like" description="Сравнение продаж LFL" />} />
               {/* Форма входа живёт вне Routes, поэтому адрес /login маршрута не
