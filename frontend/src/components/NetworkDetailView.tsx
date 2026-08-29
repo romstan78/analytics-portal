@@ -525,10 +525,11 @@ export default function NetworkDetailView({
   const overrun = summary.investmentVarianceRub > 0;
   const eacCompletion = eacCompletionOf(summary, unit);
 
-  // Сеть работает валовым пулом: план заведён на сеть целиком, а бренды
-  // разбирают его изнутри. Признак — сам факт остатка в ответе: null означает,
-  // что пула в срезе нет вовсе, а не что остаток нулевой.
-  const grossContract = summary.undistributedRub != null;
+  // Обычно валовый контракт определяется строкой пула и её остатком. Проверка
+  // брендов нужна для данных, сохранённых до появления инварианта: там флаги
+  // in_gross уже есть, а строка пула могла отсутствовать до бэкфилла.
+  const grossContract = summary.undistributedRub != null
+    || brands.some((item) => item.inGross === true);
   const contractPlan = metricPlan(summary, unit);
   // Остаток считается вычитанием, а не берётся из UndistributedRub: тот есть
   // только в рублях, а сойтись строка обязана в той единице, что на экране.

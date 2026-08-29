@@ -129,8 +129,13 @@ describe('shiftGrossPool', () => {
     expect(parseNumberInput(pool.planRub)).toBe(900);
   });
 
-  it('пустой пул не заполняет: валовый объём в квартале не ведут', () => {
+  it('первый переведённый бренд создаёт валовый пул своим объёмом', () => {
     const pool = shiftGrossPool(undefined, cell({ planRub: '500' }), true);
+    expect(parseNumberInput(pool.planRub)).toBe(500);
+  });
+
+  it('вывод бренда не создаёт отсутствующий валовый пул', () => {
+    const pool = shiftGrossPool(undefined, cell({ planRub: '500' }), false);
     expect(pool.planRub).toBe('');
   });
 
