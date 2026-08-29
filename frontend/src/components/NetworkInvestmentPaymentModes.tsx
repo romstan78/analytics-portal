@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import {
   Box,
   Button,
+  Chip,
+  Collapse,
   Paper,
   Switch,
   Table,
@@ -14,6 +16,7 @@ import {
   Typography,
 } from '@mui/material';
 import { PaymentsOutlined as PaymentsIcon, Save as SaveIcon } from '@mui/icons-material';
+import { ExpandLess as ExpandLessIcon, GridView as GridViewIcon } from '@mui/icons-material';
 import type { NetworkInvestmentPaymentModesSaveRequest, NetworkPlan } from '../types/network';
 import { QUARTERS, planKey } from '../utils/networkPlan';
 
@@ -41,6 +44,7 @@ export default function NetworkInvestmentPaymentModes({
   const [loadedPlans, setLoadedPlans] = useState(plans);
   const [values, setValues] = useState<Record<string, boolean>>(() => buildValues(plans));
   const [dirty, setDirty] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   if (loadedPlans !== plans) {
     setLoadedPlans(plans);
@@ -55,6 +59,9 @@ export default function NetworkInvestmentPaymentModes({
   const brands = useMemo(() => [...new Set(
     plans.filter((plan) => plan.brand_as != null).map((plan) => plan.brand_as as string),
   )].sort((a, b) => a.localeCompare(b, 'ru')), [plans]);
+  const exceptionKeys = plans
+    .filter((plan) => plan.brand_as != null && (values[planKey(plan.quarter, plan.brand_as)] ?? false))
+    .map((plan) => `${plan.brand_as} · Q${plan.quarter}`);
 
   const save = () => onSave({
     year,
@@ -74,12 +81,25 @@ export default function NetworkInvestmentPaymentModes({
         <PaymentsIcon fontSize="small" color="action" />
         <Box sx={{ minWidth: 0 }}>
           <Typography variant="subtitle2">Оплата от факта · {year}</Typography>
-          <Typography variant="caption" color="text.secondary">
-            Включено: факт × %, без порога 100%. Выключено: EAC × %, только при выполнении плана периода.
+          <Typography variant="body2" color="text.secondary">
+            {exceptionKeys.length === 0
+              ? 'Стандартное правило для всех брендов: оплата после выполнения плана.'
+              : `Оплата от факта: ${exceptionKeys.length} ${
+                exceptionKeys.length === 1
+                  ? 'исключение'
+                  : exceptionKeys.length >= 2 && exceptionKeys.length <= 4 ? 'исключения' : 'исключений'
+              }.`}
           </Typography>
         </Box>
         <Box sx={{ flex: 1 }} />
-        {canEdit && (
+        <Button
+          size="small"
+          startIcon={expanded ? <ExpandLessIcon /> : <GridViewIcon />}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? 'Свернуть' : canEdit ? 'Открыть матрицу' : 'Подробнее'}
+        </Button>
+        {canEdit && expanded && (
           <Button
             size="small"
             startIcon={<SaveIcon />}
@@ -91,6 +111,14 @@ export default function NetworkInvestmentPaymentModes({
         )}
       </Box>
 
+      {!expanded && exceptionKeys.length > 0 && (
+        <Box sx={{ px: 1.5, pb: 1.25, display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+          {exceptionKeys.slice(0, 6).map((key) => <Chip key={key} size="small" label={key} variant="outlined" />)}
+          {exceptionKeys.length > 6 && <Chip size="small" label={`ещё ${exceptionKeys.length - 6}`} />}
+        </Box>
+      )}
+
+      <Collapse in={expanded}>
       {brands.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ px: 1.5, pb: 1.25 }}>
           Сначала добавьте бренды во вкладке «План и факт».
@@ -136,6 +164,7 @@ export default function NetworkInvestmentPaymentModes({
           </TableBody>
         </Table>
       )}
+      </Collapse>
     </Paper>
   );
 }

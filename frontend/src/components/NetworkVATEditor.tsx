@@ -1,4 +1,16 @@
-import { Box, InputAdornment, Paper, Switch, TextField, Typography } from '@mui/material';
+import { useState } from 'react';
+import {
+  Box,
+  Button,
+  Chip,
+  Collapse,
+  InputAdornment,
+  Paper,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import { ExpandLess as ExpandLessIcon, Tune as TuneIcon } from '@mui/icons-material';
 import { isVATRateValid } from '../utils/networkPlan';
 
 // Кварталы идут строками, а не карточками: значений всего два на квартал, и в
@@ -21,17 +33,50 @@ interface Props {
 }
 
 export default function NetworkVATEditor({ year, values, canEdit, ready, onChange }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const invalid = values.some(({ vatRate }) => !isVATRateValid(vatRate));
+  const first = values[0];
+  const sameForYear = values.every((value) => (
+    value.vatIncluded === first?.vatIncluded && value.vatRate === first?.vatRate
+  ));
+  const summary = first == null
+    ? 'Нет данных'
+    : sameForYear
+      ? first.vatIncluded ? `С НДС · ${first.vatRate}% весь год` : 'Без НДС весь год'
+      : 'Есть отличия по кварталам';
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.5 }}>
-      <Typography variant="subtitle2">НДС · {year}</Typography>
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
-        Ставка задаётся на каждый квартал и применяется только к инвестициям.
-      </Typography>
+    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+      <Box sx={{ p: 1.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        <Box sx={{ minWidth: 180, flex: 1 }}>
+          <Typography variant="subtitle2">НДС · {year}</Typography>
+          <Typography variant="body2" color={sameForYear ? 'text.secondary' : 'warning.main'}>
+            {summary}
+          </Typography>
+        </Box>
+        {!sameForYear && values.map(({ quarter, vatIncluded, vatRate }) => (
+          <Chip
+            key={quarter}
+            size="small"
+            variant="outlined"
+            label={`Q${quarter} · ${vatIncluded ? `${vatRate}%` : 'без НДС'}`}
+          />
+        ))}
+        <Button
+          size="small"
+          startIcon={expanded ? <ExpandLessIcon /> : <TuneIcon />}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? 'Свернуть' : canEdit ? 'Настроить' : 'Подробнее'}
+        </Button>
+      </Box>
 
-      <Box sx={{ display: 'grid' }}>
-        {values.map(({ quarter, vatIncluded, vatRate }, index) => (
+      <Collapse in={expanded}>
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+            Ставка задаётся на каждый квартал и применяется только к инвестициям.
+          </Typography>
+          {values.map(({ quarter, vatIncluded, vatRate }, index) => (
           <Box
             key={quarter}
             sx={{
@@ -77,14 +122,15 @@ export default function NetworkVATEditor({ year, values, canEdit, ready, onChang
               }}
             />
           </Box>
-        ))}
-      </Box>
+          ))}
 
-      {invalid && (
-        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
-          Ставка НДС — число от 0 до 99,99. Пока это не так, профиль не сохранится.
-        </Typography>
-      )}
+          {invalid && (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
+              Ставка НДС — число от 0 до 99,99. Пока это не так, профиль не сохранится.
+            </Typography>
+          )}
+        </Box>
+      </Collapse>
     </Paper>
   );
 }

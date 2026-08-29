@@ -7,6 +7,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -39,6 +40,8 @@ import {
   Menu as MenuIcon,
   MenuOpen as MenuOpenIcon,
   Search as SearchIcon,
+  EditOutlined as EditIcon,
+  ExpandLess as ExpandLessIcon,
 } from '@mui/icons-material';
 import { networkAPI } from '../api/networks';
 import NetworkDashboardView from '../components/NetworkDashboardView';
@@ -255,6 +258,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const [commentText, setCommentText] = useState('');
   const [profile, setProfile] = useState<NetworkProfileDraft>({});
   const [profilePeriods, setProfilePeriods] = useState<Record<number, NetworkProfilePeriodDraft>>({});
+  const [profileBasicsExpanded, setProfileBasicsExpanded] = useState(false);
   const [toast, setToast] = useState<{ text: string; severity: 'success' | 'error' } | null>(null);
 
   const networksQuery = useQuery({
@@ -342,6 +346,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     onSuccess: (res) => {
       setDialogOpen(false);
       setSelectedId(res.data.id);
+      setProfileBasicsExpanded(false);
       setToast({ text: `Сеть «${res.data.name}» заведена`, severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networks'] });
       // Новая сеть обязана появиться и в витрине, и в её фильтре сетей.
@@ -405,6 +410,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     onSuccess: () => {
       setProfile({});
       setProfilePeriods({});
+      setProfileBasicsExpanded(false);
       setToast({ text: 'Профиль сети сохранён', severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networks'] });
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
@@ -470,6 +476,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   // на том же году и без ухода со страницы.
   const openNetworkFromDashboard = (networkId: number) => {
     setSelectedId(networkId);
+    setProfileBasicsExpanded(false);
     setProfile({});
     setProfilePeriods({});
     setYear(effectiveDashboardYear);
@@ -763,7 +770,12 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               <ListItemButton
                 key={network.id}
                 selected={network.id === selectedId}
-                onClick={() => { setSelectedId(network.id); setProfile({}); setProfilePeriods({}); }}
+                onClick={() => {
+                  setSelectedId(network.id);
+                  setProfile({});
+                  setProfilePeriods({});
+                  setProfileBasicsExpanded(false);
+                }}
               >
                 <ListItemText
                   primary={network.name}
@@ -849,31 +861,55 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               )}
 
               {tab === 0 && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 720 }}>
-                  <TextField
-                    label="Название сети"
-                    value={profile.name ?? selected.name}
-                    disabled={!canEdit}
-                    onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))}
-                  />
-                  <TextField
-                    label="КАМ"
-                    value={profile.kam ?? selected.kam ?? ''}
-                    disabled={!canEdit}
-                    onChange={(e) => setProfile((p) => ({ ...p, kam: e.target.value }))}
-                  />
-                  <TextField
-                    select
-                    label="Тип сети"
-                    value={profile.network_type ?? selected.network_type}
-                    disabled={!canEdit}
-                    onChange={(e) => setProfile((p) => ({ ...p, network_type: e.target.value as NetworkType }))}
-                    helperText="У складской сети свой процесс прогнозирования объёмов"
-                  >
-                    <MenuItem value="regular">Обычная</MenuItem>
-                    <MenuItem value="warehouse">Складская</MenuItem>
-                  </TextField>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, maxWidth: 820 }}>
+                  <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+                    <Box sx={{ p: 1.5, display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Box sx={{ flex: 1, minWidth: 220 }}>
+                        <Typography variant="subtitle2">Паспорт сети</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {profile.kam ?? selected.kam ? `КАМ: ${profile.kam ?? selected.kam}` : 'КАМ не назначен'}
+                          {' · '}{TYPE_LABELS[profile.network_type ?? selected.network_type]}
+                          {' · '}{profile.is_active ?? selected.is_active ? 'активна' : 'скрыта'}
+                        </Typography>
+                      </Box>
+                      <Button
+                        size="small"
+                        startIcon={profileBasicsExpanded ? <ExpandLessIcon /> : <EditIcon />}
+                        onClick={() => setProfileBasicsExpanded((value) => !value)}
+                      >
+                        {profileBasicsExpanded ? 'Свернуть' : canEdit ? 'Изменить' : 'Подробнее'}
+                      </Button>
+                    </Box>
+                    <Collapse in={profileBasicsExpanded}>
+                      <Box sx={{ px: 1.5, pb: 1.5, display: 'grid', gap: 1.25 }}>
+                        <TextField
+                          label="Название сети"
+                          value={profile.name ?? selected.name}
+                          disabled={!canEdit}
+                          onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))}
+                        />
+                        <TextField
+                          label="КАМ"
+                          value={profile.kam ?? selected.kam ?? ''}
+                          disabled={!canEdit}
+                          onChange={(e) => setProfile((p) => ({ ...p, kam: e.target.value }))}
+                        />
+                        <TextField
+                          select
+                          label="Тип сети"
+                          value={profile.network_type ?? selected.network_type}
+                          disabled={!canEdit}
+                          onChange={(e) => setProfile((p) => ({ ...p, network_type: e.target.value as NetworkType }))}
+                          helperText="У складской сети свой процесс прогнозирования объёмов"
+                        >
+                          <MenuItem value="regular">Обычная</MenuItem>
+                          <MenuItem value="warehouse">Складская</MenuItem>
+                        </TextField>
+                      </Box>
+                    </Collapse>
+                  </Paper>
                   <NetworkVATEditor
+                    key={`vat-${selectedId}-${year}`}
                     year={year}
                     values={profilePeriodValues}
                     canEdit={canEdit}
@@ -884,6 +920,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     }))}
                   />
                   <NetworkAllocationEditor
+                    key={`allocation-${selectedId}`}
                     values={monthDistribution}
                     canEdit={canEdit}
                     onChange={(index, value) => setProfile((current) => ({
@@ -893,6 +930,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                   />
                   {planQuery.data && (
                     <NetworkInvestmentPaymentModes
+                      key={`payment-${selectedId}-${year}`}
                       year={year}
                       plans={planQuery.data.plans}
                       canEdit={canEdit}
@@ -900,35 +938,37 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                       onSave={(request) => paymentModesMutation.mutate(request)}
                     />
                   )}
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={
-                          profile.has_annual_investment_cumulative
-                          ?? selected.has_annual_investment_cumulative
-                        }
-                        disabled={!canEdit}
-                        onChange={(event) => setProfile((current) => ({
-                          ...current,
-                          has_annual_investment_cumulative: event.target.checked,
-                        }))}
-                      />
-                    }
-                    label="Показывать годовой кумулятив инвестиций"
-                  />
-                  <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
-                    Показатель появится во вкладке «План и факт» только для этой сети.
-                  </Typography>
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={profile.is_active ?? selected.is_active}
-                        disabled={!canEdit}
-                        onChange={(e) => setProfile((p) => ({ ...p, is_active: e.target.checked }))}
-                      />
-                    }
-                    label="Сеть активна"
-                  />
+                  <Paper variant="outlined" sx={{ px: 1.5, py: 0.75 }}>
+                    <Typography variant="subtitle2" sx={{ pt: 0.5 }}>Дополнительные условия</Typography>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          size="small"
+                          checked={
+                            profile.has_annual_investment_cumulative
+                            ?? selected.has_annual_investment_cumulative
+                          }
+                          disabled={!canEdit}
+                          onChange={(event) => setProfile((current) => ({
+                            ...current,
+                            has_annual_investment_cumulative: event.target.checked,
+                          }))}
+                        />
+                      }
+                      label={<Typography variant="body2">Показывать годовой кумулятив инвестиций</Typography>}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          size="small"
+                          checked={profile.is_active ?? selected.is_active}
+                          disabled={!canEdit}
+                          onChange={(e) => setProfile((p) => ({ ...p, is_active: e.target.checked }))}
+                        />
+                      }
+                      label={<Typography variant="body2">Сеть активна</Typography>}
+                    />
+                  </Paper>
                   {canEdit && (
                     <Box>
                       <Button
