@@ -35,6 +35,7 @@ type dashboardCase struct {
 	plans     []models.NetworkPlan
 	facts     []models.NetworkMonthlyFact
 	forecasts []models.NetworkForecastLine
+	groups    []models.NetworkPeriodGroup
 	prevPlans []models.NetworkPlan
 	prevFacts []models.NetworkMonthlyFact
 	promos    []repository.NetworkDashboardPromoRow
@@ -45,6 +46,7 @@ func (c dashboardCase) data() repository.NetworkDashboardData {
 		Networks: c.networks,
 		Current: repository.NetworkDashboardPeriodData{
 			Year: 2026, Plans: c.plans, Facts: c.facts, Forecasts: c.forecasts,
+			Groups: c.groups,
 		},
 		Prev: repository.NetworkDashboardPeriodData{
 			Year: 2025, Plans: c.prevPlans, Facts: c.prevFacts,
@@ -250,6 +252,55 @@ func TestAggregateNetworkDashboardCountsUnitsWithPoolRule(t *testing.T) {
 	if got.Summary.EACUnits != 4200 {
 		t.Errorf("EAC в упаковках = %v, ожидалось 4200: квартал закрыт", got.Summary.EACUnits)
 	}
+	// Разрыв идёт парой к объёму: в упаковках он считается из упаковок, а не
+	// достаётся рублёвым — иначе витрина показала бы рубли под подписью «уп.».
+	if got.Summary.GapUnits != -8300 {
+		t.Errorf("разрыв в упаковках = %v, ожидалось -8300", got.Summary.GapUnits)
+	}
+}
+
+// Бренд, выведенный из вала, помечается в разрезе. Без метки его строка ничем
+// не отличается от остальных, и разрез читается как «все бренды в пуле» —
+// при том, что план такого бренда прибавляется к обязательству сверху.
+func TestAggregateNetworkDashboardMarksBrandsOutsideGrossPool(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: nil,
+				PlanRub: models.PtrFloat(1000000),
+			},
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), InGross: true,
+				PlanRub: models.PtrFloat(600000),
+			},
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Бета"),
+				PlanRub: models.PtrFloat(200000),
+			},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	flags := map[string]*bool{}
+	for _, brand := range got.Brands {
+		flags[brand.Name] = brand.InGross
+	}
+	if flags["Альфа"] == nil || !*flags["Альфа"] {
+		t.Errorf("Альфа = %v, ожидался бренд в вале", flags["Альфа"])
+	}
+	if flags["Бета"] == nil || *flags["Бета"] {
+		t.Errorf("Бета = %v, ожидался бренд вне вала", flags["Бета"])
+	}
+	// Пул целиком плюс выведенный бренд сверху.
+	if got.Summary.PlanRub != 1200000 {
+		t.Errorf("обязательство = %v, ожидалось 1200000", got.Summary.PlanRub)
+	}
+	// У сети и у КАМа деления на вал нет: вопрос стоит только внутри сети.
+	if len(got.Networks) != 1 || got.Networks[0].InGross != nil {
+		t.Errorf("признак вала в разрезе сетей = %v, ожидалось пусто", got.Networks[0].InGross)
+	}
 }
 
 // Сети работают с разными ставками НДС, поэтому отклонение по инвестициям
@@ -320,6 +371,119 @@ func TestAggregateNetworkDashboardComparesWithPreviousYear(t *testing.T) {
 	}
 	if got.Summary.PlanYoYPct == nil || *got.Summary.PlanYoYPct != 25 {
 		t.Errorf("прирост плана = %v, ожидалось 25", got.Summary.PlanYoYPct)
+	}
+}
+
+// Разрез по брендам сравнивается с прошлым годом так же, как раскрытые под ним
+// кварталы. Раньше вклад бренда уходил в агрегат без прошлого года, и итоговая
+// строка стояла с прочерком там, где её же кварталы прирост показывали.
+func TestAggregateNetworkDashboardComparesBrandsWithPreviousYear(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000000)},
+			{NetworkID: 1, Year: 2026, Quarter: 2, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000000)},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFactUnits(1, 1, "Альфа", 400000, 400),
+			dashboardFactUnits(1, 4, "Альфа", 200000, 200),
+		},
+		prevPlans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2025, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(800000)},
+			{NetworkID: 1, Year: 2025, Quarter: 2, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(800000)},
+		},
+		prevFacts: []models.NetworkMonthlyFact{
+			{
+				NetworkID: 1, Year: 2025, Month: 1, BrandAS: "Альфа", SKU: models.PtrString("SKU-1"),
+				FactRub: models.PtrFloat(300000), FactUnits: models.PtrFloat(300),
+			},
+			{
+				NetworkID: 1, Year: 2025, Month: 4, BrandAS: "Альфа", SKU: models.PtrString("SKU-1"),
+				FactRub: models.PtrFloat(200000), FactUnits: models.PtrFloat(200),
+			},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1, 2), dashboardNow)
+
+	if len(got.Brands) != 1 {
+		t.Fatalf("брендов в разрезе = %d, ожидался один", len(got.Brands))
+	}
+	brand := got.Brands[0].Metrics
+	if brand.PrevFactRub == nil || *brand.PrevFactRub != 500000 {
+		t.Fatalf("факт бренда за прошлый год = %v, ожидалось 500000", brand.PrevFactRub)
+	}
+	if brand.PrevFactUnits == nil || *brand.PrevFactUnits != 500 {
+		t.Errorf("упаковки бренда за прошлый год = %v, ожидалось 500", brand.PrevFactUnits)
+	}
+	// 600 000 против 500 000.
+	if brand.FactYoYPct == nil || *brand.FactYoYPct != 20 {
+		t.Errorf("прирост бренда = %v, ожидалось 20", brand.FactYoYPct)
+	}
+	if brand.PrevPlanRub == nil || *brand.PrevPlanRub != 1600000 {
+		t.Errorf("план бренда за прошлый год = %v, ожидалось 1600000", brand.PrevPlanRub)
+	}
+
+	// Строка бренда обязана сходиться с суммой своих кварталов: под ней в
+	// карточке сети раскрываются именно они.
+	var quartersPrev float64
+	for _, cell := range got.BrandQuarters {
+		if cell.Metrics.PrevFactRub != nil {
+			quartersPrev += *cell.Metrics.PrevFactRub
+		}
+	}
+	if quartersPrev != *brand.PrevFactRub {
+		t.Errorf("сумма кварталов = %v, строка бренда = %v — расходятся", quartersPrev, *brand.PrevFactRub)
+	}
+}
+
+// Прирост к прошлому году сравнивает факт с фактом, поэтому заведённый тогда
+// план ему не нужен. Бренд, которого год назад не планировали, но уже
+// отгружали, обязан показать прирост — и в строке бренда, и в её кварталах.
+func TestAggregateNetworkDashboardComparesBrandFactsWithoutPreviousPlan(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(1000000)},
+		},
+		facts: []models.NetworkMonthlyFact{dashboardFactUnits(1, 1, "Альфа", 600000, 600)},
+		// Планов за прошлый год нет вовсе — только отгрузки.
+		prevFacts: []models.NetworkMonthlyFact{{
+			NetworkID: 1, Year: 2025, Month: 1, BrandAS: "Альфа", SKU: models.PtrString("SKU-1"),
+			FactRub: models.PtrFloat(500000), FactUnits: models.PtrFloat(500),
+		}},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.Brands) != 1 {
+		t.Fatalf("брендов в разрезе = %d, ожидался один", len(got.Brands))
+	}
+	brand := got.Brands[0].Metrics
+	if brand.PrevFactRub == nil || *brand.PrevFactRub != 500000 {
+		t.Fatalf("факт бренда за прошлый год = %v, ожидалось 500000", brand.PrevFactRub)
+	}
+	if brand.FactYoYPct == nil || *brand.FactYoYPct != 20 {
+		t.Errorf("прирост бренда = %v, ожидалось 20", brand.FactYoYPct)
+	}
+	if brand.PrevFactUnits == nil || *brand.PrevFactUnits != 500 {
+		t.Errorf("упаковки за прошлый год = %v, ожидалось 500", brand.PrevFactUnits)
+	}
+	// План с планом сравнивать по-прежнему не с чем: строки плана в том году
+	// не было, и выдумывать её нельзя.
+	if brand.PrevPlanRub != nil || brand.PlanYoYPct != nil {
+		t.Errorf("план прошлого года = %v / %v, ожидалось пусто", brand.PrevPlanRub, brand.PlanYoYPct)
+	}
+
+	if len(got.BrandQuarters) != 1 {
+		t.Fatalf("пар «бренд × квартал» = %d, ожидалась одна", len(got.BrandQuarters))
+	}
+	cell := got.BrandQuarters[0].Metrics
+	if cell.PrevFactRub == nil || *cell.PrevFactRub != 500000 {
+		t.Errorf("факт квартала за прошлый год = %v, ожидалось 500000", cell.PrevFactRub)
+	}
+	if cell.FactYoYPct == nil || *cell.FactYoYPct != 20 {
+		t.Errorf("прирост квартала = %v, ожидалось 20", cell.FactYoYPct)
 	}
 }
 
@@ -431,7 +595,7 @@ func TestAggregateNetworkDashboardMatchesCardTotals(t *testing.T) {
 	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
 
 	// Тот же расчёт «руками», как его делает карточка сети.
-	slice := buildNetworkSlice(network, 2026, map[int]bool{1: true}, plans, nil, facts, nil, dashboardNow)
+	slice := buildNetworkSlice(network, 2026, map[int]bool{1: true}, plans, nil, facts, nil, nil, dashboardNow)
 	want := slice.quarterTotals[1]
 
 	if got.Summary.PlanRub != want.ContractPlanRub {
@@ -1230,5 +1394,215 @@ func TestSKUEACIgnoresBrandLevelForecast(t *testing.T) {
 	// Доля показывает ровно ту часть, что объяснена SKU.
 	if got.SKUs[0].ShareOfBrandPct == nil || *got.SKUs[0].ShareOfBrandPct != 25 {
 		t.Errorf("доля = %v, ожидалось 25", got.SKUs[0].ShareOfBrandPct)
+	}
+}
+
+// ─── Порог выполнения плана ─────────────────────────────────────────────────
+//
+// Инвестиции по договору возникают только после 100% выполнения. Витрина
+// обязана применять то же правило, что и карточка: начисление показывается,
+// но деньгами не становится, пока порог не пройден.
+
+func TestDashboardWithholdsInvestmentsWhenPlanMissed(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 300000, 30000),
+			dashboardFact(1, 2, "Альфа", 300000, 30000),
+			dashboardFact(1, 3, "Альфа", 200000, 20000),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	// 800 000 из 1 000 000 — план не выполнен.
+	if got.Summary.EACInvestmentsRub != 0 {
+		t.Errorf("прогнозные инвестиции = %v, ожидалось 0: план не выполнен", got.Summary.EACInvestmentsRub)
+	}
+	// Фактические — тем же правилом и по тому же факту.
+	if got.Summary.FactInvestmentsRub != 0 {
+		t.Errorf("фактические инвестиции = %v, ожидалось 0", got.Summary.FactInvestmentsRub)
+	}
+	// Плановые порога не знают: план равен плану по определению.
+	if got.Summary.PlanInvestmentsRub != 100000 {
+		t.Errorf("плановые инвестиции = %v, ожидалось 100000", got.Summary.PlanInvestmentsRub)
+	}
+	// Правило одно на все срезы, а не только на сводку.
+	for _, brand := range got.Brands {
+		if brand.Metrics.EACInvestmentsRub != 0 {
+			t.Errorf("бренд %s: прогнозные инвестиции = %v, ожидалось 0", brand.Name, brand.Metrics.EACInvestmentsRub)
+		}
+	}
+	for _, cell := range got.NetworkQuarters {
+		if cell.Metrics.EACInvestmentsRub != 0 {
+			t.Errorf("ячейка %s Q%d: прогнозные инвестиции = %v, ожидалось 0",
+				cell.Name, cell.Quarter, cell.Metrics.EACInvestmentsRub)
+		}
+	}
+	for _, quarter := range got.Quarters {
+		if quarter.Metrics.EACInvestmentsRub != 0 {
+			t.Errorf("Q%d: прогнозные инвестиции = %v, ожидалось 0", quarter.Quarter, quarter.Metrics.EACInvestmentsRub)
+		}
+	}
+}
+
+func TestDashboardPaysInvestmentsWhenPlanMet(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 400000, 30000),
+			dashboardFact(1, 2, "Альфа", 400000, 30000),
+			dashboardFact(1, 3, "Альфа", 300000, 20000),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	// 1 100 000 из 1 000 000 — порог пройден, начисляется процент от EAC.
+	if got.Summary.EACInvestmentsRub != 110000 {
+		t.Errorf("прогнозные инвестиции = %v, ожидалось 110000", got.Summary.EACInvestmentsRub)
+	}
+	// База «без НДС» считается по ставке квартала, как и везде.
+	if got.Summary.EACInvestmentsRubNet != round2(110000/1.2) {
+		t.Errorf("прогнозные инвестиции без НДС = %v, ожидалось %v",
+			got.Summary.EACInvestmentsRubNet, round2(110000/1.2))
+	}
+}
+
+// Порог проверяется на строке, а не на сумме: иначе невыполненный бренд
+// прикрылся бы перевыполненным соседом, и витрина обещала бы деньги,
+// которых по договору не будет.
+func TestDashboardChecksThresholdPerBrandNotOnAggregate(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Бета"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			// Альфа перевыполняет, Бета проваливает. В сумме по сети план
+			// выполнен, но деньги зарабатывает только Альфа.
+			dashboardFact(1, 1, "Альфа", 1500000, 0),
+			dashboardFact(1, 1, "Бета", 400000, 0),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if got.Summary.EACRub != 1900000 || got.Summary.PlanRub != 2000000 {
+		t.Fatalf("подготовка: EAC = %v, план = %v", got.Summary.EACRub, got.Summary.PlanRub)
+	}
+	if got.Summary.EACInvestmentsRub != 150000 {
+		t.Errorf("прогнозные инвестиции = %v, ожидалось 150000 — только по выполнившему бренду",
+			got.Summary.EACInvestmentsRub)
+	}
+
+	byBrand := map[string]models.NetworkDashboardMetrics{}
+	for _, brand := range got.Brands {
+		byBrand[brand.Name] = brand.Metrics
+	}
+	if byBrand["Альфа"].EACInvestmentsRub != 150000 {
+		t.Errorf("Альфа: прогнозные инвестиции = %v, ожидалось 150000", byBrand["Альфа"].EACInvestmentsRub)
+	}
+	if byBrand["Бета"].EACInvestmentsRub != 0 {
+		t.Errorf("Бета: прогнозные инвестиции = %v, ожидалось 0", byBrand["Бета"].EACInvestmentsRub)
+	}
+}
+
+// Правило совместного зачёта охватывает соседние кварталы, поэтому порог
+// считается по всему его периоду — даже если в срезе виден только один
+// квартал. Иначе Q1 «в одиночку» не прошёл бы порог, который договор
+// разрешает закрыть за счёт Q2.
+func TestDashboardEvaluatesThresholdOverPeriodGroup(t *testing.T) {
+	plans := []models.NetworkPlan{
+		{
+			NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+			PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+		},
+		{
+			NetworkID: 1, Year: 2026, Quarter: 2, BrandAS: brandPtr("Альфа"),
+			PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+		},
+	}
+	facts := []models.NetworkMonthlyFact{
+		dashboardFact(1, 1, "Альфа", 800000, 0),  // Q1: 800 тыс из 1 млн
+		dashboardFact(1, 4, "Альфа", 1300000, 0), // Q2: 1,3 млн из 1 млн
+	}
+
+	// Без правила Q1 порога не проходит.
+	alone := AggregateNetworkDashboard(
+		dashboardCase{
+			networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+			plans:    plans, facts: facts,
+		}.data(),
+		dashboardFilter(1), dashboardNow,
+	)
+	if alone.Summary.EACInvestmentsRub != 0 {
+		t.Errorf("без правила: прогнозные инвестиции = %v, ожидалось 0", alone.Summary.EACInvestmentsRub)
+	}
+
+	// С правилом Q1–Q2 период закрыт вместе: 2,1 млн из 2 млн.
+	grouped := AggregateNetworkDashboard(
+		dashboardCase{
+			networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+			plans:    plans, facts: facts,
+			groups: []models.NetworkPeriodGroup{
+				{NetworkID: 1, Year: 2026, StartQuarter: 1, EndQuarter: 2},
+			},
+		}.data(),
+		dashboardFilter(1), dashboardNow,
+	)
+	if grouped.Summary.EACInvestmentsRub != 80000 {
+		t.Errorf("с правилом Q1–Q2: прогнозные инвестиции = %v, ожидалось 80000",
+			grouped.Summary.EACInvestmentsRub)
+	}
+	// Срез при этом остаётся срезом: Q2 в суммы не подмешивается.
+	if grouped.Summary.EACRub != 800000 {
+		t.Errorf("EAC среза = %v, ожидалось 800000: показывается только Q1", grouped.Summary.EACRub)
+	}
+	if len(grouped.Quarters) != 1 {
+		t.Errorf("кварталов в тренде = %d, ожидался 1", len(grouped.Quarters))
+	}
+}
+
+// «Оплата от факта» порога не знает: такие бренды получают процент от факта
+// независимо от выполнения плана.
+func TestDashboardPaysFromFactWithoutThreshold(t *testing.T) {
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+				PayInvestmentsFromFact: true,
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 500000, 0),
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if got.Summary.EACInvestmentsRub != 50000 {
+		t.Errorf("прогнозные инвестиции = %v, ожидалось 50000: режим оплаты от факта", got.Summary.EACInvestmentsRub)
 	}
 }

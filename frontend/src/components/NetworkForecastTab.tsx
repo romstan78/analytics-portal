@@ -167,6 +167,9 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
     queryClient.setQueryData(['network-forecast', networkId, year, quarter], data);
     void queryClient.invalidateQueries({ queryKey: ['networkPlan', networkId, year] });
     void queryClient.invalidateQueries({ queryKey: ['networkAudit', networkId] });
+    // Прогноз — это прогноз итога витрины. Она живёт отдельным запросом и без
+    // сброса ещё пять минут показывала бы результат до правки.
+    void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
     setDraftEdits(null);
   };
 
@@ -240,8 +243,9 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
     }));
   };
 
-  // Отправляем только введённую метрику: вторую считает бэкенд по цене
-  // контракта, и сохранённая пара однажды перестала бы сходиться сама с собой.
+  // Отправляем только введённую метрику: парную считает бэкенд по цене
+  // контракта того же месяца и сам же записывает её в БД. Прислать обе значило
+  // бы дать форме второй источник истины о цене.
   const save = () => {
     const lines: NetworkForecastInput[] = Object.entries(draft).flatMap(([key, value]) => {
       const row = rowsByKey.get(key);

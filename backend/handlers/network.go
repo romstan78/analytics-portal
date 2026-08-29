@@ -138,6 +138,8 @@ func UpdateNetworkInvestmentPaymentModes(c *gin.Context) {
 	if diff != "" {
 		_ = repository.InsertEntityAuditLog("network_plan", id, username, "UPDATE", diff)
 	}
+	// Режим оплаты меняет само правило: колонки обязаны пойти следом.
+	rebuildInvestmentColumns(id, input.Year)
 	c.JSON(http.StatusOK, gin.H{"message": "Updated"})
 }
 
@@ -652,6 +654,8 @@ func UpdateNetwork(c *gin.Context) {
 		respondNetworkError(c, err, "network_update_refetch_failed")
 		return
 	}
+	// Ставка НДС квартала — вход правила: обе базы инвестиций пересчитываются.
+	rebuildInvestmentColumns(id, input.Year)
 	c.JSON(http.StatusOK, models.NetworkSaveResponse{Message: "Updated", Data: network})
 }
 
@@ -659,6 +663,16 @@ func UpdateNetwork(c *gin.Context) {
 
 // GetNetworkPlan отдаёт всё, что нужно вкладке «Планы»: карточку, кварталы,
 // строки плана с расчётом НДС и итоги по кварталам.
+// rebuildInvestmentColumns обновляет зеркало инвестиций для внешних
+// потребителей. Ошибка не отменяет уже выполненное действие: экраны считают на
+// лету и остаются верными, а колонки догонит ночной пересчёт.
+func rebuildInvestmentColumns(networkID, year int) {
+	if err := services.RebuildNetworkInvestmentColumns(networkID, year); err != nil {
+		config.Logger.Error("network_investment_columns_failed",
+			"network_id", networkID, "year", year, "error", err.Error())
+	}
+}
+
 // planForecastRollup подставляет в строки плана факт и EAC из помесячного слоя.
 // Три входа во вкладку «План и факт» — чтение, пересчёт черновика и ответ на
 // сохранение — обязаны показывать одни и те же числа, поэтому свод у них общий.
@@ -667,6 +681,7 @@ func planForecastRollup(
 	year int,
 	plans []models.NetworkPlan,
 	periods []models.NetworkPeriod,
+	groups []models.NetworkPeriodGroup,
 ) ([]models.NetworkPlan, error) {
 	// Прошлый год нужен системной рекомендации: открытый месяц без введённого
 	// прогноза оценивается по своему месяцу год назад.
@@ -687,7 +702,7 @@ func planForecastRollup(
 		return nil, err
 	}
 	return services.ApplyForecastRollup(
-		network, year, plans, periods, facts, forecasts, promos, prices, time.Now(),
+		network, year, plans, periods, facts, forecasts, promos, prices, groups, time.Now(),
 	), nil
 }
 
@@ -723,7 +738,7 @@ func GetNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_period_groups_failed")
 		return
 	}
-	plans, err = planForecastRollup(network, year, plans, periods)
+	plans, err = planForecastRollup(network, year, plans, periods, periodGroups)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_rollup_failed")
 		return
@@ -811,12 +826,18 @@ func SaveNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_period_groups_failed")
 		return
 	}
-	updatedPlans, err = planForecastRollup(network, input.Year, updatedPlans, updatedPeriods)
+	updatedPlans, err = planForecastRollup(network, input.Year, updatedPlans, updatedPeriods, periodGroups)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_rollup_failed")
 		return
 	}
 	updatedPlans, totals := services.BuildNetworkPlanCalculations(updatedPlans, updatedPeriods, periodGroups)
+
+	// Зеркало для внешних потребителей: строки уже посчитаны, остаётся записать.
+	if err := repository.SaveNetworkInvestmentColumns(updatedPlans); err != nil {
+		config.Logger.Error("network_investment_columns_failed",
+			"network_id", id, "year", input.Year, "error", err.Error())
+	}
 
 	config.Logger.Info("network_plan_saved", "network_id", id, "year", input.Year, "user", username)
 	c.JSON(http.StatusOK, models.NetworkPlanSaveResponse{
@@ -909,7 +930,7 @@ func PreviewNetworkPlan(c *gin.Context) {
 		respondNetworkError(c, err, "network_plan_preview_failed")
 		return
 	}
-	stored, err = planForecastRollup(network, input.Year, stored, periods)
+	stored, err = planForecastRollup(network, input.Year, stored, periods, periodGroups)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_rollup_failed")
 		return
@@ -932,39 +953,30 @@ func PreviewNetworkPlan(c *gin.Context) {
 
 // ─── Помесячный прогноз ─────────────────────────────────────────────────────
 
+// loadNetworkForecast — сборка рабочего места прогноза. Правило живёт в
+// services: тем же путём ходит пакетный пересчёт пары «рубли/упаковки».
 func loadNetworkForecast(networkID, year, quarter int) (models.NetworkForecastResponse, error) {
-	network, err := repository.GetNetworkByID(networkID)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
+	return services.LoadNetworkForecast(networkID, year, quarter)
+}
+
+// syncForecastPairs закрепляет в БД обе метрики прогноза по только что
+// пересчитанной сетке. Ошибка не отменяет ответ: значение пользователя уже
+// сохранено, а пара — денормализация для тех, кто читает колонки напрямую,
+// и её починит ближайший пересчёт.
+func syncForecastPairs(networkID, year, quarter int, response models.NetworkForecastResponse) {
+	if _, err := repository.SyncNetworkForecastPairs(networkID, year, quarter, response.Months); err != nil {
+		config.Logger.Error("network_forecast_pair_sync_failed",
+			"network_id", networkID, "year", year, "quarter", quarter, "error", err.Error())
 	}
-	periods, err := repository.GetNetworkPeriods(networkID, year)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
+}
+
+// rebuildForecastPairsYear пересчитывает пару за весь год. Нужен после правки
+// цен: парная величина считается по прайсу, и вслед за ним обязана меняться.
+func rebuildForecastPairsYear(networkID, year int) {
+	if _, err := services.RebuildForecastPairsYear(networkID, year); err != nil {
+		config.Logger.Error("network_forecast_pair_rebuild_failed",
+			"network_id", networkID, "year", year, "error", err.Error())
 	}
-	periods = networkPeriodsWithDefaults(network, year, periods)
-	plans, err := repository.GetNetworkPlans(networkID, year)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
-	}
-	facts, err := repository.GetNetworkMonthlyFacts(networkID, year-1, year)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
-	}
-	forecasts, err := repository.GetNetworkForecastLines(networkID, year, quarter)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
-	}
-	promos, err := repository.GetNetworkPromoIndicators(network.Name, year, quarter)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
-	}
-	prices, err := repository.GetNetworkContractPrices(networkID, year)
-	if err != nil {
-		return models.NetworkForecastResponse{}, err
-	}
-	return services.BuildNetworkForecast(
-		network, year, quarter, plans, periods, facts, forecasts, promos, prices, time.Now(),
-	), nil
 }
 
 func GetNetworkForecast(c *gin.Context) {
@@ -1025,9 +1037,11 @@ func SaveNetworkForecast(c *gin.Context) {
 		respondNetworkError(c, err, "network_forecast_refetch_failed")
 		return
 	}
+	syncForecastPairs(id, input.Year, input.Quarter, response)
 	if err := repository.UpdateNetworkPlanForecastRollup(id, input.Year, input.Quarter, response.Brands); err != nil {
 		config.Logger.Error("network_forecast_rollup_failed", "error", err.Error(), "network_id", id)
 	}
+	rebuildInvestmentColumns(id, input.Year)
 	_ = repository.InsertEntityAuditLog(
 		"network_forecast", id, username, "UPDATE",
 		jsonString(map[string]interface{}{"year": input.Year, "quarter": input.Quarter, "lines": len(input.Lines)}),
@@ -1081,6 +1095,9 @@ func UpdateNetworkEntryMode(c *gin.Context) {
 		respondNetworkError(c, err, "network_entry_mode_refetch_failed")
 		return
 	}
+	// Смена единицы ведения меняет, какая половина пары введена, а какая
+	// посчитана: без пересчёта в БД осталась бы пара от прежнего режима.
+	syncForecastPairs(id, input.Year, input.Quarter, response)
 	_ = repository.InsertEntityAuditLog(
 		"network_plan", id, username, "UPDATE",
 		jsonString(map[string]interface{}{
@@ -1159,6 +1176,7 @@ func SaveNetworkPrices(c *gin.Context) {
 		respondNetworkError(c, err, "network_prices_refetch_failed")
 		return
 	}
+	rebuildForecastPairsYear(id, input.Year)
 	skuOptions, err := repository.GetNetworkPriceSKUOptions()
 	if err != nil {
 		respondNetworkError(c, err, "network_price_sku_options_failed")

@@ -2,7 +2,14 @@
 
 Факт в реестре не вводится руками: он приходит выгрузкой отгрузок и ложится
 в dbo.tbl_NetworkMonthlyFacts. После загрузки квартальные fact_rub и
-fact_investments_rub в dbo.tbl_NetworkPlans пересчитываются для обратной совместимости.
+paid_investments_rub в dbo.tbl_NetworkPlans пересчитываются для обратной совместимости.
+
+Загруженная сумма — платёжный факт: сколько инвестиций реально перечислено по
+документам. Это не то же самое, что фактические инвестиции по договору
+(fact_investments_rub): те считаются процентом от факта ТО и только при
+выполнении плана. Их пишет бэкенд — командой backend/cmd/recalc_investments,
+которую нужно запускать после этой загрузки: правило смотрит на валовый пул и
+на правила совместного зачёта, одним UPDATE это не выражается.
 
 Ожидаемые колонки файла (Excel или CSV), регистр и лишние пробелы не важны:
 
@@ -322,11 +329,11 @@ FROM rollup) AS s
     AND t.brand_as = s.brand_as
 WHEN MATCHED THEN UPDATE SET
     fact_rub = s.fact_rub,
-    fact_investments_rub = s.fact_investments_rub,
+    paid_investments_rub = s.fact_investments_rub,
     updated_at = GETDATE()
 WHEN NOT MATCHED AND (s.fact_rub IS NOT NULL OR s.fact_investments_rub IS NOT NULL) THEN
     INSERT (network_id, [year], [quarter], brand_as, in_gross, fact_rub,
-            fact_investments_rub, updated_by)
+            paid_investments_rub, updated_by)
     VALUES (s.network_id, s.[year], s.[quarter], s.brand_as, 0, s.fact_rub,
             s.fact_investments_rub, 'import_network_facts');
 """

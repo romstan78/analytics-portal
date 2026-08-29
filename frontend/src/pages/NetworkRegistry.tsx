@@ -344,6 +344,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
       setSelectedId(res.data.id);
       setToast({ text: `Сеть «${res.data.name}» заведена`, severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networks'] });
+      // Новая сеть обязана появиться и в витрине, и в её фильтре сетей.
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboardOptions'] });
     },
     onError: showError,
   });
@@ -357,6 +360,11 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
       setPlanSavedTick((tick) => tick + 1);
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
+      // Витрина считает те же строки плана, а живёт отдельным запросом с
+      // пятиминутной свежестью. Без сброса она ещё пять минут показывала бы
+      // прежнее состояние — например, бренд, только что выведенный из вала.
+      // Сбрасывается весь префикс: правка задевает любой год и любой срез.
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
     },
     onError: showError,
   });
@@ -368,6 +376,8 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
       setToast({ text: 'Режим оплаты инвестиций сохранён', severity: 'success' });
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
+      // Режим оплаты меняет само правило начисления — витрина считает по нему.
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
     },
     onError: showError,
   });
@@ -399,6 +409,9 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
       void queryClient.invalidateQueries({ queryKey: ['networks'] });
       void queryClient.invalidateQueries({ queryKey: ['networkPlan', selectedId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', selectedId] });
+      // Профиль задаёт раскладку плана по месяцам, ставку НДС и владельца —
+      // всё это входит в расчёт витрины и в её область видимости.
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
     },
     onError: showError,
   });

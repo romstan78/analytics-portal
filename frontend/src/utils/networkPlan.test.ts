@@ -77,9 +77,10 @@ describe('amountsOfPlan', () => {
     investments_pct: null, investments_rub: null, investments_rub_net: null,
     forecast_investments_rub: null, forecast_investments_rub_net: null,
     pay_investments_from_fact: false,
-    payment_base_rub: null, payment_completion_pct: null, payment_eligible: false,
-    payment_period_start_quarter: 0, payment_period_end_quarter: 0,
-    payment_scope: '', payable_investments_rub: null, payable_investments_rub_net: null,
+    paid_investments_rub: null, forecast_investments_overridden: false,
+    investment_scope: '', investment_period_start_quarter: 0, investment_period_end_quarter: 0,
+    forecast_completion_pct: null, forecast_investments_earned: false,
+    fact_completion_pct: null, fact_investments_earned: false,
     updated_by: null, updated_at: '', ...patch,
   });
 

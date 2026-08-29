@@ -1,7 +1,8 @@
 .PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod \
 	types types-check demo-db-init demo-db-load demo-db-reset demo-up demo-down \
 	demo-bootstrap-user demo-ecom-load demo-ecom-reset demo-registry-load \
-	demo-registry-reset demo-kam-users demo-kam-users-preview demo-approval-scope
+	demo-registry-reset demo-kam-users demo-kam-users-preview demo-approval-scope \
+	recalc-investments backfill-forecast-pairs
 
 # Полный стек, включая SQL Server на постоянном томе mssql_data_volume.
 up:
@@ -41,6 +42,22 @@ demo-ecom-reset:
 # Реестр сетей: карточки из демо-справочника, факт отгрузок — из интернет-продаж.
 demo-registry-load:
 	python3 sync_script/create_demo_network_registry.py
+
+# Пересчёт расчётных колонок инвестиций. Нужен внешним потребителям, которые
+# читают tbl_NetworkPlans напрямую: правило смотрит на валовый пул и на правила
+# совместного зачёта, и загрузка факта применить его не может. Запускать после
+# ежедневной заливки факта из внешней БД.
+#   make recalc-investments YEAR=2026
+recalc-investments:
+	cd backend && go run ./cmd/recalc_investments $(if $(YEAR),-year $(YEAR),) $(if $(NETWORK),-network $(NETWORK),)
+
+# Пересчёт пары «рубли / упаковки» в строках прогноза. Разовый прогон после
+# перехода на хранение обеих метрик: строки, заведённые раньше, держат только
+# введённую единицу. Дальше пару поддерживают сами обработчики, поэтому в
+# регулярном расписании команда не нужна.
+#   make backfill-forecast-pairs YEAR=2026
+backfill-forecast-pairs:
+	cd backend && go run ./cmd/backfill_forecast_pairs $(if $(YEAR),-year $(YEAR),) $(if $(NETWORK),-network $(NETWORK),)
 
 demo-registry-reset:
 	python3 sync_script/create_demo_network_registry.py --replace --confirm RESET_DEMO_NETWORK_REGISTRY

@@ -37,11 +37,19 @@ type NetworkDashboardMetrics struct {
 
 	CompletionPct    *float64 `json:"completionPct"`
 	EACCompletionPct *float64 `json:"eacCompletionPct"`
-	GapRub           float64  `json:"gapRub"`
+	// Разрыв прогноза итога к обязательству. Идёт парой к объёму: витрина
+	// переключается между рублями и упаковками целиком, и разрыв, оставшийся
+	// рублёвым, читался бы как рубли рядом с упаковками.
+	GapRub   float64 `json:"gapRub"`
+	GapUnits float64 `json:"gapUnits"`
 
 	// Инвестиции. Сети работают с разными ставками НДС, поэтому складывать и
 	// сравнивать их между собой можно только в базе «без НДС»: на ней и
 	// считается InvestmentVarianceRub.
+	//
+	// Прогнозные и фактические инвестиции уже прошли порог выполнения: бренд,
+	// чей объём не закрыл план, приносит сюда ноль. Отдельного «к выплате» нет
+	// намеренно — две цифры под похожими именами путают больше, чем объясняют.
 	PlanInvestmentsRub      float64  `json:"planInvestmentsRub"`
 	PlanInvestmentsRubNet   float64  `json:"planInvestmentsRubNet"`
 	FactInvestmentsRub      float64  `json:"factInvestmentsRub"`
@@ -137,6 +145,16 @@ type NetworkDashboardBreakdown struct {
 	NetworkID *int                    `json:"networkId"`
 	KAM       *string                 `json:"kam"`
 	Metrics   NetworkDashboardMetrics `json:"metrics"`
+
+	// InGross — лежит ли бренд внутри валового пула. Заполняется только в
+	// разрезе брендов: у сети и у КАМа этого деления нет.
+	//
+	// nil означает «неоднородно»: признак стоит на строке «бренд × квартал», и
+	// в срезе из нескольких кварталов бренд может быть в пуле не везде. false —
+	// бренд заведён отдельно и прибавляется к пулу сверху, а не входит в него.
+	// Без этого признака строка бренда, выведенного из вала, ничем не
+	// отличается от остальных, и разрез читается как «все бренды в пуле».
+	InGross *bool `json:"inGross"`
 }
 
 // NetworkDashboardCell — ячейка тепловой карты «сеть × квартал».

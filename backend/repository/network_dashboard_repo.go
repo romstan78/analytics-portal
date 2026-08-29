@@ -65,12 +65,17 @@ func intArgs(values []int) (string, []interface{}) {
 }
 
 // NetworkDashboardPeriodData — план, факт и прогноз одного года.
+//
+// Groups — правила совместного зачёта смежных кварталов. Витрине они нужны
+// по той же причине, что и карточке: право на инвестиции проверяется в
+// границах правила, и без них Q1+Q2 считались бы двумя порогами вместо одного.
 type NetworkDashboardPeriodData struct {
 	Year      int
 	Periods   []models.NetworkPeriod
 	Plans     []models.NetworkPlan
 	Facts     []models.NetworkMonthlyFact
 	Forecasts []models.NetworkForecastLine
+	Groups    []models.NetworkPeriodGroup
 }
 
 // NetworkDashboardPromoRow — промо, проведённое в срезе. Канал приходит из
@@ -152,10 +157,10 @@ func GetNetworkDashboardData(filter NetworkDashboardFilter) (NetworkDashboardDat
 		return data, nil
 	}
 
-	if data.Current, err = dashboardPeriodData(filter, filter.Year, scope, scopeArgs, months); err != nil {
+	if data.Current, err = dashboardPeriodData(filter.Year, scope, scopeArgs); err != nil {
 		return data, err
 	}
-	if data.Prev, err = dashboardPeriodData(filter, filter.Year-1, scope, scopeArgs, months); err != nil {
+	if data.Prev, err = dashboardPeriodData(filter.Year-1, scope, scopeArgs); err != nil {
 		return data, err
 	}
 	if data.Promos, err = dashboardPromos(filter, scope, scopeArgs, months); err != nil {
@@ -170,27 +175,59 @@ func GetNetworkDashboardData(filter NetworkDashboardFilter) (NetworkDashboardDat
 // dashboardPeriodData читает один год целиком: настройки кварталов, строки
 // плана и помесячные факт с прогнозом.
 func dashboardPeriodData(
-	filter NetworkDashboardFilter,
 	year int,
 	scope string,
 	scopeArgs []interface{},
-	months []int,
 ) (NetworkDashboardPeriodData, error) {
 	result := NetworkDashboardPeriodData{Year: year}
 	var err error
 	if result.Periods, err = dashboardPeriods(year, scope, scopeArgs); err != nil {
 		return result, err
 	}
-	if result.Plans, err = dashboardPlans(filter, year, scope, scopeArgs); err != nil {
+	if result.Plans, err = dashboardPlans(year, scope, scopeArgs); err != nil {
 		return result, err
 	}
-	if result.Facts, err = dashboardFacts(year, scope, scopeArgs, months); err != nil {
+	if result.Facts, err = dashboardFacts(year, scope, scopeArgs); err != nil {
 		return result, err
 	}
-	if result.Forecasts, err = dashboardForecasts(year, scope, scopeArgs, months); err != nil {
+	if result.Forecasts, err = dashboardForecasts(year, scope, scopeArgs); err != nil {
+		return result, err
+	}
+	if result.Groups, err = dashboardPeriodGroups(year, scope, scopeArgs); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// dashboardPeriodGroups читает правила совместного зачёта всех сетей области.
+// Год берётся целиком, а не по выбранным кварталам: правило описывает свой
+// диапазон само, и обрезать его фильтром значило бы менять условие зачёта.
+func dashboardPeriodGroups(year int, scope string, scopeArgs []interface{}) ([]models.NetworkPeriodGroup, error) {
+	query := `SELECT g.id, g.network_id, g.[year], g.start_quarter, g.end_quarter, g.brand_as,
+			g.updated_by, CONVERT(NVARCHAR, g.updated_at, 121)
+		FROM dbo.tbl_NetworkPeriodGroups g
+		JOIN dbo.tbl_Networks n ON n.id = g.network_id
+		WHERE g.[year] = ? AND n.is_active = 1` + scope + `
+		ORDER BY g.network_id, g.start_quarter, g.end_quarter`
+
+	args := append([]interface{}{year}, scopeArgs...)
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query dashboard period groups: %w", err)
+	}
+	defer rows.Close()
+
+	result := []models.NetworkPeriodGroup{}
+	for rows.Next() {
+		var group models.NetworkPeriodGroup
+		if err := rows.Scan(&group.ID, &group.NetworkID, &group.Year,
+			&group.StartQuarter, &group.EndQuarter, &group.BrandAS,
+			&group.UpdatedBy, &group.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan dashboard period group: %w", err)
+		}
+		result = append(result, group)
+	}
+	return result, rows.Err()
 }
 
 func dashboardNetworks(scope string, scopeArgs []interface{}) ([]models.Network, error) {
@@ -242,18 +279,27 @@ func dashboardPeriods(year int, scope string, scopeArgs []interface{}) ([]models
 
 // dashboardPlans читает строки плана вместе со строкой валового пула
 // (brand_as IS NULL): без неё обязательство по контракту посчитать нельзя.
-func dashboardPlans(filter NetworkDashboardFilter, year int, scope string, scopeArgs []interface{}) ([]models.NetworkPlan, error) {
-	quarterPlaceholders, quarterArgs := intArgs(filter.NormalizedQuarters())
+//
+// pay_investments_from_fact читается наравне с процентом: этот режим отменяет
+// порог выполнения и меняет базу начисления на факт, и без него витрина
+// показала бы такому бренду ноль к выплате там, где выплата положена.
+//
+// Год читается целиком, без фильтра по выбранным кварталам: правило
+// совместного зачёта охватывает соседние кварталы, и порог, посчитанный на
+// половине своего периода, дал бы неверное право на выплату. Срез применяет
+// агрегатор — наружу лишние кварталы не попадают.
+func dashboardPlans(year int, scope string, scopeArgs []interface{}) ([]models.NetworkPlan, error) {
 	query := `SELECT p.id, p.network_id, p.[year], p.[quarter], p.brand_as, p.in_gross,
 			p.plan_rub, p.plan_units, n.month1_pct, n.month2_pct, n.month3_pct,
 			p.investments_pct, p.entry_level, p.entry_unit,
+			p.pay_investments_from_fact, p.paid_investments_rub,
 			CONVERT(NVARCHAR, p.updated_at, 121)
 		FROM dbo.tbl_NetworkPlans p
 		JOIN dbo.tbl_Networks n ON n.id = p.network_id
-		WHERE p.[year] = ? AND p.[quarter] IN (` + quarterPlaceholders + `) AND n.is_active = 1` + scope + `
+		WHERE p.[year] = ? AND n.is_active = 1` + scope + `
 		ORDER BY p.network_id, p.[quarter], p.brand_as`
 
-	args := append(append([]interface{}{year}, quarterArgs...), scopeArgs...)
+	args := append([]interface{}{year}, scopeArgs...)
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query dashboard plans: %w", err)
@@ -267,6 +313,7 @@ func dashboardPlans(filter NetworkDashboardFilter, year int, scope string, scope
 			&plan.BrandAS, &plan.InGross, &plan.PlanRub, &plan.PlanUnits,
 			&plan.Month1Pct, &plan.Month2Pct, &plan.Month3Pct,
 			&plan.InvestmentsPct, &plan.EntryLevel, &plan.EntryUnit,
+			&plan.PayInvestmentsFromFact, &plan.PaidInvestmentsRub,
 			&plan.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan dashboard plan: %w", err)
 		}
@@ -275,20 +322,21 @@ func dashboardPlans(filter NetworkDashboardFilter, year int, scope string, scope
 	return result, rows.Err()
 }
 
+// dashboardFacts читает факт за весь год по той же причине, что и планы:
+// право на выплату проверяется в границах правила зачёта, а оно может
+// выходить за выбранные кварталы. Срез накладывает агрегатор.
 func dashboardFacts(
 	year int,
 	scope string,
 	scopeArgs []interface{},
-	months []int,
 ) ([]models.NetworkMonthlyFact, error) {
-	monthPlaceholders, monthArgs := intArgs(months)
 	query := `SELECT f.network_id, f.[year], f.[month], f.brand_as, f.sku,
 			f.fact_rub, f.fact_units, f.fact_investments_rub
 		FROM dbo.tbl_NetworkMonthlyFacts f
 		JOIN dbo.tbl_Networks n ON n.id = f.network_id
-		WHERE f.[year] = ? AND f.[month] IN (` + monthPlaceholders + `) AND n.is_active = 1` + scope
+		WHERE f.[year] = ? AND n.is_active = 1` + scope
 
-	args := append(append([]interface{}{year}, monthArgs...), scopeArgs...)
+	args := append([]interface{}{year}, scopeArgs...)
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query dashboard facts: %w", err)
@@ -307,20 +355,19 @@ func dashboardFacts(
 	return result, rows.Err()
 }
 
+// dashboardForecasts — прогноз за весь год, см. dashboardFacts.
 func dashboardForecasts(
 	year int,
 	scope string,
 	scopeArgs []interface{},
-	months []int,
 ) ([]models.NetworkForecastLine, error) {
-	monthPlaceholders, monthArgs := intArgs(months)
 	query := `SELECT f.network_id, f.[year], f.[month], f.brand_as, f.sku,
 			f.forecast_rub, f.forecast_units, f.forecast_investments_rub
 		FROM dbo.tbl_NetworkForecasts f
 		JOIN dbo.tbl_Networks n ON n.id = f.network_id
-		WHERE f.[year] = ? AND f.[month] IN (` + monthPlaceholders + `) AND n.is_active = 1` + scope
+		WHERE f.[year] = ? AND n.is_active = 1` + scope
 
-	args := append(append([]interface{}{year}, monthArgs...), scopeArgs...)
+	args := append([]interface{}{year}, scopeArgs...)
 	rows, err := config.DB.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query dashboard forecasts: %w", err)

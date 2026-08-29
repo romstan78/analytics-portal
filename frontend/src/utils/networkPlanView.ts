@@ -31,7 +31,7 @@ export function deviationTone(pct: number | null): HintTone {
 
 // Величина, показываемая в годовом разрезе по четырём кварталам сразу.
 export type YearMetric =
-  | 'plan' | 'fact' | 'forecast' | 'pct' | 'investPlan' | 'investForecast' | 'investFact' | 'payable';
+  | 'plan' | 'fact' | 'forecast' | 'pct' | 'investPlan' | 'investForecast' | 'investFact';
 
 export const YEAR_METRICS: Array<{ value: YearMetric; label: string }> = [
   { value: 'plan', label: 'План' },
@@ -41,5 +41,4 @@ export const YEAR_METRICS: Array<{ value: YearMetric; label: string }> = [
   { value: 'investPlan', label: 'Инв. план' },
   { value: 'investForecast', label: 'Инв. прогноз' },
   { value: 'investFact', label: 'Инв. факт' },
-	{ value: 'payable', label: 'К выплате' },
 ];

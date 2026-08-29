@@ -11,10 +11,12 @@ import {
   growthOf,
   metricEAC,
   metricFact,
+  metricGap,
   metricPlan,
   metricPrevFact,
   pctLabel,
   ratioPct,
+  signedAmount,
   signedShort,
 } from './networkDashboard';
 import type { NetworkDashboardMetrics } from '../types/network';
@@ -34,6 +36,7 @@ const metrics = (patch: Partial<NetworkDashboardMetrics> = {}): NetworkDashboard
   completionPct: 80,
   eacCompletionPct: 110,
   gapRub: 100,
+  gapUnits: 20,
   planInvestmentsRub: 100,
   planInvestmentsRubNet: 83.33,
   factInvestmentsRub: 90,
@@ -67,6 +70,8 @@ describe('выбор величины под единицу измерения',
     expect(metricFact(m, 'units')).toBe(450);
     expect(metricEAC(m, 'units')).toBe(520);
     expect(metricPrevFact(m, 'units')).toBe(400);
+    expect(metricGap(m, 'rub')).toBe(100);
+    expect(metricGap(m, 'units')).toBe(20);
   });
 
   it('подпись меняется вместе с единицей: «₽» рядом с упаковками врал бы', () => {
@@ -119,6 +124,11 @@ describe('знак несёт смысл', () => {
   it('отклонение показывается со знаком', () => {
     expect(signedShort(120)).toMatch(/^\+/);
     expect(signedShort(-120)).toMatch(/^−/);
+  });
+
+  it('у отклонения есть единица: «₽» рядом с упаковками врал бы и здесь', () => {
+    expect(signedAmount(-120, 'rub')).toBe('−120 ₽');
+    expect(signedAmount(-120, 'units')).toBe('−120 уп.');
   });
 
   it('цвет отклонения означает «хорошо/плохо», а не «больше/меньше»', () => {

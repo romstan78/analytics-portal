@@ -154,13 +154,14 @@ export interface CellAmounts {
   investForecastNet: number | null;
   investFact: number | null;
   investFactNet: number | null;
-	payable: number | null;
-	payableNet: number | null;
-	paymentEligible: boolean;
+	paid: number | null;
+	forecastEarned: boolean;
+	factEarned: boolean;
 	payFromFact: boolean;
-	paymentCompletionPct: number | null;
-	paymentPeriodStart: number;
-	paymentPeriodEnd: number;
+	forecastCompletionPct: number | null;
+	factCompletionPct: number | null;
+	investmentPeriodStart: number;
+	investmentPeriodEnd: number;
 }
 
 export const EMPTY_AMOUNTS: CellAmounts = {
@@ -173,13 +174,14 @@ export const EMPTY_AMOUNTS: CellAmounts = {
   investForecastNet: null,
   investFact: null,
   investFactNet: null,
-	payable: null,
-	payableNet: null,
-	paymentEligible: false,
+	paid: null,
+	forecastEarned: false,
+	factEarned: false,
 	payFromFact: false,
-	paymentCompletionPct: null,
-	paymentPeriodStart: 0,
-	paymentPeriodEnd: 0,
+	forecastCompletionPct: null,
+	factCompletionPct: null,
+	investmentPeriodStart: 0,
+	investmentPeriodEnd: 0,
 };
 
 // Расчётные суммы одной ячейки — так, как их вернул бэкенд.
@@ -195,13 +197,14 @@ export function amountsOfPlan(plan: NetworkPlan | undefined): CellAmounts {
     investForecastNet: plan.forecast_investments_rub_net,
     investFact: plan.fact_investments_rub,
     investFactNet: plan.fact_investments_rub_net,
-		payable: plan.payable_investments_rub,
-		payableNet: plan.payable_investments_rub_net,
-		paymentEligible: plan.payment_eligible,
+		paid: plan.paid_investments_rub,
+		forecastEarned: plan.forecast_investments_earned,
+		factEarned: plan.fact_investments_earned,
 		payFromFact: plan.pay_investments_from_fact,
-		paymentCompletionPct: plan.payment_completion_pct,
-		paymentPeriodStart: plan.payment_period_start_quarter,
-		paymentPeriodEnd: plan.payment_period_end_quarter,
+		forecastCompletionPct: plan.forecast_completion_pct,
+		factCompletionPct: plan.fact_completion_pct,
+		investmentPeriodStart: plan.investment_period_start_quarter,
+		investmentPeriodEnd: plan.investment_period_end_quarter,
   };
 }
 
