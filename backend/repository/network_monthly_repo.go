@@ -326,6 +326,106 @@ func SaveNetworkForecastLines(in SaveNetworkForecastInput) error {
 	return tx.Commit()
 }
 
+// SyncNetworkForecastPairs закрепляет в БД обе метрики прогноза — и рубли, и
+// упаковки — по уже пересчитанной сетке квартала.
+//
+// Вводится всегда одна величина, парная считается по цене контракта того же
+// месяца. Раньше она жила только на чтении, и колонка второй единицы
+// оставалась пустой. Читать прогноз умеет не только форма: витрина реестра,
+// ночные выгрузки и BI берут колонки напрямую и пересчитать по прайсу не могут
+// — для них незаполненная половина означала «прогноза нет».
+//
+// Пишутся только введённые строки: расчётные (SKU у бренда, который ведут
+// целиком, и наоборот) в БД не хранятся вовсе. Пустая пара тоже записывается —
+// так очистка прогноза в одной единице снимает и парную величину, иначе от неё
+// осталась бы половина, посчитанная по прежнему значению.
+//
+// updated_at намеренно не трогается. Колонка служит признаком совместного
+// редактирования: сдвинуть её здесь значило бы объявить конфликт тому, кто
+// эту же строку только что и сохранил.
+func SyncNetworkForecastPairs(
+	networkID, year, quarter int,
+	rows []models.NetworkForecastMonth,
+) (int64, error) {
+	monthFrom := (quarter-1)*3 + 1
+	monthTo := monthFrom + 2
+
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var written int64
+	for _, row := range rows {
+		if row.IsDerived || row.Month < monthFrom || row.Month > monthTo {
+			continue
+		}
+		var result sql.Result
+		if row.SKU == nil || strings.TrimSpace(*row.SKU) == "" {
+			result, err = tx.Exec(
+				`UPDATE dbo.tbl_NetworkForecasts
+				 SET forecast_rub = ?, forecast_units = ?
+				 WHERE network_id = ? AND [year] = ? AND [month] = ? AND brand_as = ? AND sku IS NULL`,
+				row.ForecastRub, row.ForecastUnits,
+				networkID, year, row.Month, row.BrandAS,
+			)
+		} else {
+			result, err = tx.Exec(
+				`UPDATE dbo.tbl_NetworkForecasts
+				 SET forecast_rub = ?, forecast_units = ?
+				 WHERE network_id = ? AND [year] = ? AND [month] = ? AND brand_as = ? AND sku = ?`,
+				row.ForecastRub, row.ForecastUnits,
+				networkID, year, row.Month, row.BrandAS, strings.TrimSpace(*row.SKU),
+			)
+		}
+		if err != nil {
+			return 0, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		written += affected
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return written, nil
+}
+
+// NetworkYearsWithForecasts — сети и годы, где заведён хотя бы один прогноз.
+// Нужны пакетному пересчёту пары: план есть далеко не везде, где есть прогноз,
+// и обходить годы планов значило бы пропустить часть строк.
+func NetworkYearsWithForecasts(year int) ([]NetworkYear, error) {
+	query := `SELECT DISTINCT f.network_id, f.[year]
+		FROM dbo.tbl_NetworkForecasts f
+		JOIN dbo.tbl_Networks n ON n.id = f.network_id
+		WHERE n.is_active = 1`
+	args := []interface{}{}
+	if year > 0 {
+		query += " AND f.[year] = ?"
+		args = append(args, year)
+	}
+	query += " ORDER BY f.network_id, f.[year]"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query network forecast years: %w", err)
+	}
+	defer rows.Close()
+
+	result := []NetworkYear{}
+	for rows.Next() {
+		var item NetworkYear
+		if err := rows.Scan(&item.NetworkID, &item.Year); err != nil {
+			return nil, fmt.Errorf("scan network forecast year: %w", err)
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 // ClearNetworkForecastMonth очищает только внесённый прогноз объёма. Строки
 // сохраняются для аудита и для независимого прогноза инвестиций; системная
 // рекомендация после очистки снова становится fallback для EAC.
@@ -371,6 +471,11 @@ func ClearNetworkForecastMonth(in ClearNetworkForecastInput) (int64, error) {
 
 // UpdateNetworkPlanForecastRollup поддерживает квартальную форму совместимой с
 // новым месячным прогнозом: в старой строке сохраняется именно EAC квартала.
+//
+// Инвестиции сюда не пишутся: они подчиняются порогу выполнения, который шире
+// одного бренда и одного квартала. Их записывает SaveNetworkInvestmentColumns
+// после полного расчёта — иначе свод по одному бренду занёс бы в колонку сумму,
+// которую правило потом отменит.
 func UpdateNetworkPlanForecastRollup(networkID, year, quarter int, totals []models.NetworkForecastBrandTotals) error {
 	tx, err := config.DB.Begin()
 	if err != nil {
@@ -380,15 +485,16 @@ func UpdateNetworkPlanForecastRollup(networkID, year, quarter int, totals []mode
 	for _, total := range totals {
 		if _, err := tx.Exec(
 			`UPDATE dbo.tbl_NetworkPlans
-			 SET forecast_rub = ?, forecast_investments_rub = ?, updated_at = GETDATE()
+			 SET forecast_rub = ?, updated_at = GETDATE()
 			 WHERE network_id = ? AND [year] = ? AND [quarter] = ? AND brand_as = ?`,
-			total.EACRub, total.EACInvestmentsRub, networkID, year, quarter, total.BrandAS,
+			total.EACRub, networkID, year, quarter, total.BrandAS,
 		); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
+
 
 // NetworkContractPriceInput — редактируемые поля строки цены.
 type NetworkContractPriceInput struct {

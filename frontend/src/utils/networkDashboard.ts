@@ -76,6 +76,12 @@ export function signedShort(value: number): string {
   return `${sign}${formatRubShort(Math.abs(value))}`;
 }
 
+// То же со знаком, но с единицей: «−1,7 млрд ₽» и «−1,7 млн уп.» — разные
+// утверждения, и рядом с переключателем единиц их нельзя не различать.
+export function signedAmount(value: number, unit: Unit): string {
+  return `${signedShort(value)} ${unit === 'rub' ? '₽' : 'уп.'}`;
+}
+
 // Единицы меняют не только числа, но и подписи: «₽» рядом с упаковками врал бы.
 export function amount(value: number, unit: Unit): string {
   return unit === 'rub' ? `${formatRubShort(value)} ₽` : `${formatRubShort(value)} уп.`;
@@ -96,6 +102,9 @@ export function metricEAC(metrics: NetworkDashboardMetrics, unit: Unit): number 
 }
 export function metricPrevFact(metrics: NetworkDashboardMetrics, unit: Unit): number | null {
   return unit === 'rub' ? metrics.prevFactRub : metrics.prevFactUnits;
+}
+export function metricGap(metrics: NetworkDashboardMetrics, unit: Unit): number {
+  return unit === 'rub' ? metrics.gapRub : metrics.gapUnits;
 }
 
 // Проценты в рублях берём с сервера как есть — он их и считает. Для упаковок

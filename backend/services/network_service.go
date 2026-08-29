@@ -76,57 +76,130 @@ func paymentEACRub(plan models.NetworkPlan) *float64 {
 	return plan.FactRub
 }
 
-// EnrichNetworkPlans заполняет расчётные поля строк плана: рубли инвестиций
-// от процента — отдельно для планового объёма и для прогноза, каждый раз
-// до вычета НДС и с вычетом, если сеть работает с НДС в этом квартале.
+// EnrichNetworkPlans заполняет плановые инвестиции: процент от планового
+// объёма, в обеих базах НДС. Порога здесь нет и быть не может — план равен
+// плану по определению.
+//
+// Прогнозные и фактические инвестиции эта функция намеренно не трогает: они
+// зависят от выполнения плана в области, которая шире одной строки, и потому
+// считаются в ApplyNetworkInvestmentRule, когда квартальные итоги уже известны.
 func EnrichNetworkPlans(plans []models.NetworkPlan, periods []models.NetworkPeriod) []models.NetworkPlan {
 	byQuarter := periodsByQuarter(periods)
 
 	for i := range plans {
 		p := &plans[i]
-		period, ok := byQuarter[p.Quarter]
-		vatIncluded, vatRate := false, 0.0
-		if ok {
-			vatIncluded, vatRate = period.VATIncluded, period.VATRate
-		}
+		period := byQuarter[p.Quarter]
 
-		// Факт инвестиций пришёл суммой: процентом не пересчитывается, но базу
-		// «без НДС» показываем по ставке того же квартала.
-		if p.FactInvestmentsRub != nil {
-			net := NetRub(*p.FactInvestmentsRub, vatIncluded, vatRate)
-			p.FactInvestmentsNet = &net
-		}
-		// Официальный помесячный прогноз инвестиций агрегируется отдельно от
-		// процента. Если он сохранён, процент квартала его не перезаписывает.
-		if p.ForecastInvestmentsRub != nil {
-			net := NetRub(*p.ForecastInvestmentsRub, vatIncluded, vatRate)
-			p.ForecastInvestmentsNet = &net
-		}
-
-		if p.InvestmentsPct == nil {
+		if p.InvestmentsPct == nil || p.PlanRub == nil {
+			p.InvestmentsRub = nil
+			p.InvestmentsNet = nil
 			continue
 		}
-		if p.PlanRub != nil {
-			gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, vatIncluded, vatRate)
-			p.InvestmentsRub = &gross
-			p.InvestmentsNet = &net
-		}
-		if p.ForecastRub != nil && p.ForecastInvestmentsRub == nil {
-			gross, net := investmentsFor(*p.ForecastRub, *p.InvestmentsPct, vatIncluded, vatRate)
-			p.ForecastInvestmentsRub = &gross
-			p.ForecastInvestmentsNet = &net
-		}
+		gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
+		p.InvestmentsRub = &gross
+		p.InvestmentsNet = &net
 	}
 	return plans
+}
+
+// ApplyNetworkInvestmentRule считает прогнозные и фактические инвестиции по
+// одному правилу: объём × процент, если объём закрыл план своей области, иначе
+// ноль. Прогнозные меряются прогнозом, фактические — фактом; всё остальное в
+// правиле общее, поэтому и код общий.
+//
+// Ноль и «не считается» — разные вещи: строка без процента остаётся с nil,
+// строка с процентом, не закрывшая план, получает явный ноль. Иначе потребитель
+// не отличил бы незаполненную ставку от заработанного ничего.
+func ApplyNetworkInvestmentRule(
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+	totals []NetworkPlanTotals,
+	groups []models.NetworkPeriodGroup,
+) []models.NetworkPlan {
+	byQuarter := periodsByQuarter(periods)
+
+	for i := range plans {
+		row := &plans[i]
+		row.InvestmentScope = ""
+		row.InvestmentPeriodStartQuarter = 0
+		row.InvestmentPeriodEndQuarter = 0
+		row.ForecastCompletionPct = nil
+		row.FactCompletionPct = nil
+		row.ForecastInvestmentsEarned = false
+		row.FactInvestmentsEarned = false
+		// Строка пула инвестиций не ведёт: процент задаётся бренду.
+		if row.BrandAS == nil {
+			continue
+		}
+
+		period := byQuarter[row.Quarter]
+
+		forecastPlan, forecastGot, startQuarter, endQuarter, scope :=
+			investmentEvaluation(*row, groups, plans, totals, achievedByForecast)
+		factPlan, factGot, _, _, _ :=
+			investmentEvaluation(*row, groups, plans, totals, achievedByFact)
+
+		row.InvestmentScope = scope
+		row.InvestmentPeriodStartQuarter = startQuarter
+		row.InvestmentPeriodEndQuarter = endQuarter
+		row.ForecastCompletionPct = completionPct(forecastGot, forecastPlan)
+		row.FactCompletionPct = completionPct(factGot, factPlan)
+		row.ForecastInvestmentsEarned = forecastPlan > 0 && forecastGot >= forecastPlan
+		row.FactInvestmentsEarned = factPlan > 0 && factGot >= factPlan
+
+		// «Оплата от факта» — договор без порога: процент начисляется с любого
+		// отгруженного рубля. Область при этом всегда собственная строка.
+		if row.PayInvestmentsFromFact {
+			row.InvestmentScope = "fact"
+			row.InvestmentPeriodStartQuarter = row.Quarter
+			row.InvestmentPeriodEndQuarter = row.Quarter
+			row.ForecastInvestmentsEarned = true
+			row.FactInvestmentsEarned = true
+		}
+
+		// Прогнозные. Введённое человеком переопределение порог не отменяет:
+		// разовая выплата вне процента — осознанное решение, а не расчёт.
+		if !row.ForecastInvestmentsOverridden {
+			row.ForecastInvestmentsRub, row.ForecastInvestmentsNet = investmentsOrZero(
+				row.ForecastInvestmentsEarned, paymentEACRub(*row), row.InvestmentsPct, period,
+			)
+		} else if row.ForecastInvestmentsRub != nil {
+			net := NetRub(*row.ForecastInvestmentsRub, period.VATIncluded, period.VATRate)
+			row.ForecastInvestmentsNet = &net
+		}
+
+		// Фактические. База — только отгруженное: инвестиции по факту
+		// появляются по закрытии периода, а не по ожиданию.
+		row.FactInvestmentsRub, row.FactInvestmentsNet = investmentsOrZero(
+			row.FactInvestmentsEarned, row.FactRub, row.InvestmentsPct, period,
+		)
+	}
+	return plans
+}
+
+// investmentsOrZero — общий хвост правила: процент от объёма при пройденном
+// пороге, явный ноль при непройденном, nil когда считать нечем.
+func investmentsOrZero(
+	earned bool,
+	volume, pct *float64,
+	period models.NetworkPeriod,
+) (gross, net *float64) {
+	if pct == nil || volume == nil {
+		return nil, nil
+	}
+	if !earned {
+		zero, zeroNet := 0.0, 0.0
+		return &zero, &zeroNet
+	}
+	grossValue, netValue := investmentsFor(*volume, *pct, period.VATIncluded, period.VATRate)
+	return &grossValue, &netValue
 }
 
 // CalculateNetworkTotals считает итоги по кварталам.
 // Строка без бренда — общий объём валового контракта; бренды с in_gross его
 // распределяют, остаток показывается отдельно. Бренды без in_gross к пулу
 // отношения не имеют и в остаток не попадают.
-func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.NetworkPeriod) []NetworkPlanTotals {
-	byQuarter := periodsByQuarter(periods)
-
+func CalculateNetworkTotals(plans []models.NetworkPlan, _ []models.NetworkPeriod) []NetworkPlanTotals {
 	totals := make([]NetworkPlanTotals, 4)
 	for i := range totals {
 		totals[i].Quarter = i + 1
@@ -137,7 +210,6 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.Network
 			continue
 		}
 		t := &totals[p.Quarter-1]
-		period := byQuarter[p.Quarter]
 
 		// Строка пула: объём контракта целиком, инвестиции по ней не ведутся.
 		if p.BrandAS == nil {
@@ -175,36 +247,15 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, periods []models.Network
 		if eac := paymentEACRub(p); eac != nil {
 			t.EACRub = round2(t.EACRub + *eac)
 		}
-		if p.FactInvestmentsRub != nil {
-			t.FactInvestmentsRub = round2(t.FactInvestmentsRub + *p.FactInvestmentsRub)
-			t.FactInvestmentsRubNet = round2(t.FactInvestmentsRubNet +
-				NetRub(*p.FactInvestmentsRub, period.VATIncluded, period.VATRate))
-		}
-		if p.ForecastInvestmentsRub != nil {
-			t.ForecastInvestmentsRub = round2(t.ForecastInvestmentsRub + *p.ForecastInvestmentsRub)
-			t.ForecastInvestmentsRubNet = round2(t.ForecastInvestmentsRubNet +
-				NetRub(*p.ForecastInvestmentsRub, period.VATIncluded, period.VATRate))
-		}
-		if p.PayableInvestmentsRub != nil {
-			t.PayableInvestmentsRub = round2(t.PayableInvestmentsRub + *p.PayableInvestmentsRub)
-		}
-		if p.PayableInvestmentsRubNet != nil {
-			t.PayableInvestmentsRubNet = round2(t.PayableInvestmentsRubNet + *p.PayableInvestmentsRubNet)
-		}
-
-		if p.InvestmentsPct == nil {
-			continue
-		}
-		if p.PlanRub != nil {
-			gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
-			t.InvestmentsRub = round2(t.InvestmentsRub + gross)
-			t.InvestmentsRubNet = round2(t.InvestmentsRubNet + net)
-		}
-		if p.ForecastRub != nil && p.ForecastInvestmentsRub == nil {
-			gross, net := investmentsFor(*p.ForecastRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
-			t.ForecastInvestmentsRub = round2(t.ForecastInvestmentsRub + gross)
-			t.ForecastInvestmentsRubNet = round2(t.ForecastInvestmentsRubNet + net)
-		}
+		// Инвестиции уже посчитаны по строке — здесь только сложение. Своей
+		// арифметики у итога нет намеренно: иначе появилась бы вторая, которая
+		// однажды разойдётся со строкой.
+		t.InvestmentsRub = round2(t.InvestmentsRub + models.ValFloat(p.InvestmentsRub))
+		t.InvestmentsRubNet = round2(t.InvestmentsRubNet + models.ValFloat(p.InvestmentsNet))
+		t.ForecastInvestmentsRub = round2(t.ForecastInvestmentsRub + models.ValFloat(p.ForecastInvestmentsRub))
+		t.ForecastInvestmentsRubNet = round2(t.ForecastInvestmentsRubNet + models.ValFloat(p.ForecastInvestmentsNet))
+		t.FactInvestmentsRub = round2(t.FactInvestmentsRub + models.ValFloat(p.FactInvestmentsRub))
+		t.FactInvestmentsRubNet = round2(t.FactInvestmentsRubNet + models.ValFloat(p.FactInvestmentsNet))
 	}
 
 	for i := range totals {
@@ -261,8 +312,6 @@ func SumYearTotals(totals []NetworkPlanTotals) NetworkPlanTotals {
 		year.FactInvestmentsRub = round2(year.FactInvestmentsRub + t.FactInvestmentsRub)
 		year.FactInvestmentsRubNet = round2(year.FactInvestmentsRubNet + t.FactInvestmentsRubNet)
 		year.EACRub = round2(year.EACRub + t.EACRub)
-		year.PayableInvestmentsRub = round2(year.PayableInvestmentsRub + t.PayableInvestmentsRub)
-		year.PayableInvestmentsRubNet = round2(year.PayableInvestmentsRubNet + t.PayableInvestmentsRubNet)
 
 		if t.GrossPoolRub != nil {
 			addOptional(&year.GrossPoolRub, *t.GrossPoolRub)
@@ -315,8 +364,6 @@ func CalculateNetworkPeriodGroupTotals(
 				combined.FactInvestmentsRub = round2(combined.FactInvestmentsRub + t.FactInvestmentsRub)
 				combined.FactInvestmentsRubNet = round2(combined.FactInvestmentsRubNet + t.FactInvestmentsRubNet)
 				combined.EACRub = round2(combined.EACRub + t.EACRub)
-				combined.PayableInvestmentsRub = round2(combined.PayableInvestmentsRub + t.PayableInvestmentsRub)
-				combined.PayableInvestmentsRubNet = round2(combined.PayableInvestmentsRubNet + t.PayableInvestmentsRubNet)
 			}
 			combined.CompletionPct = completionPct(combined.EACRub, combined.PlanRub)
 			combined.Completed = combined.PlanRub > 0 && combined.EACRub >= combined.PlanRub
@@ -341,8 +388,6 @@ func CalculateNetworkPeriodGroupTotals(
 			if eac := paymentEACRub(plan); eac != nil {
 				combined.EACRub = round2(combined.EACRub + *eac)
 			}
-			combined.PayableInvestmentsRub = round2(combined.PayableInvestmentsRub + models.ValFloat(plan.PayableInvestmentsRub))
-			combined.PayableInvestmentsRubNet = round2(combined.PayableInvestmentsRubNet + models.ValFloat(plan.PayableInvestmentsRubNet))
 		}
 		combined.CompletionPct = completionPct(combined.EACRub, combined.PlanRub)
 		combined.Completed = combined.PlanRub > 0 && combined.EACRub >= combined.PlanRub
@@ -352,15 +397,29 @@ func CalculateNetworkPeriodGroupTotals(
 	return result
 }
 
-// paymentEvaluation возвращает план и EAC области, по которой проверяется порог
-// 100% для конкретной строки. Портфельное объединение действует на все бренды
-// диапазона, брендовое — только на выбранный бренд. Без объединения валовые
-// бренды оцениваются вместе по пулу квартала, отдельные — по собственной строке.
-func paymentEvaluation(
+// achievedRub — мера достижения, по которой проверяется порог. Их две:
+// прогнозная (EAC) для прогнозных инвестиций и фактическая для фактических.
+// Правило порога от выбора не зависит — зависит только то, чем меряют.
+type achievedRub func(models.NetworkPlan) *float64
+
+// achievedByForecast — EAC строки: факт закрытых месяцев плюс прогноз открытых.
+func achievedByForecast(plan models.NetworkPlan) *float64 { return paymentEACRub(plan) }
+
+// achievedByFact — только отгруженное. Прогноз сюда не входит намеренно:
+// фактические инвестиции появляются по закрытии периода, а не по ожиданию.
+func achievedByFact(plan models.NetworkPlan) *float64 { return plan.FactRub }
+
+// investmentEvaluation возвращает план и достигнутое по области, в которой
+// проверяется порог 100% для конкретной строки. Портфельное объединение
+// действует на все бренды диапазона, брендовое — только на выбранный бренд.
+// Без объединения валовые бренды оцениваются вместе по пулу квартала,
+// отдельные — по собственной строке.
+func investmentEvaluation(
 	plan models.NetworkPlan,
 	groups []models.NetworkPeriodGroup,
 	plans []models.NetworkPlan,
 	totals []NetworkPlanTotals,
+	achieved achievedRub,
 ) (planRub, eacRub float64, startQuarter, endQuarter int, scope string) {
 	startQuarter, endQuarter = plan.Quarter, plan.Quarter
 	var selected *models.NetworkPeriodGroup
@@ -392,8 +451,8 @@ func paymentEvaluation(
 				if candidate.BrandAS == nil || candidate.Quarter < startQuarter || candidate.Quarter > endQuarter {
 					continue
 				}
-				if eac := paymentEACRub(candidate); eac != nil {
-					eacRub = round2(eacRub + *eac)
+				if value := achieved(candidate); value != nil {
+					eacRub = round2(eacRub + *value)
 				}
 			}
 			return
@@ -426,8 +485,8 @@ func paymentEvaluation(
 			if candidate.BrandAS == nil || !candidate.InGross || candidate.Quarter != plan.Quarter {
 				continue
 			}
-			if eac := paymentEACRub(candidate); eac != nil {
-				eacRub = round2(eacRub + *eac)
+			if value := achieved(candidate); value != nil {
+				eacRub = round2(eacRub + *value)
 			}
 		}
 		return
@@ -435,78 +494,28 @@ func paymentEvaluation(
 
 	scope = "brand"
 	planRub = models.ValFloat(plan.PlanRub)
-	if eac := paymentEACRub(plan); eac != nil {
-		eacRub = *eac
+	if value := achieved(plan); value != nil {
+		eacRub = *value
 	}
 	return
 }
 
-// CalculateNetworkInvestmentPayments применяет правило выплаты к строкам.
-// Обычный режим: EAC × процент только после 100% выполнения применённого
-// периода. «Оплата от факта»: fact × процент всегда, без порога.
-func CalculateNetworkInvestmentPayments(
-	plans []models.NetworkPlan,
-	periods []models.NetworkPeriod,
-	totals []NetworkPlanTotals,
-	groups []models.NetworkPeriodGroup,
-) []models.NetworkPlan {
-	byQuarter := periodsByQuarter(periods)
-	for i := range plans {
-		row := &plans[i]
-		row.PaymentBaseRub = nil
-		row.PaymentCompletionPct = nil
-		row.PaymentEligible = false
-		row.PaymentPeriodStartQuarter = 0
-		row.PaymentPeriodEndQuarter = 0
-		row.PaymentScope = ""
-		row.PayableInvestmentsRub = nil
-		row.PayableInvestmentsRubNet = nil
-		if row.BrandAS == nil {
-			continue
-		}
-
-		planRub, eacRub, startQuarter, endQuarter, scope := paymentEvaluation(*row, groups, plans, totals)
-		row.PaymentCompletionPct = completionPct(eacRub, planRub)
-		row.PaymentPeriodStartQuarter = startQuarter
-		row.PaymentPeriodEndQuarter = endQuarter
-		row.PaymentScope = scope
-		row.PaymentEligible = planRub > 0 && eacRub >= planRub
-
-		var base *float64
-		if row.PayInvestmentsFromFact {
-			base = row.FactRub
-			row.PaymentEligible = true
-			row.PaymentScope = "fact"
-			row.PaymentPeriodStartQuarter = row.Quarter
-			row.PaymentPeriodEndQuarter = row.Quarter
-		} else {
-			base = paymentEACRub(*row)
-		}
-		if base != nil {
-			value := round2(*base)
-			row.PaymentBaseRub = &value
-		}
-		if !row.PaymentEligible || base == nil || row.InvestmentsPct == nil {
-			continue
-		}
-		period := byQuarter[row.Quarter]
-		gross, net := investmentsFor(*base, *row.InvestmentsPct, period.VATIncluded, period.VATRate)
-		row.PayableInvestmentsRub = &gross
-		row.PayableInvestmentsRubNet = &net
-	}
-	return plans
-}
-
-// BuildNetworkPlanCalculations выполняет расчёты в правильном порядке:
-// сначала базовые суммы и EAC, затем право на выплату, затем итоги с выплатой.
+// BuildNetworkPlanCalculations выполняет расчёты в правильном порядке и
+// является единственным входом в них: плановые инвестиции, затем квартальные
+// итоги объёма (по ним проверяется порог валового пула), затем правило
+// инвестиций, затем окончательные итоги.
+//
+// Порядок здесь не деталь реализации: порог смотрит шире одной строки, поэтому
+// посчитать инвестиции до итогов объёма нельзя, а сложить итоги до инвестиций —
+// значит сложить не то.
 func BuildNetworkPlanCalculations(
 	plans []models.NetworkPlan,
 	periods []models.NetworkPeriod,
 	groups []models.NetworkPeriodGroup,
 ) ([]models.NetworkPlan, []NetworkPlanTotals) {
 	plans = EnrichNetworkPlans(plans, periods)
-	baseTotals := CalculateNetworkTotals(plans, periods)
-	plans = CalculateNetworkInvestmentPayments(plans, periods, baseTotals, groups)
+	volumeTotals := CalculateNetworkTotals(plans, periods)
+	plans = ApplyNetworkInvestmentRule(plans, periods, volumeTotals, groups)
 	return plans, CalculateNetworkTotals(plans, periods)
 }
 
@@ -572,10 +581,12 @@ func CalculateNetworkAnnualInvestmentCumulative(
 			}
 		}
 
-		if plan.Quarter < 4 && plan.FactInvestmentsRub != nil {
-			row.PaidInvestmentsRub = round2(row.PaidInvestmentsRub + *plan.FactInvestmentsRub)
+		// Вычитается именно перечисленное по документам, а не посчитанное
+		// правилом: иначе доплата всегда сходилась бы в ноль сама с собой.
+		if plan.Quarter < 4 && plan.PaidInvestmentsRub != nil {
+			row.PaidInvestmentsRub = round2(row.PaidInvestmentsRub + *plan.PaidInvestmentsRub)
 			row.PaidInvestmentsRubNet = round2(row.PaidInvestmentsRubNet +
-				NetRub(*plan.FactInvestmentsRub, period.VATIncluded, period.VATRate))
+				NetRub(*plan.PaidInvestmentsRub, period.VATIncluded, period.VATRate))
 		}
 		if plan.Quarter == 4 && plan.ForecastInvestmentsRub != nil {
 			row.Q4ForecastInvestmentsRub = round2(row.Q4ForecastInvestmentsRub + *plan.ForecastInvestmentsRub)
@@ -727,7 +738,9 @@ func PreviewNetworkPlans(
 			plan.FactRub = saved.FactRub
 			plan.ForecastRub = saved.ForecastRub
 			plan.FactInvestmentsRub = saved.FactInvestmentsRub
+			plan.PaidInvestmentsRub = saved.PaidInvestmentsRub
 			plan.ForecastInvestmentsRub = saved.ForecastInvestmentsRub
+			plan.ForecastInvestmentsOverridden = saved.ForecastInvestmentsOverridden
 			plan.PayInvestmentsFromFact = saved.PayInvestmentsFromFact
 			plan.UpdatedBy = saved.UpdatedBy
 			plan.UpdatedAt = saved.UpdatedAt
@@ -735,7 +748,8 @@ func PreviewNetworkPlans(
 		plans = append(plans, plan)
 	}
 
-	plans = EnrichNetworkPlans(plans, periods)
-	totals := CalculateNetworkTotals(plans, periods)
+	// Тот же вход в расчёт, что и после сохранения: черновик обязан показывать
+	// ровно те инвестиции, которые получатся, а не приблизительные.
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, nil)
 	return plans, totals, SumYearTotals(totals)
 }

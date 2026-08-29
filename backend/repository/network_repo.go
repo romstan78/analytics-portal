@@ -369,8 +369,8 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	rows, err := config.DB.Query(
 		`SELECT p.id, p.network_id, p.[year], p.[quarter], p.brand_as, p.in_gross, p.plan_rub, p.plan_units,
 			n.month1_pct, n.month2_pct, n.month3_pct,
-			p.fact_rub, p.forecast_rub, p.investments_pct, p.fact_investments_rub,
-			p.forecast_investments_rub, p.pay_investments_from_fact,
+			p.fact_rub, p.forecast_rub, p.investments_pct, p.paid_investments_rub,
+			p.pay_investments_from_fact,
 			p.entry_level, p.entry_unit, p.updated_by,
 			CONVERT(NVARCHAR, p.updated_at, 121)
 		 FROM dbo.tbl_NetworkPlans p
@@ -389,8 +389,8 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 		var p models.NetworkPlan
 		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.BrandAS, &p.InGross,
 			&p.PlanRub, &p.PlanUnits, &p.Month1Pct, &p.Month2Pct, &p.Month3Pct,
-			&p.FactRub, &p.ForecastRub, &p.InvestmentsPct, &p.FactInvestmentsRub,
-			&p.ForecastInvestmentsRub, &p.PayInvestmentsFromFact, &p.EntryLevel, &p.EntryUnit,
+			&p.FactRub, &p.ForecastRub, &p.InvestmentsPct, &p.PaidInvestmentsRub,
+			&p.PayInvestmentsFromFact, &p.EntryLevel, &p.EntryUnit,
 			&p.UpdatedBy, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -1048,6 +1048,84 @@ func GetBrandOptions() ([]string, error) {
 			return nil, err
 		}
 		result = append(result, b)
+	}
+	return result, rows.Err()
+}
+
+// ─── Расчётные колонки инвестиций ───────────────────────────────────────────
+
+// SaveNetworkInvestmentColumns записывает шесть расчётных сумм и платёжный
+// факт в квартальные строки года.
+//
+// Колонки — денормализованное зеркало для внешних потребителей: ежедневной
+// выгрузки, BI и интеграций. Экраны портала продолжают считать на лету, поэтому
+// пропущенная запись не может показать пользователю устаревшие деньги — она
+// может только задержать их снаружи до следующего пересчёта.
+func SaveNetworkInvestmentColumns(plans []models.NetworkPlan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	tx, err := config.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, plan := range plans {
+		if plan.ID == 0 {
+			continue
+		}
+		if _, err := tx.Exec(
+			`UPDATE dbo.tbl_NetworkPlans
+			    SET plan_investments_rub = ?, plan_investments_rub_net = ?,
+			        forecast_investments_rub = ?, forecast_investments_rub_net = ?,
+			        fact_investments_rub = ?, fact_investments_rub_net = ?
+			  WHERE id = ?`,
+			plan.InvestmentsRub, plan.InvestmentsNet,
+			plan.ForecastInvestmentsRub, plan.ForecastInvestmentsNet,
+			plan.FactInvestmentsRub, plan.FactInvestmentsNet,
+			plan.ID,
+		); err != nil {
+			return fmt.Errorf("save investment columns for plan %d: %w", plan.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// NetworkYear — сеть и год, за которые надо пересчитать инвестиции.
+type NetworkYear struct {
+	NetworkID int
+	Year      int
+}
+
+// NetworkYearsWithPlans перечисляет пары «сеть × год», где вообще есть планы.
+// Нужен пакетному пересчёту после ежедневной заливки факта: обходить сети,
+// которых нет в реестре, незачем.
+func NetworkYearsWithPlans(year int) ([]NetworkYear, error) {
+	query := `SELECT DISTINCT p.network_id, p.[year]
+		FROM dbo.tbl_NetworkPlans p
+		JOIN dbo.tbl_Networks n ON n.id = p.network_id
+		WHERE n.is_active = 1`
+	args := []interface{}{}
+	if year > 0 {
+		query += " AND p.[year] = ?"
+		args = append(args, year)
+	}
+	query += " ORDER BY p.network_id, p.[year]"
+
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query network years: %w", err)
+	}
+	defer rows.Close()
+
+	result := []NetworkYear{}
+	for rows.Next() {
+		var item NetworkYear
+		if err := rows.Scan(&item.NetworkID, &item.Year); err != nil {
+			return nil, fmt.Errorf("scan network year: %w", err)
+		}
+		result = append(result, item)
 	}
 	return result, rows.Err()
 }

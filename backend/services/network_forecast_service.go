@@ -288,10 +288,13 @@ func brandWeightedPrice(
 }
 
 // ownedMetrics приводит пару «рубли / упаковки» к единице ввода: введённая
-// метрика остаётся как есть, вторая пересчитывается по цене контракта.
-// Хранить обе нельзя — цена меняется по периодам, и однажды сохранённая пара
-// перестанет сходиться сама с собой. Без цены вторая метрика остаётся пустой:
-// выдумывать курс пересчёта незачем.
+// метрика остаётся как есть, вторая пересчитывается по цене контракта. Без
+// цены вторая метрика остаётся пустой: выдумывать курс пересчёта незачем.
+//
+// Посчитанная пара закрепляется в БД (см. SyncNetworkForecastPairs): колонки
+// читает не только форма, а витрина реестра и выгрузки пересчитать по прайсу
+// не могут. Расходиться сама с собой пара не начнёт — правка цен запускает
+// пересчёт тем же путём, что и правка самого прогноза.
 func ownedMetrics(rub, units *float64, entryUnit string, price *float64) (*float64, *float64) {
 	if entryUnit == "units" {
 		rub = nil
@@ -381,6 +384,7 @@ func BuildNetworkForecast(
 	forecasts []models.NetworkForecastLine,
 	promos []models.NetworkPromoIndicator,
 	prices []models.NetworkContractPrice,
+	groups []models.NetworkPeriodGroup,
 	now time.Time,
 ) models.NetworkForecastResponse {
 	monthFrom := (quarter-1)*3 + 1
@@ -624,7 +628,12 @@ func BuildNetworkForecast(
 		}
 	}
 
-	planTotals := CalculateNetworkTotals(plans, periods)[quarter-1]
+	// Порог выполнения. Считается здесь, а не на входе: инвестиции меряются
+	// тем EAC, который эта же функция только что собрала, а квартальные
+	// колонки плана могут быть ещё не обновлены сводом.
+	applyForecastInvestmentRule(plans, periods, groups, year, quarter, rows, brandTotals)
+
+	planTotals := CalculateNetworkTotals(EnrichNetworkPlans(clonePlans(plans), periods), periods)[quarter-1]
 	totals := models.NetworkForecastTotals{
 		PlanRub:            planTotals.ContractPlanRub,
 		PlanInvestmentsRub: planTotals.InvestmentsRub,
@@ -645,6 +654,96 @@ func BuildNetworkForecast(
 	return models.NetworkForecastResponse{
 		Network: network, Year: year, Quarter: quarter,
 		Months: rows, Brands: brandTotals, Totals: totals,
+	}
+}
+
+// brandHasOverride — в квартале есть месяц с введённой руками суммой инвестиций.
+// Такую сумму порог не гасит, поэтому свод обязан донести признак до строки плана.
+func brandHasOverride(rows []models.NetworkForecastMonth, brand string) bool {
+	for _, row := range rows {
+		if row.BrandAS == brand && row.SKU == nil && row.InvestmentsSource == "override" {
+			return true
+		}
+	}
+	return false
+}
+
+// clonePlans — копия строк для расчёта, который не должен трогать вход.
+func clonePlans(plans []models.NetworkPlan) []models.NetworkPlan {
+	result := make([]models.NetworkPlan, len(plans))
+	copy(result, plans)
+	return result
+}
+
+// applyForecastInvestmentRule приводит вкладку «Прогноз» к общему правилу:
+// прогнозные инвестиции бренда, не закрывшего план своей области, обнуляются.
+//
+// Гасится весь квартал бренда целиком, а не отдельные месяцы. Порог — величина
+// квартальная (а с правилом зачёта и шире), помесячной доли у него нет, и
+// обнуление части месяцев развело бы сумму месяцев с итогом бренда.
+func applyForecastInvestmentRule(
+	plans []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+	groups []models.NetworkPeriodGroup,
+	year, quarter int,
+	rows []models.NetworkForecastMonth,
+	brandTotals []models.NetworkForecastBrandTotals,
+) {
+	// Свежие EAC и факт этого квартала кладутся в копию строк плана: правило
+	// должно мерить то, что показано на экране, а не то, что успело сохраниться.
+	fresh := clonePlans(plans)
+	byBrand := make(map[string]models.NetworkForecastBrandTotals, len(brandTotals))
+	for _, brand := range brandTotals {
+		byBrand[brand.BrandAS] = brand
+	}
+	for i := range fresh {
+		row := &fresh[i]
+		if row.Quarter != quarter || row.BrandAS == nil {
+			continue
+		}
+		total, ok := byBrand[*row.BrandAS]
+		if !ok {
+			continue
+		}
+		row.FactRub = rollupValue(total.FactRub)
+		row.ForecastRub = rollupValue(total.EACRub)
+	}
+
+	calculated, _ := BuildNetworkPlanCalculations(fresh, periods, groups)
+	earned := make(map[string]bool, len(brandTotals))
+	for _, row := range calculated {
+		if row.Quarter != quarter || row.BrandAS == nil {
+			continue
+		}
+		earned[*row.BrandAS] = row.ForecastInvestmentsEarned
+	}
+
+	zero := 0.0
+	for i := range rows {
+		row := &rows[i]
+		if row.EACInvestmentsRub == nil || earned[row.BrandAS] {
+			continue
+		}
+		// Введённое человеком переопределение порогом не отменяется.
+		if row.InvestmentsSource == "override" {
+			continue
+		}
+		row.EACInvestmentsRub = &zero
+		row.InvestmentsSource = "unearned"
+	}
+	for i := range brandTotals {
+		total := &brandTotals[i]
+		if earned[total.BrandAS] {
+			continue
+		}
+		total.EACInvestmentsRub = 0
+		for _, row := range rows {
+			if row.BrandAS == total.BrandAS && row.SKU == nil && row.InvestmentsSource == "override" &&
+				row.EACInvestmentsRub != nil {
+				total.EACInvestmentsRub = round2(total.EACInvestmentsRub + *row.EACInvestmentsRub)
+			}
+		}
+		total.InvestmentVarianceRub = round2(total.EACInvestmentsRub - total.PlanInvestmentsRub)
 	}
 }
 
@@ -709,6 +808,7 @@ func ApplyForecastRollup(
 	forecasts []models.NetworkForecastLine,
 	promos []models.NetworkPromoIndicator,
 	prices []models.NetworkContractPrice,
+	groups []models.NetworkPeriodGroup,
 	now time.Time,
 ) []models.NetworkPlan {
 	for quarter := 1; quarter <= 4; quarter++ {
@@ -719,7 +819,7 @@ func ApplyForecastRollup(
 			network, year, quarter, plans, periods, facts,
 			forecastLinesOfQuarter(forecasts, quarter),
 			promoIndicatorsOfQuarter(promos, quarter),
-			prices, now,
+			prices, groups, now,
 		)
 		byBrand := make(map[string]models.NetworkForecastBrandTotals, len(response.Brands))
 		for _, brand := range response.Brands {
@@ -739,8 +839,10 @@ func ApplyForecastRollup(
 			}
 			plan.FactRub = rollupValue(total.FactRub)
 			plan.ForecastRub = rollupValue(total.EACRub)
+			plan.PaidInvestmentsRub = rollupValue(total.FactInvestmentsRub)
 			plan.FactInvestmentsRub = rollupValue(total.FactInvestmentsRub)
 			plan.ForecastInvestmentsRub = rollupValue(total.EACInvestmentsRub)
+			plan.ForecastInvestmentsOverridden = brandHasOverride(response.Months, *plan.BrandAS)
 		}
 	}
 	return plans

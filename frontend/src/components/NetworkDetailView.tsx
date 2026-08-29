@@ -25,6 +25,7 @@ import {
   TableBody,
   TableCell,
   TableContainer,
+  TableFooter,
   TableHead,
   TableRow,
   ToggleButton,
@@ -71,9 +72,12 @@ import {
   growthOf,
   metricEAC,
   metricFact,
+  metricGap,
   metricPlan,
   metricPrevFact,
   pctLabel,
+  ratioPct,
+  signedAmount,
   signedShort,
 } from '../utils/networkDashboard';
 import type { Unit } from '../utils/networkDashboard';
@@ -187,7 +191,7 @@ function GapTooltip({ active, payload, unit }: {
       <Typography variant="caption" sx={{ display: 'block' }}>План: {amountFull(metricPlan(metrics, unit), unit)}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Прогноз итога: {amountFull(metricEAC(metrics, unit), unit)}</Typography>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: gapColor(point.value) }}>
-        Отклонение: {signedShort(point.value)} ₽
+        Отклонение: {signedAmount(point.value, unit)}
       </Typography>
       <Typography variant="caption" sx={{ display: 'block', color: INK_MUTED }}>
         К прошлому году: {growthLabel(growthOf(metrics, unit))}
@@ -251,7 +255,12 @@ function InvestmentTooltip({ active, payload, year }: {
     <Paper sx={{ p: 1.25, border: `1px solid ${BORDER}`, maxWidth: 280 }}>
       <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{point.tick} {year}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>План: {formatRubShort(point.plan)} ₽</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>Ожидаемые: {formatRubShort(point.eac)} ₽</Typography>
+      <Typography variant="caption" sx={{ display: 'block' }}>Прогноз: {formatRubShort(point.eac)} ₽</Typography>
+      {point.eac < point.plan && (
+        <Typography variant="caption" sx={{ display: 'block', color: INK_MUTED }}>
+          Недобор {formatRubShort(point.plan - point.eac)} ₽: план выполнен не всеми брендами
+        </Typography>
+      )}
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: gapColor(-variance) }}>
         {variance >= 0 ? 'Перерасход' : 'Экономия'}: {signedShort(variance)} ₽
       </Typography>
@@ -369,16 +378,65 @@ export default function NetworkDetailView({
   const gaps = useMemo(() => {
     if (!data) return [];
     return [...data.brands]
-      .map((item) => ({ name: item.name, value: item.metrics.gapRub, item }))
+      .map((item) => ({ name: item.name, value: metricGap(item.metrics, unit), item }))
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
       .slice(0, 14)
       .reverse();
-  }, [data]);
+  }, [data, unit]);
 
   const brands = useMemo(() => {
     if (!data) return [];
     return [...data.brands].sort((a, b) => metricPlan(b.metrics, unit) - metricPlan(a.metrics, unit));
   }, [data, unit]);
+
+  // Итог по брендам складывается здесь, а не берётся из summary: строка обязана
+  // сходиться ровно с тем, что видно над ней. С обязательством по контракту она
+  // в общем случае и не совпадёт — валовый пул входит в план целиком, даже если
+  // бренды разобрали его не полностью, и разницу отдельной строкой видно.
+  //
+  // Прирост и ставка инвестиций считаются из сумм, а не усредняются по строкам:
+  // среднее из процентов дало бы бренду с планом в сто раз меньше тот же вес.
+  const brandTotals = useMemo(() => {
+    let plan = 0;
+    let fact = 0;
+    let eac = 0;
+    let prevFact = 0;
+    let hasPrev = false;
+    let eacRub = 0;
+    let eacInvestRub = 0;
+    // Бренды вне вала считаются отдельно: их план прибавляется к пулу сверху,
+    // и без этого деления нельзя ни назвать размер самого пула, ни объяснить,
+    // из чего сложилось обязательство.
+    let separatePlan = 0;
+    let separateCount = 0;
+    brands.forEach((item) => {
+      if (item.inGross === false) {
+        separatePlan += metricPlan(item.metrics, unit);
+        separateCount += 1;
+      }
+      plan += metricPlan(item.metrics, unit);
+      fact += metricFact(item.metrics, unit);
+      eac += metricEAC(item.metrics, unit);
+      const prev = metricPrevFact(item.metrics, unit);
+      if (prev != null) {
+        prevFact += prev;
+        hasPrev = true;
+      }
+      eacRub += item.metrics.eacRub;
+      eacInvestRub += item.metrics.eacInvestmentsRub;
+    });
+    return {
+      plan,
+      fact,
+      eac,
+      separatePlan,
+      separateCount,
+      completion: ratioPct(eac, plan),
+      gap: Math.round((eac - plan) * 100) / 100,
+      growth: hasPrev && prevFact > 0 ? ratioPct(fact - prevFact, prevFact) : null,
+      investmentsPct: ratioPct(eacInvestRub, eacRub),
+    };
+  }, [brands, unit]);
 
   // Кварталы бренда для раскрытия строки. Пустая карта означает, что сервер
   // разрез не прислал, — тогда раскрывать нечего и стрелки не показываются.
@@ -467,6 +525,19 @@ export default function NetworkDetailView({
   const overrun = summary.investmentVarianceRub > 0;
   const eacCompletion = eacCompletionOf(summary, unit);
 
+  // Сеть работает валовым пулом: план заведён на сеть целиком, а бренды
+  // разбирают его изнутри. Признак — сам факт остатка в ответе: null означает,
+  // что пула в срезе нет вовсе, а не что остаток нулевой.
+  const grossContract = summary.undistributedRub != null;
+  const contractPlan = metricPlan(summary, unit);
+  // Остаток считается вычитанием, а не берётся из UndistributedRub: тот есть
+  // только в рублях, а сойтись строка обязана в той единице, что на экране.
+  const undistributed = Math.round((contractPlan - brandTotals.plan) * 100) / 100;
+  const showUndistributed = grossContract && Math.abs(undistributed) >= 1;
+  // Сам пул — это обязательство без брендов, выведенных из вала: они к нему
+  // прибавляются сверху, а не входят внутрь.
+  const poolPlan = Math.round((contractPlan - brandTotals.separatePlan) * 100) / 100;
+
   return (
     <Box>
       {/* Крошки показывают глубину и путь назад; кнопка браузера при этом
@@ -500,6 +571,23 @@ export default function NetworkDetailView({
             <Typography variant="h6" sx={{ fontWeight: 780, lineHeight: 1.2 }}>{network.name}</Typography>
             <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 0.6, flexWrap: 'wrap', alignItems: 'center' }}>
               {network.kam && <Chip size="small" variant="outlined" label={network.kam} />}
+              {/* Чем заведён план, читается сразу под названием сети: от этого
+                  зависит, обязаны ли бренды сойтись с обязательством, и без
+                  метки их недобор выглядел бы ошибкой данных. */}
+              {grossContract && (
+                <MuiTooltip
+                  arrow
+                  title={brandTotals.separateCount > 0
+                    ? `Валовый пул — ${amount(poolPlan, unit)}, бренды разбирают его изнутри. Сверх него ${brandTotals.separateCount} ${pluralRu(brandTotals.separateCount, 'бренд выведен', 'бренда выведены', 'брендов выведены')} из вала на ${amount(brandTotals.separatePlan, unit)}. Вместе — обязательство ${amount(contractPlan, unit)}.`
+                    : `Обязательство заведено валовым пулом на сеть целиком — ${amount(contractPlan, unit)}. Бренды разбирают его изнутри, и их сумма меньше на нераспределённый остаток.`}
+                >
+                  <Chip
+                    size="small"
+                    label="Валовый контракт"
+                    sx={{ bgcolor: 'rgba(99,102,241,.10)', color: SERIES_PLAN, fontWeight: 700 }}
+                  />
+                </MuiTooltip>
+              )}
               <Typography variant="caption" color="text.secondary">
                 {summary.brandCount} {pluralRu(summary.brandCount, 'бренд', 'бренда', 'брендов')}
                 {' · '}
@@ -553,7 +641,7 @@ export default function NetworkDetailView({
           <KpiCard
             label="Выполнение плана"
             primary={pctLabel(eacCompletion)}
-            secondary={`${signedShort(summary.gapRub)} ₽ к обязательству`}
+            secondary={`${signedAmount(metricGap(summary, unit), unit)} к обязательству`}
             hint="Прогноз итога к плану"
             accent={eacCompletion != null && eacCompletion >= 100 ? POLARITY_POSITIVE : POLARITY_NEGATIVE}
             trend={completionTrend}
@@ -637,10 +725,20 @@ export default function NetworkDetailView({
                   width={66}
                 />
                 <Tooltip content={<MonthTooltip unit={unit} />} cursor={{ fill: 'rgba(99,102,241,.06)' }} />
-                <Bar dataKey="plan" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                {/* Подписан результат месяца, а не все три ряда: факт и прогноз
-                    друг друга исключают, поэтому на месяц приходится ровно одна
-                    подпись. План рядом с ними встал бы вплотную и слился. */}
+                {/* Подписей на месяц две: план и результат. Факт и прогноз друг
+                    друга исключают, поэтому вторая всегда одна. План подписан
+                    своим цветом — иначе рядом стоящие числа читались бы как
+                    один ряд. На двенадцати месяцах они встают плотно, поэтому
+                    подписи и включаются отдельным переключателем. */}
+                <Bar dataKey="plan" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                  {showValues && (
+                    <LabelList
+                      dataKey="plan" position="top" offset={6}
+                      formatter={(value) => labelText(value, formatRubShort)}
+                      style={{ ...BAR_LABEL_STYLE, fill: SERIES_PLAN }}
+                    />
+                  )}
+                </Bar>
                 <Bar dataKey="fact" fill={SERIES_FACT} radius={[3, 3, 0, 0]} isAnimationActive={false}>
                   {showValues && (
                     <LabelList
@@ -783,6 +881,24 @@ export default function NetworkDetailView({
                   <Fragment key={item.name}>
                   <TableRow hover>
                     <TableCell sx={{ fontWeight: 650 }}>
+                      {/* Бренд вне вала прибавляется к пулу сверху, а не входит
+                          в него. Без метки он в разрезе неотличим от остальных,
+                          и строка читается как «все бренды в пуле». */}
+                      {grossContract && item.inGross === false && (
+                        <MuiTooltip
+                          arrow
+                          title="Бренд выведен из вала: его план не входит в пул, а прибавляется к обязательству сверху."
+                        >
+                          <Chip
+                            size="small"
+                            label="вне вала"
+                            sx={{
+                              mr: 0.75, height: 18, fontSize: 10, fontWeight: 700,
+                              bgcolor: 'rgba(197,122,36,.14)', color: SERIES_EAC,
+                            }}
+                          />
+                        </MuiTooltip>
+                      )}
                       {rows > 0 && (
                         <IconButton
                           size="small"
@@ -815,8 +931,8 @@ export default function NetworkDetailView({
                         {completion == null ? '—' : `${Math.round(completion)}%`}
                       </Box>
                     </TableCell>
-                    <TableCell align="right" sx={{ ...NUMERIC_CELL, color: gapColor(item.metrics.gapRub), fontWeight: 650 }}>
-                      {signedShort(item.metrics.gapRub)} ₽
+                    <TableCell align="right" sx={{ ...NUMERIC_CELL, color: gapColor(metricGap(item.metrics, unit)), fontWeight: 650 }}>
+                      {signedAmount(metricGap(item.metrics, unit), unit)}
                     </TableCell>
                     <TableCell align="right" sx={{
                       ...NUMERIC_CELL,
@@ -921,16 +1037,106 @@ export default function NetworkDetailView({
                 );
               })}
             </TableBody>
+            {/* Итог прижат к низу и не уезжает при прокрутке: сумма нужна
+                одновременно со строками, которые в неё сложились. */}
+            <TableFooter
+              sx={{
+                position: 'sticky', bottom: 0, zIndex: 2,
+                bgcolor: 'background.paper',
+                '& td': { fontSize: 13, color: 'text.primary', borderBottom: 0 },
+              }}
+            >
+              <TableRow sx={{ '& td': { borderTop: `2px solid ${BORDER}`, fontWeight: 750 } }}>
+                <TableCell>Итого по брендам</TableCell>
+                <TableCell>
+                  <BulletBar plan={brandTotals.plan} fact={brandTotals.fact} eac={brandTotals.eac} unit={unit} />
+                </TableCell>
+                <TableCell align="right" sx={NUMERIC_CELL}>{amount(brandTotals.plan, unit)}</TableCell>
+                <TableCell align="right" sx={NUMERIC_CELL}>{amount(brandTotals.eac, unit)}</TableCell>
+                <TableCell align="center" sx={{ p: 0.5 }}>
+                  <Box sx={{
+                    px: 0.6, py: 0.2, borderRadius: 1, fontSize: 12, fontWeight: 750,
+                    display: 'inline-block', minWidth: 46, ...completionColor(brandTotals.completion),
+                  }}>
+                    {brandTotals.completion == null ? '—' : `${Math.round(brandTotals.completion)}%`}
+                  </Box>
+                </TableCell>
+                <TableCell align="right" sx={{ ...NUMERIC_CELL, color: gapColor(brandTotals.gap) }}>
+                  {signedAmount(brandTotals.gap, unit)}
+                </TableCell>
+                <TableCell align="right" sx={{
+                  ...NUMERIC_CELL,
+                  color: brandTotals.growth == null
+                    ? INK_MUTED
+                    : (brandTotals.growth >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE),
+                }}>
+                  {growthLabel(brandTotals.growth)}
+                </TableCell>
+                <TableCell align="right" sx={NUMERIC_CELL}>{pctLabel(brandTotals.investmentsPct)}</TableCell>
+              </TableRow>
+
+              {/* Остаток пула — не бренд и не забытая строка: он часть
+                  обязательства, которую бренды пока не разобрали. Без него
+                  сумма брендов не сходилась бы с контрактом, и расхождение
+                  читалось бы как ошибка данных. */}
+              {showUndistributed && (
+                <TableRow>
+                  <TableCell sx={{ color: 'text.secondary' }}>Не распределено по брендам</TableCell>
+                  <TableCell />
+                  <TableCell align="right" sx={{ ...NUMERIC_CELL, color: 'text.secondary' }}>
+                    {amount(undistributed, unit)}
+                  </TableCell>
+                  <TableCell colSpan={5} sx={{ color: 'text.secondary' }}>
+                    <Typography variant="caption">
+                      Остаток валового пула. Объёма и выполнения у него нет — бренды его ещё не разобрали.
+                      {brandTotals.separateCount > 0
+                        && ' Бренды вне вала в пул не входят: их план прибавляется к обязательству сверху.'}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              )}
+
+              {/* Обязательство выводится отдельной строкой только когда оно
+                  расходится с суммой брендов. Совпали — значит нераспределённого
+                  остатка нет, и вторая такая же строка читалась бы как ошибка. */}
+              {showUndistributed && (
+                <TableRow sx={{ '& td': { fontWeight: 750, bgcolor: 'rgba(99,102,241,.06)' } }}>
+                  <TableCell>Обязательство по контракту</TableCell>
+                  <TableCell>
+                    <BulletBar
+                      plan={contractPlan}
+                      fact={metricFact(summary, unit)}
+                      eac={metricEAC(summary, unit)}
+                      unit={unit}
+                    />
+                  </TableCell>
+                  <TableCell align="right" sx={NUMERIC_CELL}>{amount(contractPlan, unit)}</TableCell>
+                  <TableCell align="right" sx={NUMERIC_CELL}>{amount(metricEAC(summary, unit), unit)}</TableCell>
+                  <TableCell align="center" sx={{ p: 0.5 }}>
+                    <Box sx={{
+                      px: 0.6, py: 0.2, borderRadius: 1, fontSize: 12, fontWeight: 750,
+                      display: 'inline-block', minWidth: 46, ...completionColor(eacCompletion),
+                    }}>
+                      {eacCompletion == null ? '—' : `${Math.round(eacCompletion)}%`}
+                    </Box>
+                  </TableCell>
+                  <TableCell align="right" sx={{ ...NUMERIC_CELL, color: gapColor(metricGap(summary, unit)) }}>
+                    {signedAmount(metricGap(summary, unit), unit)}
+                  </TableCell>
+                  <TableCell align="right" sx={{
+                    ...NUMERIC_CELL,
+                    color: growthOf(summary, unit) == null
+                      ? INK_MUTED
+                      : ((growthOf(summary, unit) as number) >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE),
+                  }}>
+                    {growthLabel(growthOf(summary, unit))}
+                  </TableCell>
+                  <TableCell align="right" sx={NUMERIC_CELL}>{pctLabel(summary.effectiveInvestmentsPct)}</TableCell>
+                </TableRow>
+              )}
+            </TableFooter>
           </Table>
         </TableContainer>
-        {summary.undistributedRub != null && summary.undistributedRub !== 0 && (
-          <Box sx={{ px: 1.6, py: 1, borderTop: `1px solid ${BORDER}` }}>
-            <Typography variant="caption" color="text.secondary">
-              Не разобрано брендами из валового пула: {formatRubShort(summary.undistributedRub)} ₽. В сумму
-              брендов этот остаток не входит — он часть обязательства по контракту, а не отдельный бренд.
-            </Typography>
-          </Box>
-        )}
       </Paper>
 
       {/* ── Полоса 4: промо-календарь ────────────────────────────────────── */}
@@ -1027,12 +1233,12 @@ export default function NetworkDetailView({
       {/* ── Полоса 5: инвестиции ─────────────────────────────────────────── */}
       <ChartPaper
         title="Инвестиции по кварталам"
-        subtitle="План против ожидаемого, база без НДС: сети работают на разных ставках, и сравнивать их можно только так."
+        subtitle="План против прогноза, база без НДС: сети работают на разных ставках, и сравнивать их можно только так. Бренд, не закрывший план, инвестиций не приносит."
         legend={(
           <SeriesLegend
             items={[
               { label: 'План', color: SERIES_PLAN },
-              { label: 'Ожидаемые', color: SERIES_EAC },
+              { label: 'Прогноз', color: SERIES_EAC },
             ]}
           />
         )}
@@ -1074,7 +1280,7 @@ export default function NetworkDetailView({
                 />
               )}
             </Bar>
-            <Bar dataKey="eac" name="Ожидаемые" fill="url(#detail-hatch-invest)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            <Bar dataKey="eac" name="Прогноз" fill="url(#detail-hatch-invest)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false}>
               {showValues && (
                 <LabelList
                   dataKey="eac" position="top" offset={6}

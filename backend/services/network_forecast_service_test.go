@@ -31,7 +31,7 @@ func TestBuildNetworkForecastAllocatesQuarterPlanWithoutLosingKopecks(t *testing
 			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(100.01),
 			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
 		}}, nil, nil, nil, nil, nil,
-		time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
 	)
 
 	want := map[int]float64{1: 30, 2: 30, 3: 40.01}
@@ -57,7 +57,7 @@ func TestBuildNetworkForecastUsesNetworkProfileDistribution(t *testing.T) {
 			// Старое распределение строки больше не является источником.
 			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
 		}}, nil, nil, nil, nil, nil,
-		time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC),
 	)
 
 	want := map[int]float64{1: 20, 2: 30, 3: 50}
@@ -84,7 +84,7 @@ func TestBuildNetworkForecastRecommendationUsesHistoryAndApprovedPromoNotPlan(t 
 			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
 		}}, nil, facts, nil,
 		[]models.NetworkPromoIndicator{{Year: 2026, Month: 1, BrandAS: brand, PlanUpliftRub: 20, PlanUpliftUnits: 2}},
-		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	row := forecastRow(response, brand, 1, nil)
@@ -117,7 +117,7 @@ func TestBuildNetworkForecastEACUsesFactForClosedMonthAndOfficialForCurrent(t *t
 			{Year: 2026, Month: 1, BrandAS: brand, ForecastRub: models.PtrFloat(999)},
 			{Year: 2026, Month: 3, BrandAS: brand, ForecastRub: models.PtrFloat(300), ForecastInvestmentsRub: models.PtrFloat(80)},
 		}, nil, nil,
-		time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	jan := forecastRow(response, brand, 1, nil)
@@ -149,7 +149,7 @@ func TestBuildNetworkForecastConvertsSKUUnitsByEffectiveContractPrice(t *testing
 			BrandAS: brand, SKU: sku, ContractPrice: 2.5,
 			ValidFrom: "2026-01-01", ValidTo: "2026-12-31",
 		}},
-		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	skuRow := forecastRow(response, brand, 1, &sku)
@@ -186,7 +186,7 @@ func TestBuildNetworkForecastSKULevelIgnoresStoredBrandLine(t *testing.T) {
 			BrandAS: brand, SKU: sku, ContractPrice: 2.5,
 			ValidFrom: "2026-01-01", ValidTo: "2026-12-31",
 		}},
-		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	brandRow := forecastRow(response, brand, 1, nil)
@@ -228,7 +228,7 @@ func TestBuildNetworkForecastBrandLevelSplitsSKUByMix(t *testing.T) {
 			{BrandAS: brand, SKU: first, ContractPrice: 10, ValidFrom: "2026-01-01", ValidTo: "2026-12-31"},
 			{BrandAS: brand, SKU: second, ContractPrice: 20, ValidFrom: "2026-01-01", ValidTo: "2026-12-31"},
 		},
-		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	// Микс прошлого января — 30 и 10 упаковок, то есть 75 % и 25 %.
@@ -271,13 +271,53 @@ func TestBuildNetworkForecastBrandLevelUnitsUseWeightedPrice(t *testing.T) {
 			{BrandAS: brand, SKU: first, ContractPrice: 10, ValidFrom: "2026-01-01", ValidTo: "2026-12-31"},
 			{BrandAS: brand, SKU: second, ContractPrice: 20, ValidFrom: "2026-01-01", ValidTo: "2026-12-31"},
 		},
-		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	// Взвешенная цена: 10 * 0,75 + 20 * 0,25 = 12,5.
 	brandRow := forecastRow(response, brand, 1, nil)
 	if brandRow == nil || brandRow.ForecastRub == nil || *brandRow.ForecastRub != 1250 {
 		t.Fatalf("рубли бренда = %#v, ожидалось 100 уп. по взвешенной цене 12,5", brandRow)
+	}
+}
+
+// Контракт между сборкой прогноза и записью пары в БД: у введённой строки
+// заполнены обе метрики, а расчётные помечены и в БД не попадают. На этом
+// признаке держится SyncNetworkForecastPairs — иначе он записал бы бренду
+// разложение по миксу как введённый прогноз.
+func TestBuildNetworkForecastMarksOwnedRowsWithBothMetrics(t *testing.T) {
+	brand := "Альфа"
+	sku := "SKU-1"
+	response := BuildNetworkForecast(
+		models.Network{}, 2026, 1,
+		[]models.NetworkPlan{{
+			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(1000),
+			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
+			EntryLevel: "brand", EntryUnit: "rub",
+		}}, nil, nil,
+		[]models.NetworkForecastLine{
+			{Year: 2026, Month: 1, BrandAS: brand, ForecastRub: models.PtrFloat(500)},
+		}, nil,
+		[]models.NetworkContractPrice{
+			{BrandAS: brand, SKU: sku, ContractPrice: 10, ValidFrom: "2026-01-01", ValidTo: "2026-12-31"},
+		},
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+	)
+
+	brandRow := forecastRow(response, brand, 1, nil)
+	if brandRow == nil || brandRow.IsDerived {
+		t.Fatalf("строка бренда = %#v, ожидалась введённая", brandRow)
+	}
+	if brandRow.ForecastRub == nil || *brandRow.ForecastRub != 500 {
+		t.Fatalf("рубли бренда = %#v, ожидалось 500 как введено", brandRow.ForecastRub)
+	}
+	if brandRow.ForecastUnits == nil || *brandRow.ForecastUnits != 50 {
+		t.Fatalf("упаковки бренда = %#v, ожидалось 50 по цене 10", brandRow.ForecastUnits)
+	}
+
+	skuRow := forecastRow(response, brand, 1, &sku)
+	if skuRow == nil || !skuRow.IsDerived {
+		t.Fatalf("строка SKU = %#v, ожидалась расчётная: бренд ведут целиком", skuRow)
 	}
 }
 
@@ -290,7 +330,7 @@ func TestBuildNetworkForecastFallsBackToNetworkEntryMode(t *testing.T) {
 			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(100),
 			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
 		}}, nil, nil, nil, nil, nil,
-		time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2025, 12, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	row := forecastRow(response, brand, 1, nil)
@@ -309,16 +349,17 @@ func TestBuildNetworkForecastDerivesInvestmentsFromPercentOfEAC(t *testing.T) {
 			InvestmentsPct: models.PtrFloat(10),
 		}}, nil, nil,
 		[]models.NetworkForecastLine{
-			{Year: 2026, Month: 3, BrandAS: brand, ForecastRub: models.PtrFloat(300)},
+			{Year: 2026, Month: 3, BrandAS: brand, ForecastRub: models.PtrFloat(700)},
 		}, nil, nil,
-		time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
 	)
 
-	// Прогноз 300 против планового объёма месяца 240: инвестиции идут за прогнозом,
-	// а не остаются на плановых 24.
+	// Прогноз 700 против планового объёма месяца 240: инвестиции идут за прогнозом,
+	// а не остаются на плановых 24. План квартала (600) прогнозом закрыт, поэтому
+	// порог пройден и сумма не гасится.
 	mar := forecastRow(response, brand, 3, nil)
-	if mar == nil || mar.EACInvestmentsRub == nil || *mar.EACInvestmentsRub != 30 {
-		t.Fatalf("инвестиции марта = %#v, ожидалось 10%% от прогноза 300", mar.EACInvestmentsRub)
+	if mar == nil || mar.EACInvestmentsRub == nil || *mar.EACInvestmentsRub != 70 {
+		t.Fatalf("инвестиции марта = %#v, ожидалось 10%% от прогноза 700", mar.EACInvestmentsRub)
 	}
 	if mar.InvestmentsSource != "pct" {
 		t.Fatalf("источник инвестиций = %q, ожидался pct", mar.InvestmentsSource)
@@ -340,7 +381,7 @@ func TestBuildNetworkForecastWithoutVolumeLeavesInvestmentsEmpty(t *testing.T) {
 			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
 			InvestmentsPct: models.PtrFloat(10),
 		}}, nil, nil, nil, nil, nil,
-		time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	// Ни факта, ни прогноза, ни истории: объём в EAC не попал, значит и инвестиций
@@ -370,7 +411,7 @@ func TestBuildNetworkForecastKeepsManualInvestmentsOverrideVisible(t *testing.T)
 			Year: 2026, Month: 3, BrandAS: brand,
 			ForecastRub: models.PtrFloat(300), ForecastInvestmentsRub: models.PtrFloat(80),
 		}}, nil, nil,
-		time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
 	)
 
 	mar := forecastRow(response, brand, 3, nil)
@@ -410,7 +451,7 @@ func TestApplyForecastRollupFillsFactAndEACWithoutSavedColumns(t *testing.T) {
 
 	got := ApplyForecastRollup(
 		network, 2026, plans, periods, facts, forecasts, nil, nil,
-		time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
 	)
 
 	if v := models.ValFloat(got[0].FactRub); v != 210 {
@@ -447,7 +488,7 @@ func TestApplyForecastRollupLeavesUntouchedQuarterEmpty(t *testing.T) {
 	got := ApplyForecastRollup(
 		models.Network{ID: 1, Month1Pct: 30, Month2Pct: 30, Month3Pct: 40},
 		2026, plans, nil, nil, nil, nil, nil,
-		time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
+		nil, time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC),
 	)
 
 	if got[0].FactRub != nil || got[0].ForecastRub != nil {

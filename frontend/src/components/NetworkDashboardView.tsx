@@ -69,8 +69,10 @@ import {
   metricEAC,
   metricFact,
   metricPlan,
+  metricGap,
   metricPrevFact,
   pctLabel,
+  signedAmount,
   signedShort,
 } from '../utils/networkDashboard';
 import type { Dimension, Grain, Unit } from '../utils/networkDashboard';
@@ -185,7 +187,7 @@ function BreakdownTooltip({ active, payload, unit }: {
         План {amount(metricPlan(metrics, unit), unit)} · прогноз итога {amount(metricEAC(metrics, unit), unit)}
       </Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>
-        Разрыв: {signedShort(metrics.gapRub)} ₽ · выполнение {pctLabel(eacCompletionOf(metrics, unit))}
+        Разрыв: {signedAmount(metricGap(metrics, unit), unit)} · выполнение {pctLabel(eacCompletionOf(metrics, unit))}
       </Typography>
       {metrics.prevFactRub != null && (
         <Typography variant="caption" sx={{ display: 'block' }}>
@@ -193,7 +195,8 @@ function BreakdownTooltip({ active, payload, unit }: {
         </Typography>
       )}
       <Typography variant="caption" sx={{ display: 'block' }}>
-        Инвестиции без НДС: план {formatRubShort(metrics.planInvestmentsRubNet)} · прогноз {formatRubShort(metrics.eacInvestmentsRubNet)} ₽
+        Инвестиции без НДС: план {formatRubShort(metrics.planInvestmentsRubNet)} · прогноз{' '}
+        {formatRubShort(metrics.eacInvestmentsRubNet)} ₽
       </Typography>
     </Paper>
   );
@@ -224,13 +227,16 @@ export default function NetworkDashboardView({
     return data.networks;
   }, [data, dimension]);
 
+  // Крупнейшие отклонения считаются в выбранной единице целиком: сеть, которая
+  // просела в рублях из-за цены, и сеть, недогрузившая упаковки, — разные
+  // сети, и отбирать их по рублёвому разрыву в режиме упаковок нельзя.
   const drivers = useMemo(() => {
     return [...breakdown]
-      .sort((a, b) => Math.abs(b.metrics.gapRub) - Math.abs(a.metrics.gapRub))
+      .map((item) => ({ name: item.name, value: metricGap(item.metrics, unit), metrics: item.metrics, item }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
       .slice(0, 12)
-      .reverse()
-      .map((item) => ({ name: item.name, value: item.metrics.gapRub, metrics: item.metrics, item }));
-  }, [breakdown]);
+      .reverse();
+  }, [breakdown, unit]);
 
   const quarterCount = data?.selectedQuarters.length ?? 4;
   const grain: Grain = grainChoice ?? (quarterCount > 1 ? 'quarter' : 'month');
@@ -297,6 +303,10 @@ export default function NetworkDashboardView({
 
   const summary = data.summary;
   const investmentOverrun = summary.investmentVarianceRub > 0;
+  // Инвестиции, недополученные из-за невыполнения плана: разница между тем,
+  // что дал бы процент, и тем, что осталось после порога. Это не экономия,
+  // поэтому и подписывается иначе.
+  const missedInvestments = Math.max(0, summary.planInvestmentsRubNet - summary.eacInvestmentsRubNet);
   const numbersOf = (pick: (point: TrendPoint) => number | null) =>
     trendSeries.map(pick).filter((value): value is number => value != null);
   const factTrend = numbersOf((point) => point.fact);
@@ -355,7 +365,7 @@ export default function NetworkDashboardView({
           <KpiCard
             label="Прогноз итога периода"
             primary={amount(metricEAC(summary, unit), unit)}
-            secondary={`Разрыв ${signedShort(summary.gapRub)} ₽ · ${pctLabel(eacCompletionOf(summary, unit))}`}
+            secondary={`Разрыв ${signedAmount(metricGap(summary, unit), unit)} · ${pctLabel(eacCompletionOf(summary, unit))}`}
             hint="Факт закрытых месяцев плюс прогноз открытых"
             accent={SERIES_EAC}
             trend={eacTrend}
@@ -366,7 +376,9 @@ export default function NetworkDashboardView({
             label="Инвестиции без НДС"
             primary={`${formatRubShort(summary.eacInvestmentsRubNet)} ₽`}
             secondary={`План ${formatRubShort(summary.planInvestmentsRubNet)} · ${signedShort(summary.investmentVarianceRub)} ₽`}
-            hint={`Ставка к объёму ${pctLabel(summary.effectiveInvestmentsPct)}${investmentOverrun ? ' · перерасход' : ''}`}
+            hint={missedInvestments > 0
+              ? `Недобор ${formatRubShort(missedInvestments)} ₽: план выполнен не всеми брендами`
+              : `Ставка к объёму ${pctLabel(summary.effectiveInvestmentsPct)}${investmentOverrun ? ' · перерасход' : ''}`}
             accent={investmentOverrun ? POLARITY_NEGATIVE : NEUTRAL}
           />
         </Grid>
@@ -580,7 +592,7 @@ export default function NetworkDashboardView({
                                         Прошлый год: {amountFull(metricPrevFact(cell.metrics, unit) ?? 0, unit)} · {growthLabel(growthOf(cell.metrics, unit))}
                                       </Typography>
                                     )}
-                                    <Typography variant="caption" sx={{ display: 'block' }}>Разрыв: {signedShort(cell.metrics.gapRub)} ₽</Typography>
+                                    <Typography variant="caption" sx={{ display: 'block' }}>Разрыв: {signedAmount(metricGap(cell.metrics, unit), unit)}</Typography>
                                     {cell.metrics.openCellsWithoutForecast > 0 && (
                                       <Typography variant="caption" sx={{ display: 'block' }}>
                                         Без прогноза: {cell.metrics.openCellsWithoutForecast}
@@ -689,12 +701,21 @@ export default function NetworkDashboardView({
                     <TableCell align="right" sx={NUMERIC_CELL}>{pctLabel(eacCompletionOf(item.metrics, unit))}</TableCell>
                     <TableCell
                       align="right"
-                      sx={{ ...NUMERIC_CELL, fontWeight: 700, color: item.metrics.gapRub >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE }}
+                      sx={{ ...NUMERIC_CELL, fontWeight: 700, color: metricGap(item.metrics, unit) >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE }}
                     >
-                      {signedShort(item.metrics.gapRub)}
+                      {signedShort(metricGap(item.metrics, unit))}
                     </TableCell>
                     <TableCell align="right" sx={NUMERIC_CELL}>{formatRubShort(item.metrics.planInvestmentsRubNet)}</TableCell>
-                    <TableCell align="right" sx={NUMERIC_CELL}>{formatRubShort(item.metrics.eacInvestmentsRubNet)}</TableCell>
+                    <TableCell align="right" sx={NUMERIC_CELL}>
+                      <MuiTooltip
+                        arrow
+                        title={item.metrics.eacInvestmentsRubNet < item.metrics.planInvestmentsRubNet
+                          ? 'Часть брендов не закрыла план — по ним инвестиций нет'
+                          : 'Порог выполнения пройден по всем брендам среза'}
+                      >
+                        <span>{formatRubShort(item.metrics.eacInvestmentsRubNet)}</span>
+                      </MuiTooltip>
+                    </TableCell>
                     <TableCell
                       align="right"
                       sx={{ ...NUMERIC_CELL, fontWeight: 700, color: item.metrics.investmentVarianceRub > 0 ? POLARITY_NEGATIVE : 'text.primary' }}

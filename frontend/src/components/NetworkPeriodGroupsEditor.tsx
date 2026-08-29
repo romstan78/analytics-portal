@@ -182,7 +182,7 @@ export default function NetworkPeriodGroupsEditor({
 								: `${combined.completion_pct.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`}
 						</Typography>
 					</TableCell>
-					<TableCell align="right">{formatRubShort(combined?.payable_investments_rub)}</TableCell>
+					<TableCell align="right">{formatRubShort(combined?.forecast_investments_rub)}</TableCell>
                     <TableCell padding="none">
                       {canEdit && (
                         <Tooltip title="Удалить объединение">

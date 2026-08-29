@@ -73,6 +73,9 @@ export default function NetworkPricesTab({ networkId, year, canEdit }: Props) {
       queryClient.setQueryData(['network-prices', networkId, year], response.data);
       void queryClient.invalidateQueries({ queryKey: ['network-forecast', networkId, year] });
       void queryClient.invalidateQueries({ queryKey: ['networkAudit', networkId] });
+      // По цене считается парная величина прогноза — сервер пересчитывает её
+      // при этом же сохранении, и витрина обязана перечитать упаковки.
+      void queryClient.invalidateQueries({ queryKey: ['networkDashboard'] });
       setDraftEdits(null);
       setDeletedRows([]);
     },

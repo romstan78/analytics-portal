@@ -245,22 +245,23 @@ export interface NetworkPlan {
   month3_pct: number;
   fact_rub: number | null;
   forecast_rub: number | null;
-  fact_investments_rub: number | null;
-  fact_investments_rub_net: number | null;
   investments_pct: number | null;
   pay_investments_from_fact: boolean;
   investments_rub: number | null;
   investments_rub_net: number | null;
   forecast_investments_rub: number | null;
   forecast_investments_rub_net: number | null;
-  payment_base_rub: number | null;
-  payment_completion_pct: number | null;
-  payment_eligible: boolean;
-  payment_period_start_quarter: number;
-  payment_period_end_quarter: number;
-  payment_scope: string;
-  payable_investments_rub: number | null;
-  payable_investments_rub_net: number | null;
+  fact_investments_rub: number | null;
+  fact_investments_rub_net: number | null;
+  paid_investments_rub: number | null;
+  forecast_investments_overridden: boolean;
+  investment_scope: string;
+  investment_period_start_quarter: number;
+  investment_period_end_quarter: number;
+  forecast_completion_pct: number | null;
+  forecast_investments_earned: boolean;
+  fact_completion_pct: number | null;
+  fact_investments_earned: boolean;
   updated_by: string | null;
   updated_at: string;
 }
@@ -287,8 +288,6 @@ export interface NetworkPlanTotals {
   eac_rub: number;
   completion_pct: number | null;
   completed: boolean;
-  payable_investments_rub: number;
-  payable_investments_rub_net: number;
 }
 
 export interface NetworkPeriodGroup {
@@ -318,8 +317,6 @@ export interface NetworkPeriodGroupTotals {
   eac_rub: number;
   completion_pct: number | null;
   completed: boolean;
-  payable_investments_rub: number;
-  payable_investments_rub_net: number;
 }
 
 export interface NetworkAnnualInvestmentRow {
@@ -617,6 +614,7 @@ export interface NetworkDashboardMetrics {
   completionPct: number | null;
   eacCompletionPct: number | null;
   gapRub: number;
+  gapUnits: number;
   planInvestmentsRub: number;
   planInvestmentsRubNet: number;
   factInvestmentsRub: number;
@@ -679,6 +677,7 @@ export interface NetworkDashboardBreakdown {
   networkId: number | null;
   kam: string | null;
   metrics: NetworkDashboardMetrics;
+  inGross: boolean | null;
 }
 
 export interface NetworkDashboardCell {

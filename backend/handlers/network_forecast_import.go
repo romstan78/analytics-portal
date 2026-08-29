@@ -536,9 +536,11 @@ func ImportNetworkForecast(c *gin.Context) {
 		respondNetworkError(c, err, "network_forecast_import_refetch_failed")
 		return
 	}
+	syncForecastPairs(id, year, quarter, response)
 	if err := repository.UpdateNetworkPlanForecastRollup(id, year, quarter, response.Brands); err != nil {
 		config.Logger.Error("network_forecast_import_rollup_failed", "error", err.Error(), "network_id", id)
 	}
+	rebuildInvestmentColumns(id, year)
 	_ = repository.InsertEntityAuditLog(
 		"network_forecast", id, username, "IMPORT",
 		jsonString(map[string]interface{}{
@@ -588,9 +590,13 @@ func ClearNetworkForecast(c *gin.Context) {
 		respondNetworkError(c, err, "network_forecast_clear_refetch_failed")
 		return
 	}
+	// Очистка одной единицы снимает и парную: половина, посчитанная по уже
+	// стёртому значению, иначе осталась бы в БД как действующий прогноз.
+	syncForecastPairs(id, input.Year, quarter, response)
 	if err := repository.UpdateNetworkPlanForecastRollup(id, input.Year, quarter, response.Brands); err != nil {
 		config.Logger.Error("network_forecast_clear_rollup_failed", "error", err.Error(), "network_id", id)
 	}
+	rebuildInvestmentColumns(id, input.Year)
 	_ = repository.InsertEntityAuditLog(
 		"network_forecast", id, username, "CLEAR",
 		jsonString(map[string]interface{}{

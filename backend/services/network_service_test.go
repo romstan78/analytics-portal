@@ -61,7 +61,7 @@ func TestEnrichNetworkPlansAppliesVATToInvestmentsOnly(t *testing.T) {
 	}
 }
 
-func TestEnrichNetworkPlansCalculatesForecastInvestments(t *testing.T) {
+func TestInvestmentRuleCalculatesForecastInvestments(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	plans := []models.NetworkPlan{
 		// Прогноз ниже плана — инвестиции от прогноза считаются тем же процентом.
@@ -71,19 +71,27 @@ func TestEnrichNetworkPlansCalculatesForecastInvestments(t *testing.T) {
 		{Quarter: 1, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(500000), InvestmentsPct: models.PtrFloat(10)},
 	}
 
-	got := EnrichNetworkPlans(plans, periods)
+	got, _ := BuildNetworkPlanCalculations(plans, periods, nil)
 
-	if v := models.ValFloat(got[0].ForecastInvestmentsRub); v != 90000 {
-		t.Errorf("инвестиции от прогноза = %v, ожидалось 90000", v)
-	}
-	if v := models.ValFloat(got[0].ForecastInvestmentsNet); v != 75000 {
-		t.Errorf("инвестиции от прогноза без НДС = %v, ожидалось 75000", v)
+	// Прогноз ниже плана: порог не пройден, прогнозные инвестиции — ноль.
+	if v := models.ValFloat(got[0].ForecastInvestmentsRub); v != 0 {
+		t.Errorf("инвестиции от прогноза = %v, ожидался 0: план не выполнен", v)
 	}
 	if models.ValFloat(got[0].InvestmentsRub) != 120000 {
 		t.Error("инвестиции от плана не должны зависеть от прогноза")
 	}
 	if got[1].ForecastInvestmentsRub != nil || got[1].ForecastInvestmentsNet != nil {
 		t.Error("без прогноза расчётные поля прогноза не заполняются")
+	}
+
+	// Тот же процент от прогноза, но с выполненным планом.
+	plans[0].ForecastRub = models.PtrFloat(1300000)
+	got, _ = BuildNetworkPlanCalculations(plans, periods, nil)
+	if v := models.ValFloat(got[0].ForecastInvestmentsRub); v != 130000 {
+		t.Errorf("инвестиции от прогноза = %v, ожидалось 130000", v)
+	}
+	if v := models.ValFloat(got[0].ForecastInvestmentsNet); v != round2(130000/1.2) {
+		t.Errorf("инвестиции от прогноза без НДС = %v, ожидалось %v", v, round2(130000/1.2))
 	}
 }
 
@@ -98,7 +106,8 @@ func TestCalculateNetworkTotalsSplitsGrossAndSeparateBrands(t *testing.T) {
 		{Quarter: 1, BrandAS: brandPtr("Гамма"), PlanRub: models.PtrFloat(250000), InvestmentsPct: models.PtrFloat(4)},
 	}
 
-	q1 := CalculateNetworkTotals(plans, periods)[0]
+	_, allTotals := BuildNetworkPlanCalculations(plans, periods, nil)
+	q1 := allTotals[0]
 
 	if q1.PlanRub != 790000 {
 		t.Errorf("план по всем брендам = %v, ожидалось 790000", q1.PlanRub)
@@ -136,7 +145,8 @@ func TestCalculateNetworkTotalsWithoutGrossBrands(t *testing.T) {
 		{Quarter: 3, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(50000)},
 	}
 
-	q3 := CalculateNetworkTotals(plans, periods)[2]
+	_, allTotals := BuildNetworkPlanCalculations(plans, periods, nil)
+	q3 := allTotals[2]
 
 	if q3.PlanRub != 150000 || q3.SeparatePlanRub != 150000 {
 		t.Errorf("сумма по брендам = %v / %v, ожидалось 150000 / 150000", q3.PlanRub, q3.SeparatePlanRub)
@@ -182,7 +192,8 @@ func TestCalculateNetworkTotalsFactAndForecast(t *testing.T) {
 			FactRub: models.PtrFloat(90000), ForecastRub: models.PtrFloat(120000), InvestmentsPct: models.PtrFloat(5)},
 	}
 
-	q4 := CalculateNetworkTotals(plans, periods)[3]
+	_, allTotals := BuildNetworkPlanCalculations(plans, periods, nil)
+	q4 := allTotals[3]
 
 	if q4.FactRub != 300000 {
 		t.Errorf("факт = %v, ожидалось 300000", q4.FactRub)
@@ -197,58 +208,83 @@ func TestCalculateNetworkTotalsFactAndForecast(t *testing.T) {
 	if models.ValFloat(q4.GrossPoolFcstRub) != 480000 {
 		t.Errorf("прогноз пула = %v, ожидалось 480000", models.ValFloat(q4.GrossPoolFcstRub))
 	}
-	// 29000 + 6000 = 35000 до вычета НДС, / 1.2 = 29166.67.
-	if q4.ForecastInvestmentsRub != 35000 {
-		t.Errorf("инвестиции от прогноза = %v, ожидалось 35000", q4.ForecastInvestmentsRub)
+	// «Альфа» в валовом пуле: её порог — весь пул (500000), а прогноз пула
+	// всего 290000, поэтому инвестиций она не приносит. «Бета» вне пула и
+	// свой план закрыла: 120000 × 5% = 6000, / 1.2 = 5000.
+	if q4.ForecastInvestmentsRub != 6000 {
+		t.Errorf("инвестиции от прогноза = %v, ожидалось 6000", q4.ForecastInvestmentsRub)
 	}
-	if q4.ForecastInvestmentsRubNet != 29166.67 {
-		t.Errorf("инвестиции от прогноза без НДС = %v, ожидалось 29166.67", q4.ForecastInvestmentsRubNet)
+	if q4.ForecastInvestmentsRubNet != 5000 {
+		t.Errorf("инвестиции от прогноза без НДС = %v, ожидалось 5000", q4.ForecastInvestmentsRubNet)
 	}
 }
 
+// Фактические инвестиции считаются правилом от фактического ТО, а перечисленная
+// по документам сумма живёт отдельно: одну из другой вывести нельзя.
 func TestCalculateNetworkTotalsFactInvestments(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	plans := []models.NetworkPlan{
-		// Факт инвестиций пришёл загрузкой и процентом не пересчитывается:
-		// по плану вышло бы 30000, по факту закрыли 26400.
+		// План закрыт фактом: 320000 × 10% = 32000, / 1.2 = 26666.67.
 		{Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(300000),
-			InvestmentsPct: models.PtrFloat(10), FactInvestmentsRub: models.PtrFloat(26400)},
+			FactRub: models.PtrFloat(320000), InvestmentsPct: models.PtrFloat(10),
+			PaidInvestmentsRub: models.PtrFloat(26400)},
+		// План не закрыт: правило даёт ноль независимо от перечисленного.
 		{Quarter: 1, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(100000),
-			InvestmentsPct: models.PtrFloat(5)},
+			FactRub: models.PtrFloat(40000), InvestmentsPct: models.PtrFloat(5)},
 	}
 
-	q1 := CalculateNetworkTotals(plans, periods)[0]
+	got, allTotals := BuildNetworkPlanCalculations(plans, periods, nil)
+	q1 := allTotals[0]
 
 	if q1.InvestmentsRub != 35000 {
 		t.Errorf("инвестиции по плану = %v, ожидалось 35000", q1.InvestmentsRub)
 	}
-	if q1.FactInvestmentsRub != 26400 {
-		t.Errorf("факт инвестиций = %v, ожидалось 26400", q1.FactInvestmentsRub)
+	if q1.FactInvestmentsRub != 32000 {
+		t.Errorf("факт инвестиций = %v, ожидалось 32000", q1.FactInvestmentsRub)
 	}
-	// 26400 / 1.2 = 22000.
-	if q1.FactInvestmentsRubNet != 22000 {
-		t.Errorf("факт инвестиций без НДС = %v, ожидалось 22000", q1.FactInvestmentsRubNet)
+	if q1.FactInvestmentsRubNet != 26666.67 {
+		t.Errorf("факт инвестиций без НДС = %v, ожидалось 26666.67", q1.FactInvestmentsRubNet)
+	}
+	// Перечисленное правило не трогает: это платёжный факт, а не расчёт.
+	if models.ValFloat(got[0].PaidInvestmentsRub) != 26400 {
+		t.Errorf("перечислено = %v, ожидалось 26400", models.ValFloat(got[0].PaidInvestmentsRub))
 	}
 }
 
-func TestEnrichNetworkPlansComputesFactInvestmentsNet(t *testing.T) {
+// Обе базы НДС заполняются всегда. У сети без НДС они равны — это обещание
+// потребителю колонок, а не совпадение.
+func TestInvestmentRuleFillsBothVATBases(t *testing.T) {
 	periods := []models.NetworkPeriod{
 		{Quarter: 1, VATIncluded: true, VATRate: 20},
 		{Quarter: 2, VATIncluded: false, VATRate: 20},
 	}
-	// Процента нет: факт инвестиций всё равно должен получить базу без НДС.
 	plans := []models.NetworkPlan{
-		{Quarter: 1, BrandAS: brandPtr("Альфа"), FactInvestmentsRub: models.PtrFloat(120000)},
-		{Quarter: 2, BrandAS: brandPtr("Альфа"), FactInvestmentsRub: models.PtrFloat(120000)},
+		{Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100000),
+			FactRub: models.PtrFloat(120000), ForecastRub: models.PtrFloat(120000),
+			InvestmentsPct: models.PtrFloat(10)},
+		{Quarter: 2, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100000),
+			FactRub: models.PtrFloat(120000), ForecastRub: models.PtrFloat(120000),
+			InvestmentsPct: models.PtrFloat(10)},
 	}
 
-	got := EnrichNetworkPlans(plans, periods)
+	got, _ := BuildNetworkPlanCalculations(plans, periods, nil)
 
-	if v := models.ValFloat(got[0].FactInvestmentsNet); v != 100000 {
-		t.Errorf("факт без НДС = %v, ожидалось 100000", v)
+	// Сеть с НДС 20%: 12000 / 1.2 = 10000.
+	if v := models.ValFloat(got[0].FactInvestmentsNet); v != 10000 {
+		t.Errorf("факт без НДС = %v, ожидалось 10000", v)
 	}
-	if v := models.ValFloat(got[1].FactInvestmentsNet); v != 120000 {
-		t.Errorf("сеть без НДС: факт = %v, ожидалось 120000", v)
+	if v := models.ValFloat(got[0].ForecastInvestmentsNet); v != 10000 {
+		t.Errorf("прогноз без НДС = %v, ожидалось 10000", v)
+	}
+	if v := models.ValFloat(got[0].InvestmentsNet); v != round2(10000/1.2) {
+		t.Errorf("план без НДС = %v, ожидалось %v", v, round2(10000/1.2))
+	}
+	// Сеть без НДС: обе базы совпадают.
+	if models.ValFloat(got[1].FactInvestmentsRub) != models.ValFloat(got[1].FactInvestmentsNet) {
+		t.Errorf("без НДС базы обязаны совпадать: %#v", got[1])
+	}
+	if v := models.ValFloat(got[1].FactInvestmentsNet); v != 12000 {
+		t.Errorf("сеть без НДС: факт = %v, ожидалось 12000", v)
 	}
 }
 
@@ -303,21 +339,20 @@ func TestCalculateNetworkPeriodGroupTotalsPortfolioAndBrand(t *testing.T) {
 	plans := []models.NetworkPlan{
 		{Quarter: 1, BrandAS: nil, PlanRub: models.PtrFloat(1000)},
 		{Quarter: 1, BrandAS: brandPtr("Альфа"), InGross: true, PlanRub: models.PtrFloat(600),
-			FactRub: models.PtrFloat(400), InvestmentsPct: models.PtrFloat(10), FactInvestmentsRub: models.PtrFloat(48)},
+			FactRub: models.PtrFloat(400), InvestmentsPct: models.PtrFloat(10), PaidInvestmentsRub: models.PtrFloat(48)},
 		{Quarter: 1, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(200),
-			FactRub: models.PtrFloat(100), InvestmentsPct: models.PtrFloat(20), FactInvestmentsRub: models.PtrFloat(24)},
+			FactRub: models.PtrFloat(100), InvestmentsPct: models.PtrFloat(20), PaidInvestmentsRub: models.PtrFloat(24)},
 		{Quarter: 2, BrandAS: nil, PlanRub: models.PtrFloat(1200)},
 		{Quarter: 2, BrandAS: brandPtr("Альфа"), InGross: true, PlanRub: models.PtrFloat(700),
-			FactRub: models.PtrFloat(800), InvestmentsPct: models.PtrFloat(10), FactInvestmentsRub: models.PtrFloat(72)},
+			FactRub: models.PtrFloat(800), InvestmentsPct: models.PtrFloat(10), PaidInvestmentsRub: models.PtrFloat(72)},
 		{Quarter: 2, BrandAS: brandPtr("Бета"), PlanRub: models.PtrFloat(300),
-			FactRub: models.PtrFloat(200), InvestmentsPct: models.PtrFloat(20), FactInvestmentsRub: models.PtrFloat(36)},
+			FactRub: models.PtrFloat(200), InvestmentsPct: models.PtrFloat(20), PaidInvestmentsRub: models.PtrFloat(36)},
 	}
-	plans = EnrichNetworkPlans(plans, periods)
-	totals := CalculateNetworkTotals(plans, periods)
 	groups := []models.NetworkPeriodGroup{
 		{StartQuarter: 1, EndQuarter: 2},
 		{StartQuarter: 1, EndQuarter: 2, BrandAS: brandPtr("Бета")},
 	}
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, groups)
 
 	got := CalculateNetworkPeriodGroupTotals(groups, plans, totals)
 	if len(got) != 2 {
@@ -327,8 +362,10 @@ func TestCalculateNetworkPeriodGroupTotalsPortfolioAndBrand(t *testing.T) {
 	if got[0].PlanRub != 2700 || got[0].FactRub != 1500 || got[0].InvestmentsRub != 230 {
 		t.Errorf("портфель Q1–Q2 рассчитан неверно: %#v", got[0])
 	}
-	if got[0].FactInvestmentsRubNet != 150 {
-		t.Errorf("факт инвестиций портфеля без НДС = %v, ожидалось 150", got[0].FactInvestmentsRubNet)
+	// Портфель Q1–Q2 закрыт фактом на 1500 из 2700 — по правилу инвестиций
+	// не возникает, сколько бы ни было перечислено по документам.
+	if got[0].FactInvestmentsRubNet != 0 {
+		t.Errorf("факт инвестиций портфеля без НДС = %v, ожидался 0", got[0].FactInvestmentsRubNet)
 	}
 	if got[1].PlanRub != 500 || got[1].FactRub != 300 || got[1].InvestmentsRub != 100 {
 		t.Errorf("бренд Q1–Q2 рассчитан неверно: %#v", got[1])
@@ -356,18 +393,20 @@ func TestCalculateNetworkAnnualInvestmentCumulativeGrossAndBrand(t *testing.T) {
 		)
 	}
 	// Выплаченные суммы Q1-Q3 не обязаны совпадать с процентом от объёма.
-	plans[1].FactInvestmentsRub = models.PtrFloat(40)
-	plans[4].FactInvestmentsRub = models.PtrFloat(50)
-	plans[7].FactInvestmentsRub = models.PtrFloat(60)
-	plans[2].FactInvestmentsRub = models.PtrFloat(20)
-	plans[5].FactInvestmentsRub = models.PtrFloat(20)
-	plans[8].FactInvestmentsRub = models.PtrFloat(20)
+	plans[1].PaidInvestmentsRub = models.PtrFloat(40)
+	plans[4].PaidInvestmentsRub = models.PtrFloat(50)
+	plans[7].PaidInvestmentsRub = models.PtrFloat(60)
+	plans[2].PaidInvestmentsRub = models.PtrFloat(20)
+	plans[5].PaidInvestmentsRub = models.PtrFloat(20)
+	plans[8].PaidInvestmentsRub = models.PtrFloat(20)
 	// Q4 вычитается по официальному прогнозу выплат, а не по расчётному начислению.
+	// Он введён человеком, поэтому правило его не пересчитывает.
 	plans[10].ForecastInvestmentsRub = models.PtrFloat(100)
+	plans[10].ForecastInvestmentsOverridden = true
 	plans[11].ForecastInvestmentsRub = models.PtrFloat(50)
+	plans[11].ForecastInvestmentsOverridden = true
 
-	plans = EnrichNetworkPlans(plans, periods)
-	totals := CalculateNetworkTotals(plans, periods)
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, nil)
 	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
 
 	if got.PortfolioPlanRub != 5000 || got.PortfolioEACRub != 5000 || !got.PortfolioCompleted {
@@ -405,8 +444,7 @@ func TestCalculateNetworkAnnualInvestmentCumulativeRequiresPortfolioAndScopeComp
 		{Quarter: 1, BrandAS: brandPtr("Не выполнен"), PlanRub: models.PtrFloat(200),
 			FactRub: models.PtrFloat(50), InvestmentsPct: models.PtrFloat(10)},
 	}
-	plans = EnrichNetworkPlans(plans, periods)
-	totals := CalculateNetworkTotals(plans, periods)
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, nil)
 	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
 
 	if got.PortfolioEACRub != 170 {
@@ -430,12 +468,11 @@ func TestCalculateNetworkAnnualInvestmentCumulativeRequiresRowCompletionAndClamp
 	plans := []models.NetworkPlan{
 		{Quarter: 1, BrandAS: brandPtr("A"), PlanRub: models.PtrFloat(100),
 			ForecastRub: models.PtrFloat(110), InvestmentsPct: models.PtrFloat(10),
-			FactInvestmentsRub: models.PtrFloat(20)},
+			PaidInvestmentsRub: models.PtrFloat(20)},
 		{Quarter: 1, BrandAS: brandPtr("B"), PlanRub: models.PtrFloat(100),
 			ForecastRub: models.PtrFloat(90), InvestmentsPct: models.PtrFloat(10)},
 	}
-	plans = EnrichNetworkPlans(plans, periods)
-	totals := CalculateNetworkTotals(plans, periods)
+	plans, totals := BuildNetworkPlanCalculations(plans, periods, nil)
 	got := CalculateNetworkAnnualInvestmentCumulative(plans, periods, totals)
 
 	if !got.PortfolioCompleted {
@@ -472,7 +509,7 @@ func TestCalculateNetworkAnnualInvestmentCumulativeForNetworkUsesProfileFlag(t *
 	}
 }
 
-func TestCalculateNetworkInvestmentPaymentsRequiresOneHundredPercent(t *testing.T) {
+func TestInvestmentRuleRequiresOneHundredPercent(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 3}, {Quarter: 4}}
 	plans := []models.NetworkPlan{
 		{Quarter: 3, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
@@ -482,18 +519,45 @@ func TestCalculateNetworkInvestmentPaymentsRequiresOneHundredPercent(t *testing.
 	}
 
 	got, totals := BuildNetworkPlanCalculations(plans, periods, nil)
-	if got[0].PaymentEligible || got[0].PayableInvestmentsRub != nil {
-		t.Errorf("Q3 ниже 100%% не должен оплачиваться: %#v", got[0])
+	// Ноль, а не nil: процент задан, просто ничего не заработано.
+	if got[0].ForecastInvestmentsEarned || models.ValFloat(got[0].ForecastInvestmentsRub) != 0 {
+		t.Errorf("Q3 ниже 100%% не должен приносить инвестиции: %#v", got[0])
 	}
-	if !got[1].PaymentEligible || models.ValFloat(got[1].PayableInvestmentsRub) != 10.1 {
-		t.Errorf("Q4 выше 100%% должен оплачиваться от EAC: %#v", got[1])
+	if got[0].ForecastInvestmentsRub == nil {
+		t.Error("Q3: ожидался явный ноль, а не отсутствие значения")
 	}
-	if totals[2].PayableInvestmentsRub != 0 || totals[3].PayableInvestmentsRub != 10.1 {
-		t.Errorf("квартальные выплаты рассчитаны неверно: %#v", totals)
+	if !got[1].ForecastInvestmentsEarned || models.ValFloat(got[1].ForecastInvestmentsRub) != 10.1 {
+		t.Errorf("Q4 выше 100%% считается от EAC: %#v", got[1])
+	}
+	// Плановые инвестиции порога не знают — они есть в обоих кварталах.
+	if models.ValFloat(got[0].InvestmentsRub) != 10 || models.ValFloat(got[1].InvestmentsRub) != 10 {
+		t.Errorf("плановые инвестиции не должны зависеть от выполнения: %#v", got)
+	}
+	if totals[2].ForecastInvestmentsRub != 0 || totals[3].ForecastInvestmentsRub != 10.1 {
+		t.Errorf("квартальные инвестиции рассчитаны неверно: %#v", totals)
 	}
 }
 
-func TestCalculateNetworkInvestmentPaymentsUsesCombinedPeriod(t *testing.T) {
+// Фактические инвестиции меряются фактом, а не прогнозом: прогноз, закрывший
+// план, ещё не отгрузка.
+func TestInvestmentRuleMeasuresFactByFact(t *testing.T) {
+	periods := []models.NetworkPeriod{{Quarter: 1}}
+	plans := []models.NetworkPlan{{
+		Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
+		FactRub: models.PtrFloat(60), ForecastRub: models.PtrFloat(110),
+		InvestmentsPct: models.PtrFloat(10),
+	}}
+
+	got, _ := BuildNetworkPlanCalculations(plans, periods, nil)
+	if !got[0].ForecastInvestmentsEarned || models.ValFloat(got[0].ForecastInvestmentsRub) != 11 {
+		t.Errorf("прогноз закрыл план — прогнозные инвестиции ожидались: %#v", got[0])
+	}
+	if got[0].FactInvestmentsEarned || models.ValFloat(got[0].FactInvestmentsRub) != 0 {
+		t.Errorf("факт план не закрыл — фактические инвестиции должны быть нулём: %#v", got[0])
+	}
+}
+
+func TestInvestmentRuleUsesCombinedPeriod(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 3}, {Quarter: 4}}
 	plans := []models.NetworkPlan{
 		{Quarter: 3, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
@@ -504,18 +568,18 @@ func TestCalculateNetworkInvestmentPaymentsUsesCombinedPeriod(t *testing.T) {
 	groups := []models.NetworkPeriodGroup{{StartQuarter: 3, EndQuarter: 4, BrandAS: brandPtr("Альфа")}}
 
 	got, totals := BuildNetworkPlanCalculations(plans, periods, groups)
-	if !got[0].PaymentEligible || !got[1].PaymentEligible ||
-		models.ValFloat(got[0].PayableInvestmentsRub) != 9.9 ||
-		models.ValFloat(got[1].PayableInvestmentsRub) != 10.1 {
-		t.Errorf("объединённый период ровно 100%% должен оплатить оба квартала: %#v", got)
+	if !got[0].ForecastInvestmentsEarned || !got[1].ForecastInvestmentsEarned ||
+		models.ValFloat(got[0].ForecastInvestmentsRub) != 9.9 ||
+		models.ValFloat(got[1].ForecastInvestmentsRub) != 10.1 {
+		t.Errorf("объединённый период ровно 100%% оплачивает оба квартала: %#v", got)
 	}
 	combined := CalculateNetworkPeriodGroupTotals(groups, got, totals)
-	if len(combined) != 1 || !combined[0].Completed || combined[0].PayableInvestmentsRub != 20 {
+	if len(combined) != 1 || !combined[0].Completed || combined[0].ForecastInvestmentsRub != 20 {
 		t.Errorf("итог объединённого периода рассчитан неверно: %#v", combined)
 	}
 }
 
-func TestCalculateNetworkInvestmentPaymentsFromFactBypassesThreshold(t *testing.T) {
+func TestInvestmentRuleFromFactBypassesThreshold(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	plans := []models.NetworkPlan{{
 		Quarter: 1, BrandAS: brandPtr("Альфа"), PlanRub: models.PtrFloat(100),
@@ -524,12 +588,15 @@ func TestCalculateNetworkInvestmentPaymentsFromFactBypassesThreshold(t *testing.
 	}}
 
 	got, totals := BuildNetworkPlanCalculations(plans, periods, nil)
-	if !got[0].PaymentEligible || models.ValFloat(got[0].PaymentBaseRub) != 40 ||
-		models.ValFloat(got[0].PayableInvestmentsRub) != 4 ||
-		models.ValFloat(got[0].PayableInvestmentsRubNet) != 3.33 {
-		t.Errorf("оплата от факта должна считаться без порога: %#v", got[0])
+	// Порога нет: процент считается с того ТО, которое есть у показателя.
+	if !got[0].FactInvestmentsEarned || models.ValFloat(got[0].FactInvestmentsRub) != 4 ||
+		models.ValFloat(got[0].FactInvestmentsNet) != 3.33 {
+		t.Errorf("оплата от факта считается без порога: %#v", got[0])
 	}
-	if totals[0].Completed || totals[0].PayableInvestmentsRub != 4 {
+	if models.ValFloat(got[0].ForecastInvestmentsRub) != 5 {
+		t.Errorf("прогнозные при оплате от факта считаются от EAC: %#v", got[0])
+	}
+	if totals[0].Completed || totals[0].FactInvestmentsRub != 4 {
 		t.Errorf("план может быть не выполнен, но оплата от факта остаётся: %#v", totals[0])
 	}
 }
@@ -558,7 +625,7 @@ func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	periods := []models.NetworkPeriod{{Quarter: 1, VATIncluded: true, VATRate: 20}}
 	stored := []models.NetworkPlan{{
 		ID: 7, NetworkID: 3, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
-		FactRub: models.PtrFloat(900000), FactInvestmentsRub: models.PtrFloat(120000),
+		FactRub: models.PtrFloat(900000), PaidInvestmentsRub: models.PtrFloat(120000),
 	}}
 	// Черновик несёт только то, что вводит пользователь.
 	draft := []NetworkPlanDraft{{
@@ -580,8 +647,13 @@ func TestPreviewNetworkPlansTakesFactFromStored(t *testing.T) {
 	if v := models.ValFloat(plans[0].InvestmentsNet); v != 100000 {
 		t.Errorf("инвестиции без НДС = %v, ожидалось 100000", v)
 	}
-	if v := models.ValFloat(plans[0].FactInvestmentsNet); v != 100000 {
-		t.Errorf("факт инвестиций без НДС = %v, ожидалось 100000", v)
+	// План 1 200 000 фактом 900 000 не закрыт: фактических инвестиций нет,
+	// а перечисленное по документам остаётся на своём месте.
+	if v := models.ValFloat(plans[0].FactInvestmentsRub); v != 0 {
+		t.Errorf("факт инвестиций = %v, ожидался 0", v)
+	}
+	if v := models.ValFloat(plans[0].PaidInvestmentsRub); v != 120000 {
+		t.Errorf("перечислено = %v, ожидалось 120000", v)
 	}
 	if totals[0].GrossBrandsPlan != 1200000 || totals[0].FactRub != 900000 {
 		t.Errorf("итоги квартала неверны: %#v", totals[0])

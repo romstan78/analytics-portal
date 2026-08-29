@@ -61,31 +61,53 @@ type NetworkPlan struct {
 	Month3Pct   float64  `json:"month3_pct"`
 	FactRub     *float64 `json:"fact_rub"` // факт отгрузок, заполняется загрузкой
 	ForecastRub *float64 `json:"forecast_rub"`
-	// Факт инвестиций приходит той же загрузкой; процентом не пересчитывается,
-	// но база «без НДС» считается по ставке того же квартала.
-	FactInvestmentsRub *float64 `json:"fact_investments_rub"`
-	FactInvestmentsNet *float64 `json:"fact_investments_rub_net"` // расчётное
-	InvestmentsPct     *float64 `json:"investments_pct"`
+	InvestmentsPct *float64 `json:"investments_pct"`
 	// Оплата от факта — безусловный режим для конкретных бренда и квартала:
-	// сумма считается от fact_rub и не зависит от выполнения плана.
-	PayInvestmentsFromFact bool     `json:"pay_investments_from_fact"`
-	InvestmentsRub         *float64 `json:"investments_rub"`     // расчётное: pct от plan_rub, до вычета НДС
-	InvestmentsNet         *float64 `json:"investments_rub_net"` // расчётное: инвестиции с вычетом НДС
-	// Расчётное: тот же процент, применённый к прогнозу объёма.
+	// порога выполнения нет, сумма считается процентом от ТО.
+	PayInvestmentsFromFact bool `json:"pay_investments_from_fact"`
+
+	// ─── Инвестиции: три показателя, каждый в двух базах ────────────────
+	//
+	// Правило одно на все три: объём × процент, если объём закрыл план своей
+	// области; иначе ноль. Плановые порога не знают — план равен плану по
+	// определению. Прогнозные проверяются прогнозом, фактические — фактом.
+	//
+	// Обе базы заполняются всегда. У сети без НДС в квартале они равны — это
+	// не дублирование, а обещание потребителю: колонка «без НДС» всегда
+	// пригодна для сложения сетей с разными ставками.
+	InvestmentsRub *float64 `json:"investments_rub"`     // плановые, с НДС
+	InvestmentsNet *float64 `json:"investments_rub_net"` // плановые, без НДС
+
 	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
 	ForecastInvestmentsNet *float64 `json:"forecast_investments_rub_net"`
-	// Фактическая сумма к выплате. В обычном режиме база — EAC и нужен порог
-	// 100% за применённый квартал/объединённый период; в режиме от факта порога нет.
-	PaymentBaseRub            *float64 `json:"payment_base_rub"`
-	PaymentCompletionPct      *float64 `json:"payment_completion_pct"`
-	PaymentEligible           bool     `json:"payment_eligible"`
-	PaymentPeriodStartQuarter int      `json:"payment_period_start_quarter"`
-	PaymentPeriodEndQuarter   int      `json:"payment_period_end_quarter"`
-	PaymentScope              string   `json:"payment_scope"` // portfolio | gross | brand | fact
-	PayableInvestmentsRub     *float64 `json:"payable_investments_rub"`
-	PayableInvestmentsRubNet  *float64 `json:"payable_investments_rub_net"`
-	UpdatedBy                 *string  `json:"updated_by"`
-	UpdatedAt                 string   `json:"updated_at"`
+
+	FactInvestmentsRub *float64 `json:"fact_investments_rub"`
+	FactInvestmentsNet *float64 `json:"fact_investments_rub_net"`
+
+	// PaidInvestmentsRub — сколько инвестиций реально перечислено по документам.
+	// Это не четвёртый показатель правила, а платёжный факт: приходит загрузкой
+	// отгрузок и процентом не пересчитывается. Нужен там, где считают доплату, —
+	// вычесть уже перечисленное из начисленного по правилу нельзя ничем другим.
+	PaidInvestmentsRub *float64 `json:"paid_investments_rub"`
+
+	// ForecastInvestmentsOverridden — прогноз инвестиций введён человеком, а не
+	// выведен процентом. Разовая выплата вне процента — осознанное решение КАМа,
+	// и порог её не отменяет: иначе введённая вручную сумма молча исчезала бы.
+	ForecastInvestmentsOverridden bool `json:"forecast_investments_overridden"`
+
+	// Почему получилось именно столько. Это не деньги, а объяснение: область,
+	// в которой считался порог, и насколько он закрыт. Без них ноль в строке
+	// неотличим от «процент не задан».
+	InvestmentScope              string   `json:"investment_scope"` // portfolio | gross | brand | fact
+	InvestmentPeriodStartQuarter int      `json:"investment_period_start_quarter"`
+	InvestmentPeriodEndQuarter   int      `json:"investment_period_end_quarter"`
+	ForecastCompletionPct        *float64 `json:"forecast_completion_pct"`
+	ForecastInvestmentsEarned    bool     `json:"forecast_investments_earned"`
+	FactCompletionPct            *float64 `json:"fact_completion_pct"`
+	FactInvestmentsEarned        bool     `json:"fact_investments_earned"`
+
+	UpdatedBy *string `json:"updated_by"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 // NetworkPlanTotals — итоги квартала для шапки сетки планов.
@@ -113,9 +135,9 @@ type NetworkPlanTotals struct {
 	GrossPoolFactRub float64  `json:"gross_pool_fact_rub"`     // факт брендов пула
 	GrossPoolFcstRub *float64 `json:"gross_pool_forecast_rub"` // прогноз объёма пула, строка без бренда
 
-	// Инвестиции: от плана и от прогноза, до вычета НДС и с вычетом.
-	// Факт инвестиций приходит загрузкой и процентом не пересчитывается,
-	// поэтому база «без НДС» считается по ставке того же квартала.
+	// Инвестиции: плановые, прогнозные и фактические, каждые в двух базах.
+	// Прогнозные и фактические уже прошли порог выполнения — строка, не
+	// закрывшая план, приносит сюда ноль.
 	InvestmentsRub            float64  `json:"investments_rub"`
 	InvestmentsRubNet         float64  `json:"investments_rub_net"`
 	ForecastInvestmentsRub    float64  `json:"forecast_investments_rub"`
@@ -125,8 +147,6 @@ type NetworkPlanTotals struct {
 	EACRub                    float64  `json:"eac_rub"`
 	CompletionPct             *float64 `json:"completion_pct"`
 	Completed                 bool     `json:"completed"`
-	PayableInvestmentsRub     float64  `json:"payable_investments_rub"`
-	PayableInvestmentsRubNet  float64  `json:"payable_investments_rub_net"`
 }
 
 // NetworkPeriodGroup — правило совместного зачёта смежных кварталов.
@@ -162,11 +182,9 @@ type NetworkPeriodGroupTotals struct {
 	ForecastInvestmentsRubNet float64  `json:"forecast_investments_rub_net"`
 	FactInvestmentsRub        float64  `json:"fact_investments_rub"`
 	FactInvestmentsRubNet     float64  `json:"fact_investments_rub_net"`
-	EACRub                    float64  `json:"eac_rub"`
-	CompletionPct             *float64 `json:"completion_pct"`
-	Completed                 bool     `json:"completed"`
-	PayableInvestmentsRub     float64  `json:"payable_investments_rub"`
-	PayableInvestmentsRubNet  float64  `json:"payable_investments_rub_net"`
+	EACRub        float64  `json:"eac_rub"`
+	CompletionPct *float64 `json:"completion_pct"`
+	Completed     bool     `json:"completed"`
 }
 
 // NetworkAnnualInvestmentRow — одна область годового кумулятива: общий

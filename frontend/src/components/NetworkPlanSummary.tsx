@@ -96,14 +96,14 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
         hint={totals.investments_rub > 0 ? `без НДС ${formatRubShort(totals.investments_rub_net)}` : 'нет процента'}
       />
       <SummaryCard
-		label="К выплате"
-		value={totals.payable_investments_rub > 0 ? totals.payable_investments_rub : null}
+		label="Инв. прогноз"
+		value={totals.forecast_investments_rub > 0 ? totals.forecast_investments_rub : null}
 		hint={totals.completed
 			? 'порог периода 100% выполнен'
-			: totals.payable_investments_rub > 0
-				? 'есть строки с правом на выплату'
-				: 'нет строк с правом на выплату'}
-		tone={totals.completed ? 'good' : totals.payable_investments_rub > 0 ? 'neutral' : 'warn'}
+			: totals.forecast_investments_rub > 0
+				? 'часть брендов закрыла план'
+				: 'план не выполнен — инвестиций нет'}
+		tone={totals.completed ? 'good' : totals.forecast_investments_rub > 0 ? 'neutral' : 'warn'}
       />
       <SummaryCard
         label="Инв. факт"
