@@ -196,6 +196,7 @@ export interface SalesDashboardResponse {
   topNetworks: SalesDashboardRank[];
   topProducts: SalesDashboardRank[];
   segmentTotals: SalesDashboardRank[];
+  segmentTrends: SalesDashboardSeriesPoint[];
   networkTrends: SalesDashboardSeriesPoint[];
   channelTrends: SalesDashboardSeriesPoint[];
   networkBreakdown: SalesDashboardNetworkBreakdown[];

@@ -206,6 +206,7 @@ type SalesDashboardResponse struct {
 	TopNetworks      []SalesDashboardRank             `json:"topNetworks"`
 	TopProducts      []SalesDashboardRank             `json:"topProducts"`
 	SegmentTotals    []SalesDashboardRank             `json:"segmentTotals"`
+	SegmentTrends    []SalesDashboardSeriesPoint      `json:"segmentTrends"`
 	NetworkTrends    []SalesDashboardSeriesPoint      `json:"networkTrends"`
 	ChannelTrends    []SalesDashboardSeriesPoint      `json:"channelTrends"`
 	NetworkBreakdown []SalesDashboardNetworkBreakdown `json:"networkBreakdown"`
