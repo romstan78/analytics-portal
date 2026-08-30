@@ -78,16 +78,80 @@ func TestCalculateFieldsNegativeUplift(t *testing.T) {
 func TestCalculateFieldsActualROI(t *testing.T) {
 	got := calcWith(PromoInputDTO{
 		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
-		ActualPromoUpliftRub: 10000, ActualInvestments: 50000, Year: 2026, Month: 1,
+		ActualInvestments: 50000, Year: 2026, Month: 1,
 	}, 0.5)
 	assertClose(t, "actual_roi", got.ActualROI, -90)
 
 	// Без фактических инвестиций ROI остаётся нулём, а не уходит в бесконечность.
 	got = calcWith(PromoInputDTO{
 		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
-		ActualPromoUpliftRub: 10000, ActualInvestments: 0, Year: 2026, Month: 1,
+		ActualInvestments: 0, Year: 2026, Month: 1,
 	}, 0.5)
 	assertClose(t, "actual_roi", got.ActualROI, 0)
+}
+
+// Факт считается от факта продаж — так же, как план от plan_promo_units.
+func TestCalculateFieldsActualFromSales(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_rub", got.ActualPromoRub, 30000)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 50)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 10000)
+}
+
+// Скорректированный baseline вытесняет плановый: на факте сравнивают с ним.
+func TestCalculateFieldsActualUsesCorrectedBaseline(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
+		ActualCorrectedBaseline: 120, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 30)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 6000)
+}
+
+// Без факта продаж фактических показателей нет: uplift не уходит в минус на
+// величину baseline, иначе промо выглядело бы убыточным до сбора факта.
+func TestCalculateFieldsActualEmptyWithoutSales(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ContractPrice: 200, BaselineUnits: 100, ActualInvestments: 5000, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_rub", got.ActualPromoRub, 0)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 0)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 0)
+}
+
+// Строка для БД должна нести расчётный факт, а не то, что прислал клиент:
+// именно она уходит в INSERT/UPDATE.
+func TestDTOToDBRowStoresCalculatedActuals(t *testing.T) {
+	dto := PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
+		ActualPromoRub: 1, ActualPromoUpliftUnits: 2, ActualPromoUpliftRub: 3,
+		Year: 2026, Month: 1,
+	}
+	row := DTOToDBRow(dto, calcWith(dto, 1))
+	if row.ActualPromoRub == nil || row.ActualPromoUpliftUnits == nil || row.ActualPromoUpliftRub == nil {
+		t.Fatalf("фактические поля не заполнены: %+v", row)
+	}
+	assertClose(t, "actual_promo_rub", *row.ActualPromoRub, 30000)
+	assertClose(t, "actual_promo_uplift_units", *row.ActualPromoUpliftUnits, 50)
+	assertClose(t, "actual_promo_uplift_rub", *row.ActualPromoUpliftRub, 10000)
+}
+
+// Пустой факт по-прежнему пишется как NULL, а не как ноль.
+func TestDTOToDBRowKeepsEmptyActualsNull(t *testing.T) {
+	dto := PromoInputDTO{ContractPrice: 200, BaselineUnits: 100, Year: 2026, Month: 1}
+	row := DTOToDBRow(dto, calcWith(dto, 1))
+	for name, value := range map[string]*float64{
+		"actual_promo_rub":          row.ActualPromoRub,
+		"actual_promo_uplift_units": row.ActualPromoUpliftUnits,
+		"actual_promo_uplift_rub":   row.ActualPromoUpliftRub,
+		"actual_roi":                row.ActualROI,
+	} {
+		if value != nil {
+			t.Fatalf("%s = %v, ожидался NULL", name, *value)
+		}
+	}
 }
 
 func TestCalculateFieldsAllZeroes(t *testing.T) {

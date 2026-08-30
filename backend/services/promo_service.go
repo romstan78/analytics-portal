@@ -79,6 +79,9 @@ type CalculatedFields struct {
 	BaselineRub                  float64 `json:"baseline_rub"`
 	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
 	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
+	ActualPromoRub               float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits       float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub         float64 `json:"actual_promo_uplift_rub"`
 	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
 	ActualROI                    float64 `json:"actual_roi"`
 	ActualPromoRubWoEcom         float64 `json:"actual_promo_rub_wo_ecom"`
@@ -192,15 +195,32 @@ func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFie
 	baselineRub := bu * cp
 
 	afu := input.ActualPromoSalesUnits
-	afr := input.ActualPromoRub
 	afi := input.ActualInvestments
-	afupl := input.ActualPromoUpliftUnits
-	afupr := input.ActualPromoUpliftRub
 	afeu := input.ActualExternalEcomUnits
 	acb := input.ActualCorrectedBaseline
 	ph := float64(input.PromoPharmacies)
 	if ph == 0 {
 		ph = 1
+	}
+
+	// Факт считается от продаж — симметрично плану, где рубли и uplift идут от
+	// plan_promo_units. Раньше рубли и uplift приходили из карточки как ввод, и
+	// ROI считался по цифрам, которые никто не пересчитывал после правки продаж.
+	//
+	// База uplift — скорректированный baseline, если он заполнен: на факте
+	// сравнивать продажи с плановым baseline незачем, его для того и корректируют.
+	//
+	// Без факта продаж фактических показателей нет вовсе: считать uplift как
+	// «минус baseline» значило бы записать промо убыток, которого не было.
+	actualBaseline := bu
+	if acb > 0 {
+		actualBaseline = acb
+	}
+	afr, afupl, afupr := 0.0, 0.0, 0.0
+	if afu != 0 {
+		afr = afu * cp
+		afupl = afu - actualBaseline
+		afupr = afupl * cp
 	}
 
 	netPromoUpliftRub := afupr * gm
@@ -265,6 +285,9 @@ func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFie
 		BaselineRub:                  baselineRub,
 		NetPromoUpliftRub:            netPromoUpliftRub,
 		NetPromoUpliftPct:            netPromoUpliftPct,
+		ActualPromoRub:               afr,
+		ActualPromoUpliftUnits:       afupl,
+		ActualPromoUpliftRub:         afupr,
 		ActualInvestmentsPct:         actualInvestmentsPct,
 		ActualROI:                    actualROI,
 		ActualPromoRubWoEcom:         actualPromoRubWoEcom,
@@ -323,6 +346,11 @@ func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
 	r.BaselineRub = ptrFloat(c.BaselineRub)
 	r.NetPromoUpliftRub = ptrFloat(c.NetPromoUpliftRub)
 	r.NetPromoUpliftPct = ptrFloat(c.NetPromoUpliftPct)
+	// Фактические рубли и uplift пишутся через optFloat: без факта продаж расчёт
+	// даёт нули, а в БД у «нет факта» до сих пор стоял NULL — так и оставляем.
+	r.ActualPromoRub = optFloat(c.ActualPromoRub)
+	r.ActualPromoUpliftUnits = optFloat(c.ActualPromoUpliftUnits)
+	r.ActualPromoUpliftRub = optFloat(c.ActualPromoUpliftRub)
 	r.ActualInvestmentsPct = ptrFloat(c.ActualInvestmentsPct)
 	r.ActualROI = ptrFloat(c.ActualROI)
 	r.ActualPromoRubWoEcom = ptrFloat(c.ActualPromoRubWoEcom)
@@ -369,11 +397,10 @@ func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
 		ContractPrice:           ptrFloat(dto.ContractPrice),
 		KeyRegion:               dto.KeyRegion,
 		Top20Segment:            dto.Top20Segment,
+		// Фактические рубли и uplift сюда не переносятся: их считает
+		// CalculateFields, и MergeCalculatedIntoDBRow ниже подставит расчёт.
 		ActualPromoSalesUnits:   optFloat(dto.ActualPromoSalesUnits),
-		ActualPromoRub:          optFloat(dto.ActualPromoRub),
 		ActualInvestments:       optFloat(dto.ActualInvestments),
-		ActualPromoUpliftUnits:  optFloat(dto.ActualPromoUpliftUnits),
-		ActualPromoUpliftRub:    optFloat(dto.ActualPromoUpliftRub),
 		ActualExternalEcomUnits: optFloat(dto.ActualExternalEcomUnits),
 		ActualCorrectedBaseline: optFloat(dto.ActualCorrectedBaseline),
 		Agreement1:              dto.Agreement1,
@@ -381,8 +408,10 @@ func DTOToDBRow(dto PromoInputDTO, c CalculatedFields) *models.PromoRowDB {
 	}
 	MergeCalculatedIntoDBRow(r, c)
 
-	// Если фактические данные не вводились — обнуляем производные фактические поля в nil
-	if dto.ActualPromoSalesUnits == 0 && dto.ActualInvestments == 0 && dto.ActualPromoUpliftUnits == 0 {
+	// Если фактические данные не вводились — обнуляем производные фактические поля в nil.
+	// Вводятся продажи и инвестиции; uplift теперь производная от продаж и в
+	// признак «факт заполнен» больше не входит.
+	if dto.ActualPromoSalesUnits == 0 && dto.ActualInvestments == 0 {
 		r.ActualPromoRub = nil
 		r.ActualPromoUpliftRub = nil
 		r.ActualROI = nil

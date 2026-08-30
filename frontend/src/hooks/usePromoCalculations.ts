@@ -61,7 +61,10 @@ export function usePromoCalculations(
         plan_investments_rub: num(draft.plan_investments_rub),
         actual_promo_sales_units: num(draft.actual_promo_sales_units),
         actual_investments: num(draft.actual_investments),
-        actual_promo_uplift_units: num(draft.actual_promo_uplift_units),
+        // Рубли и uplift факта сервер считает сам, поэтому на вход идут только
+        // вводимые величины. Скорректированный baseline — база фактического
+        // uplift, без него сервер считал бы его от планового.
+        actual_corrected_baseline: num(draft.actual_corrected_baseline),
         actual_external_ecom_units: num(draft.actual_external_ecom_units),
         promo_pharmacies: num(draft.promo_pharmacies),
         total_pharmacies: num(draft.total_pharmacies),

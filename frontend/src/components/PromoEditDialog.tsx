@@ -97,12 +97,15 @@ const PLAN_FIELDS: EditableFieldSpec[] = [
   { label: 'ROI план %', field: 'plan_roi', editable: false },
 ];
 
+// Рубли и uplift факта считаются от факта продаж (services.CalculateFields),
+// поэтому вводить их вручную больше нельзя: ввод всё равно был бы затёрт
+// расчётом при первом же пересчёте и при сохранении.
 const ACTUAL_FIELDS: EditableFieldSpec[] = [
   { label: 'Факт продажи (уп)', field: 'actual_promo_sales_units', editable: true },
-  { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: true },
+  { label: 'Факт промо (руб)', field: 'actual_promo_rub', editable: false },
   { label: 'Факт инвестиции', field: 'actual_investments', editable: true },
-  { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: true },
-  { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: true },
+  { label: 'Факт Uplift (уп)', field: 'actual_promo_uplift_units', editable: false },
+  { label: 'Факт Uplift (руб)', field: 'actual_promo_uplift_rub', editable: false },
   { label: 'Факт ROI %', field: 'actual_roi', editable: false },
   { label: 'Внешний e-com (уп)', field: 'actual_external_ecom_units', editable: true },
   { label: 'Скорр. Baseline', field: 'actual_corrected_baseline', editable: true },
@@ -181,7 +184,11 @@ export default function PromoEditDialog({
     setForm(prev => ({ ...prev, [field]: e.target.value }));
 
   const planTriggers: string[] = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
-  const actualTriggers: string[] = ['actual_promo_sales_units', 'actual_investments', 'actual_promo_uplift_units'];
+  // Скорректированный baseline и внешний e-com тоже входят в расчёт факта:
+  // первый задаёт базу uplift, второй — показатели без e-com.
+  const actualTriggers: string[] = [
+    'actual_promo_sales_units', 'actual_investments', 'actual_corrected_baseline', 'actual_external_ecom_units',
+  ];
   const textFields: string[] = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
 
   const handleFieldChange = (field: FormField) => (e: { target: { value: string } }) => {
