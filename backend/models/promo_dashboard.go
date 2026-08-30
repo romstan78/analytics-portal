@@ -13,6 +13,14 @@ type PromoDashboardMetrics struct {
 	PlanInvestmentsRub           float64  `json:"planInvestmentsRub"`
 	ComparablePlanInvestmentsRub float64  `json:"comparablePlanInvestmentsRub"`
 	ActualInvestmentsRub         *float64 `json:"actualInvestmentsRub"`
+	// EffectiveInvestmentsRub — сумма по правилу «факт, если он заполнен, иначе
+	// план». В отличие от ActualInvestmentsRub факт здесь берётся по одному
+	// заполненному полю инвестиций, без требования фактических продаж:
+	// сопоставимость нужна для план-факта, а не для суммы к выплате.
+	// FactInvestmentsCount показывает, из скольких промо среза факт пришёл, —
+	// по нему интерфейс отличает фактическую сумму от плановой и смешанной.
+	EffectiveInvestmentsRub float64 `json:"effectiveInvestmentsRub"`
+	FactInvestmentsCount    int     `json:"factInvestmentsCount"`
 	PlanUpliftUnits              float64  `json:"planUpliftUnits"`
 	ComparablePlanUpliftUnits    float64  `json:"comparablePlanUpliftUnits"`
 	ActualUpliftUnits            *float64 `json:"actualUpliftUnits"`

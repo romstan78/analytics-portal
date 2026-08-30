@@ -389,9 +389,34 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
 function calendarValue(point: PromoDashboardCalendarPoint | undefined, metric: CalendarMetric): number | null {
   if (!point) return null;
   if (metric === 'count') return point.metrics.promoCount;
-  if (metric === 'investments') return point.metrics.planInvestmentsRub;
+  // Инвестиции — сумма по правилу «факт, если он заполнен, иначе план»; её
+  // считает бэкенд построчно, поэтому ячейка с частично заполненным фактом
+  // не откатывается целиком к плану.
+  if (metric === 'investments') return point.metrics.effectiveInvestmentsRub;
   if (metric === 'completion') return point.metrics.salesCompletionPct;
   return point.metrics.actualRoi;
+}
+
+// Происхождение суммы инвестиций в ячейке. Цветовая шкала занята величиной,
+// поэтому происхождение показываем фактурой: сплошная заливка — весь факт,
+// пунктир — в сумме осталась плановая часть, штриховка — план целиком.
+type CalendarSource = 'fact' | 'mixed' | 'plan';
+
+// Штриховка тёмная, а не белая: заливка плановой ячейки бывает почти белой при
+// малой сумме, и светлые полосы на ней исчезли бы вместе с признаком плана.
+const PLAN_HATCH = 'repeating-linear-gradient(135deg, rgba(49, 46, 129, 0.22) 0 3px, rgba(49, 46, 129, 0) 3px 7px)';
+
+function investmentSource(point: PromoDashboardCalendarPoint): CalendarSource {
+  const { factInvestmentsCount, promoCount } = point.metrics;
+  if (factInvestmentsCount === 0) return 'plan';
+  return factInvestmentsCount >= promoCount ? 'fact' : 'mixed';
+}
+
+// outline вместо border: рамка не влияет на размеры ячейки и не сдвигает цифру.
+function sourceDecoration(source: CalendarSource) {
+  if (source === 'fact') return {};
+  const outline = { outline: '1.5px dashed rgba(67, 56, 202, 0.55)', outlineOffset: '-2px' };
+  return source === 'mixed' ? outline : { ...outline, backgroundImage: PLAN_HATCH };
 }
 
 function calendarLabel(value: number | null, metric: CalendarMetric) {
@@ -416,7 +441,27 @@ function calendarColor(value: number | null, metric: CalendarMetric, maxValue: n
   return { bgcolor: `rgba(99, 102, 241, ${0.08 + intensity * 0.66})`, color: intensity > 0.56 ? '#fff' : '#27304a' };
 }
 
-function calendarTooltip(point: PromoDashboardCalendarPoint) {
+// Без легенды штриховка читается как декор, поэтому она появляется вместе с
+// метрикой инвестиций и исчезает вместе с ней.
+function CalendarSourceLegend() {
+  const swatch = { width: 18, height: 12, borderRadius: 0.5, bgcolor: 'rgba(99, 102, 241, 0.5)' };
+  return (
+    <Stack direction="row" spacing={1.25} useFlexGap sx={{ mt: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+      {([
+        ['fact', 'факт'],
+        ['mixed', 'факт частично'],
+        ['plan', 'план'],
+      ] as Array<[CalendarSource, string]>).map(([source, label]) => (
+        <Stack key={source} direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+          <Box sx={{ ...swatch, ...sourceDecoration(source) }} />
+          <Typography variant="caption" color="text.secondary">{label}</Typography>
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
+function calendarTooltip(point: PromoDashboardCalendarPoint, metric: CalendarMetric) {
   const metrics = point.metrics;
   return (
     <Box sx={{ p: 0.25 }}>
@@ -424,6 +469,13 @@ function calendarTooltip(point: PromoDashboardCalendarPoint) {
       <Typography variant="caption" sx={{ display: 'block' }}>Промо: {metrics.promoCount} · факт: {metrics.factReadyCount}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Продажи: план {compactNumber(metrics.planUnits)} · факт {compactNumber(metrics.actualUnits)}</Typography>
       <Typography variant="caption" sx={{ display: 'block' }}>Инвестиции: план {compactNumber(metrics.planInvestmentsRub)} · факт {compactNumber(metrics.actualInvestmentsRub)}</Typography>
+      {/* Показанное в ячейке значение объясняем прямо: факт инвестиций может
+          быть заполнен не во всех промо ячейки, и тогда сумма смешанная. */}
+      {metric === 'investments' && (
+        <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+          В ячейке: {compactNumber(metrics.effectiveInvestmentsRub)} ₽ · факт по {metrics.factInvestmentsCount} из {metrics.promoCount} промо
+        </Typography>
+      )}
       <Typography variant="caption" sx={{ display: 'block' }}>ROI: план {percentLabel(metrics.comparablePlanRoi)} · факт {percentLabel(metrics.actualRoi)}</Typography>
     </Box>
   );
@@ -472,7 +524,15 @@ function CalendarDashboard({ data, onDrilldown, showValues }: {
     <>
       <Paper variant="outlined" sx={{ borderRadius: 3, borderColor: '#dfe5ee', overflow: 'hidden', mb: 1.25 }}>
         <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1} sx={{ px: 1.6, py: 1.25, justifyContent: 'space-between', alignItems: { xs: 'stretch', lg: 'center' }, borderBottom: '1px solid #e7ebf1' }}>
-          <Box><Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Промо-календарь</Typography><Typography variant="caption" color="text.secondary">Строки отсортированы по плановым инвестициям; нажмите на ячейку для детализации.</Typography></Box>
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Промо-календарь</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {metric === 'investments'
+                ? 'Инвестиции: факт там, где он заполнен, иначе план. Строки отсортированы по плановым инвестициям; нажмите на ячейку для детализации.'
+                : 'Строки отсортированы по плановым инвестициям; нажмите на ячейку для детализации.'}
+            </Typography>
+            {metric === 'investments' && <CalendarSourceLegend />}
+          </Box>
           <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
             <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimension(value)}><ToggleButton value="network">Сети</ToggleButton><ToggleButton value="brand">Бренды</ToggleButton></ToggleButtonGroup>
             <ToggleButtonGroup size="small" exclusive value={metric} onChange={(_, value) => value && setMetric(value)}><ToggleButton value="count">Промо</ToggleButton><ToggleButton value="investments">Инвестиции</ToggleButton><ToggleButton value="completion">Выполнение</ToggleButton><ToggleButton value="roi">ROI</ToggleButton></ToggleButtonGroup>
@@ -492,11 +552,12 @@ function CalendarDashboard({ data, onDrilldown, showValues }: {
                     const point = pointMap.get(`${name}|${index + 1}`);
                     const value = calendarValue(point, metric);
                     const color = calendarColor(value, metric, maxValue);
+                    const decoration = point && metric === 'investments' ? sourceDecoration(investmentSource(point)) : {};
                     return (
                       <TableCell key={month} align="center" sx={{ p: 0.45 }}>
                         {point ? (
-                          <MuiTooltip arrow title={calendarTooltip(point)}>
-                            <Box component="button" type="button" onClick={() => openCell(point)} sx={{ width: '100%', minHeight: 34, px: 0.4, border: 0, borderRadius: 1, cursor: point.name === 'Не указано' ? 'default' : 'pointer', font: 'inherit', fontSize: 12, fontWeight: 750, ...color }}>
+                          <MuiTooltip arrow title={calendarTooltip(point, metric)}>
+                            <Box component="button" type="button" onClick={() => openCell(point)} sx={{ width: '100%', minHeight: 34, px: 0.4, border: 0, borderRadius: 1, cursor: point.name === 'Не указано' ? 'default' : 'pointer', font: 'inherit', fontSize: 12, fontWeight: 750, ...color, ...decoration }}>
                               {calendarLabel(value, metric)}
                             </Box>
                           </MuiTooltip>

@@ -838,6 +838,8 @@ export interface PromoDashboardMetrics {
   planInvestmentsRub: number;
   comparablePlanInvestmentsRub: number;
   actualInvestmentsRub: number | null;
+  effectiveInvestmentsRub: number;
+  factInvestmentsCount: number;
   planUpliftUnits: number;
   comparablePlanUpliftUnits: number;
   actualUpliftUnits: number | null;

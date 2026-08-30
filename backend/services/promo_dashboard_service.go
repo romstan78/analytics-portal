@@ -19,6 +19,8 @@ type promoDashboardAccumulator struct {
 	planInvest      float64
 	compareInvest   float64
 	actualInvest    float64
+	effectiveInvest float64
+	factInvest      int
 	planUplift      float64
 	compareUplift   float64
 	actualUplift    float64
@@ -63,6 +65,15 @@ func (a *promoDashboardAccumulator) add(row repository.PromoDashboardRow) {
 	if planInvest > 0 {
 		a.planNet += planUpliftRub * gm
 		a.planROIDenom += planInvest
+	}
+
+	// Сумма инвестиций «факт, если есть, иначе план» считается по своему полю:
+	// незаполненный факт продаж не отменяет уже известную сумму инвестиций.
+	if row.ActualInvestments != nil {
+		a.factInvest++
+		a.effectiveInvest += *row.ActualInvestments
+	} else {
+		a.effectiveInvest += planInvest
 	}
 
 	// Факт сопоставим только когда заполнены продажи и инвестиции. Нулевое
@@ -110,6 +121,8 @@ func (a promoDashboardAccumulator) metrics() models.PromoDashboardMetrics {
 		ComparablePlanUnits:          a.compareUnits,
 		PlanInvestmentsRub:           a.planInvest,
 		ComparablePlanInvestmentsRub: a.compareInvest,
+		EffectiveInvestmentsRub:      a.effectiveInvest,
+		FactInvestmentsCount:         a.factInvest,
 		PlanUpliftUnits:              a.planUplift,
 		ComparablePlanUpliftUnits:    a.compareUplift,
 		PlanROI:                      roi(a.planNet, a.planROIDenom),

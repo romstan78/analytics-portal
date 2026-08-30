@@ -96,3 +96,37 @@ func TestAggregatePromoDashboardSkipsInvalidPeriodsAndKeepsUnknownDimensions(t *
 		t.Fatalf("fact metrics must stay nil without a comparable fact row: %+v", dashboard.Summary)
 	}
 }
+
+// Инвестиции календаря берут факт там, где он заполнен, и план во всех
+// остальных строках. Промо с фактом инвестиций, но без факта продаж, в
+// сопоставимый срез не попадает — а в эту сумму обязано попасть фактом.
+func TestAggregatePromoDashboardEffectiveInvestmentsPreferFact(t *testing.T) {
+	rows := []repository.PromoDashboardRow{
+		{
+			Year: 2025, Month: 1, NetworkName: promoString("Сеть А"),
+			PlanInvestmentsRub:    promoFloat(20),
+			ActualPromoSalesUnits: promoFloat(110), ActualInvestments: promoFloat(25),
+		},
+		{
+			Year: 2025, Month: 1, NetworkName: promoString("Сеть А"),
+			PlanInvestmentsRub: promoFloat(10), ActualInvestments: promoFloat(7),
+		},
+		{
+			Year: 2025, Month: 1, NetworkName: promoString("Сеть А"),
+			PlanInvestmentsRub: promoFloat(16),
+		},
+	}
+
+	got := AggregatePromoDashboard(rows).Summary
+	if got.EffectiveInvestmentsRub != 48 {
+		t.Fatalf("effective investments = %.2f, want 48", got.EffectiveInvestmentsRub)
+	}
+	if got.FactInvestmentsCount != 2 || got.PromoCount != 3 {
+		t.Fatalf("fact investments count = %d из %d, want 2 из 3", got.FactInvestmentsCount, got.PromoCount)
+	}
+	// Сопоставимый срез не меняется: строка без факта продаж в него не входит.
+	assertPromoFloat(t, "actual investments", got.ActualInvestmentsRub, 25)
+	if got.ComparablePlanInvestmentsRub != 20 {
+		t.Fatalf("comparable plan investments = %.2f, want 20", got.ComparablePlanInvestmentsRub)
+	}
+}
