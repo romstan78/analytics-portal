@@ -21,8 +21,13 @@ type PromoDashboardMetrics struct {
 	ActualROI                    *float64 `json:"actualRoi"`
 	SalesCompletionPct           *float64 `json:"salesCompletionPct"`
 	InvestmentCompletionPct      *float64 `json:"investmentCompletionPct"`
-	SalesVarianceUnits           *float64 `json:"salesVarianceUnits"`
-	InvestmentVarianceRub        *float64 `json:"investmentVarianceRub"`
+	// Отклонения факта от сопоставимого плана. Продажи и uplift даны в обеих
+	// единицах — переключатель «уп./₽» не должен пересчитывать их в браузере.
+	SalesVarianceUnits    *float64 `json:"salesVarianceUnits"`
+	SalesVarianceRub      *float64 `json:"salesVarianceRub"`
+	InvestmentVarianceRub *float64 `json:"investmentVarianceRub"`
+	UpliftVarianceUnits   *float64 `json:"upliftVarianceUnits"`
+	UpliftVarianceRub     *float64 `json:"upliftVarianceRub"`
 }
 
 // PromoDashboardTrendPoint — помесячная точка план-факт.

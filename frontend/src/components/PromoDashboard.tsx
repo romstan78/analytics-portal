@@ -15,6 +15,10 @@ import type {
   PromoDashboardMetrics,
   PromoDashboardResponse,
 } from '../types/promo';
+import {
+  DRIVER_METRIC_LABEL, driverColor, driverUnitLabel, driverVariance, shownUnit, unitSwitchable,
+} from '../utils/promoDrivers';
+import type { DriverMetric, DriverUnit } from '../utils/promoDrivers';
 
 const MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
 const SERIES_PLAN = '#6366f1';
@@ -34,7 +38,6 @@ const LINE_LABEL_STYLE = { fontSize: 10, fontWeight: 700, fill: LABEL_INK } as c
 
 type DashboardView = 'overview' | 'calendar';
 type BreakdownDimension = 'network' | 'brand' | 'sku' | 'mechanics';
-type DriverMetric = 'sales' | 'investments' | 'roi';
 type CalendarDimension = 'network' | 'brand';
 type CalendarMetric = 'count' | 'investments' | 'completion' | 'roi';
 
@@ -165,6 +168,7 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
 }) {
   const [dimension, setDimension] = useState<BreakdownDimension>('network');
   const [driverMetric, setDriverMetric] = useState<DriverMetric>('sales');
+  const [driverUnit, setDriverUnit] = useState<DriverUnit>('units');
 
   const trend = useMemo<TrendRow[]>(() => data.trend.map(point => ({
     period: `${point.year}-${String(point.month).padStart(2, '0')}`,
@@ -190,16 +194,11 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
 
   const drivers = useMemo<DriverPoint[]>(() => {
     const points = breakdown.flatMap(item => {
-      let value: number | null = null;
-      if (driverMetric === 'sales') value = item.metrics.salesVarianceUnits;
-      if (driverMetric === 'investments') value = item.metrics.investmentVarianceRub;
-      if (driverMetric === 'roi' && item.metrics.actualRoi != null && item.metrics.comparablePlanRoi != null) {
-        value = item.metrics.actualRoi - item.metrics.comparablePlanRoi;
-      }
+      const value = driverVariance(item.metrics, driverMetric, driverUnit);
       return value == null ? [] : [{ name: item.name, value, breakdown: item }];
     });
     return points.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 12).reverse();
-  }, [breakdown, driverMetric]);
+  }, [breakdown, driverMetric, driverUnit]);
 
   const bubbles = useMemo<BubblePoint[]>(() => breakdown.flatMap(item => {
     const completion = item.metrics.salesCompletionPct;
@@ -223,6 +222,7 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
   };
   const openPeriod = (row: TrendRow) => onDrilldown({ yearFrom: row.year, yearTo: row.year, months: [row.month] });
   const summary = data.summary;
+  const driverUnitText = driverUnitLabel(driverMetric, driverUnit);
 
   return (
     <>
@@ -304,14 +304,24 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
         </Grid>
         <Grid size={{ xs: 12, xl: 7 }}>
           <Paper variant="outlined" sx={{ p: 1.6, height: '100%', borderRadius: 3, borderColor: '#dfe5ee' }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ justifyContent: 'space-between', alignItems: { xs: 'stretch', md: 'flex-start' } }}>
-              <Box><Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Крупнейшие отклонения</Typography><Typography variant="caption" color="text.secondary">Нажмите на столбец для перехода к исходным промо</Typography></Box>
-              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {/* Три группы переключателей рядом с заголовком не помещаются и
+                ломаются на две строки. Заголовок занимает свою строку целиком,
+                переключатели — свою, и переносить их уже нечему. */}
+            <Stack direction="column" spacing={0.75}>
+              <Box><Typography variant="subtitle1" sx={{ fontWeight: 750 }}>Крупнейшие отклонения</Typography><Typography variant="caption" color="text.secondary">Нажмите на столбец для перехода к исходным промо.</Typography></Box>
+              <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: 'nowrap', overflowX: 'auto', pb: 0.25 }}>
                 <ToggleButtonGroup size="small" exclusive value={dimension} onChange={(_, value) => value && setDimension(value)}>
                   {Object.entries(dimensionLabel).map(([value, label]) => <ToggleButton key={value} value={value}>{label}</ToggleButton>)}
                 </ToggleButtonGroup>
                 <ToggleButtonGroup size="small" exclusive value={driverMetric} onChange={(_, value) => value && setDriverMetric(value)}>
-                  <ToggleButton value="sales">Продажи</ToggleButton><ToggleButton value="investments">Инвестиции</ToggleButton><ToggleButton value="roi">ROI</ToggleButton>
+                  {Object.entries(DRIVER_METRIC_LABEL).map(([value, label]) => <ToggleButton key={value} value={value}>{label}</ToggleButton>)}
+                </ToggleButtonGroup>
+                <ToggleButtonGroup
+                  size="small" exclusive
+                  value={shownUnit(driverMetric, driverUnit)} disabled={!unitSwitchable(driverMetric)}
+                  onChange={(_, value) => value && setDriverUnit(value)}
+                >
+                  <ToggleButton value="units">Уп.</ToggleButton><ToggleButton value="rub">₽</ToggleButton>
                 </ToggleButtonGroup>
               </Stack>
             </Stack>
@@ -330,24 +340,28 @@ function OverviewDashboard({ data, onDrilldown, showValues }: {
                       них он просто отодвинул бы столбцы от нуля. */}
                   <XAxis
                     type="number"
-                    padding={showValues ? { left: drivers.some(point => point.value < 0) ? 64 : 0, right: 64 } : undefined}
-                    tickFormatter={driverMetric === 'roi' ? (value) => `${fullNumber(Number(value))} п.п.` : compactNumber}
+                    padding={showValues ? { left: drivers.some(point => point.value < 0) ? 80 : 0, right: 80 } : undefined}
+                    tickFormatter={(value) => driverMetric === 'roi'
+                      ? `${fullNumber(Number(value))} ${driverUnitText}`
+                      : `${compactNumber(Number(value))} ${driverUnitText}`}
                     tick={{ fontSize: 10 }}
                   />
                   <YAxis type="category" dataKey="name" width={135} tick={{ fontSize: 10 }} tickFormatter={(value) => String(value).length > 20 ? `${String(value).slice(0, 18)}…` : String(value)} />
                   <ReferenceLine x={0} stroke={SERIES_NEUTRAL} />
-                  <Tooltip formatter={(value) => [driverMetric === 'roi' ? `${fullNumber(Number(value), 1)} п.п.` : fullNumber(Number(value)), 'Отклонение']} />
+                  <Tooltip formatter={(value) => [driverMetric === 'roi'
+                    ? `${fullNumber(Number(value), 1)} ${driverUnitText}`
+                    : `${fullNumber(Number(value))} ${driverUnitText}`, 'Отклонение']} />
                   <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
                     {showValues && (
                       <LabelList
                         dataKey="value" position="right"
                         formatter={(value) => labelText(value, driverMetric === 'roi'
-                          ? (numeric) => `${fullNumber(numeric, 1)} п.п.`
-                          : compactNumber)}
+                          ? (numeric) => `${fullNumber(numeric, 1)} ${driverUnitText}`
+                          : (numeric) => `${compactNumber(numeric)} ${driverUnitText}`)}
                         style={BAR_LABEL_STYLE}
                       />
                     )}
-                    {drivers.map(point => <Cell key={point.name} fill={point.value >= 0 ? SERIES_FACT : '#d15d50'} cursor="pointer" onClick={() => openBreakdown(point.breakdown)} />)}
+                    {drivers.map(point => <Cell key={point.name} fill={driverColor(point.value, driverMetric)} cursor="pointer" onClick={() => openBreakdown(point.breakdown)} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>

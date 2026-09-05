@@ -23,9 +23,9 @@ func TestAggregatePromoDashboardUsesComparableFactCohort(t *testing.T) {
 			Year: 2025, Month: 1,
 			NetworkName: promoString("Сеть А"), BrandAS: promoString("Бренд 1"),
 			SKU: promoString("SKU 1"), Mechanics: promoString("Скидка"),
-			PlanPromoUnits: promoFloat(100), PlanInvestmentsRub: promoFloat(20),
+			PlanPromoUnits: promoFloat(100), PlanPromoRub: promoFloat(1000), PlanInvestmentsRub: promoFloat(20),
 			PlanPromoUpliftUnits: promoFloat(20), PlanPromoUpliftRub: promoFloat(200), GM: promoFloat(0.5),
-			ActualPromoSalesUnits: promoFloat(110), ActualInvestments: promoFloat(25),
+			ActualPromoSalesUnits: promoFloat(110), ActualPromoRub: promoFloat(1100), ActualInvestments: promoFloat(25),
 			ActualPromoUpliftUnits: promoFloat(30), ActualPromoUpliftRub: promoFloat(300),
 		},
 		{
@@ -39,9 +39,9 @@ func TestAggregatePromoDashboardUsesComparableFactCohort(t *testing.T) {
 			Year: 2025, Month: 2,
 			NetworkName: promoString("Сеть А"), BrandAS: promoString("Бренд 2"),
 			SKU: promoString("SKU 1"), Mechanics: promoString("Скидка"),
-			PlanPromoUnits: promoFloat(80), PlanInvestmentsRub: promoFloat(16),
+			PlanPromoUnits: promoFloat(80), PlanPromoRub: promoFloat(800), PlanInvestmentsRub: promoFloat(16),
 			PlanPromoUpliftUnits: promoFloat(16), PlanPromoUpliftRub: promoFloat(160), GM: promoFloat(0.5),
-			ActualPromoSalesUnits: promoFloat(0), ActualInvestments: promoFloat(0),
+			ActualPromoSalesUnits: promoFloat(0), ActualPromoRub: promoFloat(0), ActualInvestments: promoFloat(0),
 			ActualPromoUpliftUnits: promoFloat(0), ActualPromoUpliftRub: promoFloat(0),
 		},
 	}
@@ -62,7 +62,10 @@ func TestAggregatePromoDashboardUsesComparableFactCohort(t *testing.T) {
 	assertPromoFloat(t, "comparable plan roi", got.ComparablePlanROI, 400)
 	assertPromoFloat(t, "actual roi", got.ActualROI, 500)
 	assertPromoFloat(t, "sales variance", got.SalesVarianceUnits, -70)
+	assertPromoFloat(t, "sales variance rub", got.SalesVarianceRub, -700)
 	assertPromoFloat(t, "investment variance", got.InvestmentVarianceRub, -11)
+	assertPromoFloat(t, "uplift variance units", got.UpliftVarianceUnits, -6)
+	assertPromoFloat(t, "uplift variance rub", got.UpliftVarianceRub, -60)
 
 	if len(dashboard.AvailableYears) != 1 || dashboard.AvailableYears[0] != 2025 {
 		t.Fatalf("available years = %v, want [2025]", dashboard.AvailableYears)

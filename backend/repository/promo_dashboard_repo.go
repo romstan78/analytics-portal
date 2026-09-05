@@ -17,11 +17,13 @@ type PromoDashboardRow struct {
 	Mechanics              *string
 	Channel                *string
 	PlanPromoUnits         *float64
+	PlanPromoRub           *float64
 	PlanInvestmentsRub     *float64
 	PlanPromoUpliftUnits   *float64
 	PlanPromoUpliftRub     *float64
 	GM                     *float64
 	ActualPromoSalesUnits  *float64
+	ActualPromoRub         *float64
 	ActualInvestments      *float64
 	ActualPromoUpliftUnits *float64
 	ActualPromoUpliftRub   *float64
@@ -34,9 +36,9 @@ func GetPromoDashboardRows(params PromoFilterParams, channels []string) ([]Promo
 	query := `SELECT
 		COALESCE(p.[year], 0), COALESCE(p.[month], 0),
 		p.network_name, p.brand_as, p.sku, p.mechanics, m.channel,
-		p.plan_promo_units, p.plan_investments_rub,
+		p.plan_promo_units, p.plan_promo_rub, p.plan_investments_rub,
 		p.plan_promo_uplift_units, p.plan_promo_uplift_rub, p.gm,
-		p.actual_promo_sales_units, p.actual_investments,
+		p.actual_promo_sales_units, p.actual_promo_rub, p.actual_investments,
 		p.actual_promo_uplift_units, p.actual_promo_uplift_rub
 	FROM dbo.tbl_PromoActivities p
 	LEFT JOIN dbo.tbl_MechanicsChannelMapping m ON p.mechanics = m.mechanics` + where + `
@@ -54,9 +56,9 @@ func GetPromoDashboardRows(params PromoFilterParams, channels []string) ([]Promo
 		if err := rows.Scan(
 			&row.Year, &row.Month,
 			&row.NetworkName, &row.BrandAS, &row.SKU, &row.Mechanics, &row.Channel,
-			&row.PlanPromoUnits, &row.PlanInvestmentsRub,
+			&row.PlanPromoUnits, &row.PlanPromoRub, &row.PlanInvestmentsRub,
 			&row.PlanPromoUpliftUnits, &row.PlanPromoUpliftRub, &row.GM,
-			&row.ActualPromoSalesUnits, &row.ActualInvestments,
+			&row.ActualPromoSalesUnits, &row.ActualPromoRub, &row.ActualInvestments,
 			&row.ActualPromoUpliftUnits, &row.ActualPromoUpliftRub,
 		); err != nil {
 			return nil, fmt.Errorf("scan promo dashboard row: %w", err)

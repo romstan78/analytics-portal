@@ -848,7 +848,10 @@ export interface PromoDashboardMetrics {
   salesCompletionPct: number | null;
   investmentCompletionPct: number | null;
   salesVarianceUnits: number | null;
+  salesVarianceRub: number | null;
   investmentVarianceRub: number | null;
+  upliftVarianceUnits: number | null;
+  upliftVarianceRub: number | null;
 }
 
 export interface PromoDashboardTrendPoint {

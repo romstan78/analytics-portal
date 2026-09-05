@@ -11,23 +11,29 @@ import (
 const promoUnknownDimension = "Не указано"
 
 type promoDashboardAccumulator struct {
-	promoCount      int
-	factReady       int
-	planUnits       float64
-	compareUnits    float64
-	actualUnits     float64
-	planInvest      float64
-	compareInvest   float64
-	actualInvest    float64
-	planUplift      float64
-	compareUplift   float64
-	actualUplift    float64
-	planNet         float64
-	planROIDenom    float64
-	compareNet      float64
-	compareROIDenom float64
-	actualNet       float64
-	actualROIDenom  float64
+	promoCount    int
+	factReady     int
+	planUnits     float64
+	compareUnits  float64
+	actualUnits   float64
+	compareRub    float64
+	actualRub     float64
+	planInvest    float64
+	compareInvest float64
+	actualInvest  float64
+	planUplift    float64
+	compareUplift float64
+	actualUplift  float64
+	// Uplift в рублях копится только по сопоставимому срезу: он нужен
+	// отклонению, а не плановым карточкам, которые считают uplift в упаковках.
+	compareUpliftRub float64
+	actualUpliftRub  float64
+	planNet          float64
+	planROIDenom     float64
+	compareNet       float64
+	compareROIDenom  float64
+	actualNet        float64
+	actualROIDenom   float64
 }
 
 func floatPointer(value float64) *float64 { return &value }
@@ -72,11 +78,15 @@ func (a *promoDashboardAccumulator) add(row repository.PromoDashboardRow) {
 	}
 	a.factReady++
 	a.compareUnits += planUnits
+	a.compareRub += valueOrZero(row.PlanPromoRub)
 	a.compareInvest += planInvest
 	a.compareUplift += planUplift
+	a.compareUpliftRub += planUpliftRub
 	a.actualUnits += valueOrZero(row.ActualPromoSalesUnits)
+	a.actualRub += valueOrZero(row.ActualPromoRub)
 	a.actualInvest += valueOrZero(row.ActualInvestments)
 	a.actualUplift += valueOrZero(row.ActualPromoUpliftUnits)
+	a.actualUpliftRub += valueOrZero(row.ActualPromoUpliftRub)
 	if planInvest > 0 {
 		a.compareNet += planUpliftRub * gm
 		a.compareROIDenom += planInvest
@@ -123,7 +133,10 @@ func (a promoDashboardAccumulator) metrics() models.PromoDashboardMetrics {
 		metrics.ActualUpliftUnits = floatPointer(a.actualUplift)
 		metrics.ActualROI = roi(a.actualNet, a.actualROIDenom)
 		metrics.SalesVarianceUnits = floatPointer(a.actualUnits - a.compareUnits)
+		metrics.SalesVarianceRub = floatPointer(a.actualRub - a.compareRub)
 		metrics.InvestmentVarianceRub = floatPointer(a.actualInvest - a.compareInvest)
+		metrics.UpliftVarianceUnits = floatPointer(a.actualUplift - a.compareUplift)
+		metrics.UpliftVarianceRub = floatPointer(a.actualUpliftRub - a.compareUpliftRub)
 	}
 	return metrics
 }
