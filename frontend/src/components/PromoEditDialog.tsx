@@ -183,7 +183,11 @@ export default function PromoEditDialog({
     setForm(prev => ({ ...prev, [field]: e.target.value }));
 
   const planTriggers: string[] = ['baseline_units', 'plan_promo_units', 'contract_price', 'plan_investments_rub'];
-  const actualTriggers: string[] = ['actual_promo_sales_units', 'actual_investments'];
+  // Скорректированный baseline и внешний e-com тоже входят в расчёт факта:
+  // первый задаёт базу uplift, второй — показатели без e-com.
+  const actualTriggers: string[] = [
+    'actual_promo_sales_units', 'actual_investments', 'actual_corrected_baseline', 'actual_external_ecom_units',
+  ];
   const textFields: string[] = ['network_name', 'kam', 'brand', 'sku', 'mechanics', 'gtn_opex', 'conditions', 'ecom_segment', 'status', 'id_directum', 'ds_number'];
 
   const handleFieldChange = (field: FormField) => (e: { target: { value: string } }) => {

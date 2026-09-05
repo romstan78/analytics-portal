@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+
+	"backend/models"
 )
 
 func TestUniqueNonEmptyStrings(t *testing.T) {
@@ -75,5 +77,42 @@ func TestSalesDashboardRequestRejectsUnknownUnit(t *testing.T) {
 	salesErr, ok := err.(*SalesError)
 	if !ok || salesErr.Status != http.StatusBadRequest {
 		t.Fatalf("error = %#v, want SalesError with status 400", err)
+	}
+}
+
+func TestSegmentTrendsKeepsSelectedSegmentsInTotalsOrder(t *testing.T) {
+	builder := &dashboardBuilder{req: SalesDashboardRequest{Segments: []string{"Аптека.ру", "еаптека"}}}
+	monthly := []models.SalesDashboardSeriesPoint{
+		{Name: "еаптека", Year: 2026, Month: 2, Value: 5},
+		{Name: "Аптека.ру", Year: 2026, Month: 2, Value: 30},
+		{Name: "Аптека.ру", Year: 2026, Month: 1, Value: 20},
+		{Name: "Здравсити", Year: 2026, Month: 1, Value: 100},
+		{Name: "еаптека", Year: 2026, Month: 1, Value: 7},
+	}
+	totals := []models.SalesDashboardRank{
+		{Name: "Здравсити", Value: 100},
+		{Name: "Аптека.ру", Value: 50},
+		{Name: "еаптека", Value: 12},
+	}
+
+	got := builder.segmentTrends(monthly, totals)
+	want := []models.SalesDashboardSeriesPoint{
+		{Name: "Аптека.ру", Year: 2026, Month: 1, Value: 20},
+		{Name: "Аптека.ру", Year: 2026, Month: 2, Value: 30},
+		{Name: "еаптека", Year: 2026, Month: 1, Value: 7},
+		{Name: "еаптека", Year: 2026, Month: 2, Value: 5},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("segmentTrends() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSegmentTrendsEmptyForSingleSegment(t *testing.T) {
+	builder := &dashboardBuilder{req: SalesDashboardRequest{Segments: []string{"OLAP SS"}}}
+	monthly := []models.SalesDashboardSeriesPoint{{Name: "OLAP SS", Year: 2026, Month: 1, Value: 20}}
+	totals := []models.SalesDashboardRank{{Name: "OLAP SS", Value: 20}}
+
+	if got := builder.segmentTrends(monthly, totals); len(got) != 0 {
+		t.Fatalf("segmentTrends() = %#v, want empty", got)
 	}
 }

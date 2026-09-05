@@ -64,6 +64,10 @@ export function usePromoCalculations(
         // Факт в рублях и uplift не отправляются: сервер выводит их из факта
         // в упаковках. Отправить прежние значения — значит удержать их на
         // экране после того, как факт в упаковках стёрли.
+        //
+        // Скорректированный baseline, наоборот, нужен: он задаёт базу
+        // фактического uplift, и без него сервер считал бы его от планового.
+        actual_corrected_baseline: num(draft.actual_corrected_baseline),
         actual_external_ecom_units: num(draft.actual_external_ecom_units),
         promo_pharmacies: num(draft.promo_pharmacies),
         total_pharmacies: num(draft.total_pharmacies),

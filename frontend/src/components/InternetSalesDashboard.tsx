@@ -55,6 +55,7 @@ export interface InternetSalesDashboardData {
   topNetworks: DashboardRank[];
   topProducts: DashboardRank[];
   segmentTotals: DashboardRank[];
+  segmentTrends: DashboardSeriesPoint[];
   networkTrends: DashboardSeriesPoint[];
   channelTrends: DashboardSeriesPoint[];
   networkBreakdown: DashboardNetworkBreakdown[];
@@ -77,6 +78,9 @@ interface InternetSalesDashboardProps {
 const MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
 const SERIES_COLORS = ['#5b5bd6', '#d14f8a', '#d58a20', '#168b7a', '#7a52b3'];
 const CHANNEL_COLORS = ['#087f8c', '#1875c1', '#08705f', '#8b4bb3', '#bd6428'];
+// Сегменты одного канала стоят рядом с каналами на том же графике, поэтому
+// палитра у них своя — иначе линия сегмента читается как ещё один канал.
+const SEGMENT_COLORS = ['#c2410c', '#0f766e', '#4338ca', '#a21caf', '#b45309', '#0369a1'];
 
 // Подписи значений на графиках — как в витринах промо и реестра: приглушённый
 // цвет, чтобы читались как разметка, а не спорили с самими рядами.
@@ -101,6 +105,11 @@ const unitSymbol = (unit: string) => unit === 'руб' ? '₽' : unit === 'ев�
 const fullNumber = (value: number, unit: string) => `${rawNumber(value, unit === 'евро' ? 2 : 0)} ${unitSymbol(unit)}`;
 const percent = (current: number, previous: number) => previous ? ((current - previous) / previous) * 100 : null;
 const percentLabel = (value: number | null) => value == null ? 'нет базы сравнения' : `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+
+// Режим «Год к году» рисует только общий ряд, поэтому при любых рядах для
+// сравнения — фокусах, каналах или сегментах канала — нужен режим «Выбранные».
+const hasComparisonSeries = (data: InternetSalesDashboardData | null, focuses: DashboardFocus[]) =>
+  focuses.length > 0 || (data?.channelTrends.length || 0) > 0 || (data?.segmentTrends?.length || 0) > 0;
 
 function KpiCard({ label, value, previous, change, accent }: { label: string; value: string; previous: string; change?: number | null; accent: string }) {
   const positive = change != null && change >= 0;
@@ -176,7 +185,12 @@ function NetworkHeatmap({ rows, networkOrder, unit, selectedNames, onSelect }: {
 export default function InternetSalesDashboard({
   data, loading, error, focuses, onProductSelect, onNetworkSelect, onSegmentSelect, onRemoveFocus, onClearFocus,
 }: InternetSalesDashboardProps) {
-  const [trendMode, setTrendMode] = useState<'year' | 'comparison'>('year');
+  // Данные могут прийти уже на первом рендере: react-query отдаёт кэш сразу при
+  // возврате с другой вкладки. Начальное 'year' в этом случае никогда бы не
+  // сменилось — сигнал ниже сравнивает соседние рендеры, а не пустое состояние.
+  const [trendMode, setTrendMode] = useState<'year' | 'comparison'>(
+    () => hasComparisonSeries(data, focuses) ? 'comparison' : 'year',
+  );
   const [cumulative, setCumulative] = useState(false);
   const [driverDimension, setDriverDimension] = useState<'network' | 'brand' | 'product'>('network');
   const [driverMetric, setDriverMetric] = useState<'delta' | 'percent'>('delta');
@@ -184,13 +198,15 @@ export default function InternetSalesDashboard({
   const [rankDimension, setRankDimension] = useState<'network' | 'product'>('network');
   const [showValues, setShowValues] = useState(false);
 
-  // Появление фокусов или трендов по каналам переключает режим на сравнение.
+  // Появление фокусов, трендов по каналам или разбивки по сегментам переключает
+  // режим на сравнение: многосегментный канал вроде PURE в режиме «Год к году»
+  // показал бы только сумму, ради которой сегменты и разбирают.
   // Синхронизация во время рендера вместо эффекта — правило set-state-in-effect.
-  const trendSignal = `${focuses.length}|${data?.channelTrends.length || 0}`;
+  const trendSignal = `${focuses.length}|${data?.channelTrends.length || 0}|${data?.segmentTrends?.length || 0}`;
   const [prevTrendSignal, setPrevTrendSignal] = useState(trendSignal);
   if (prevTrendSignal !== trendSignal) {
     setPrevTrendSignal(trendSignal);
-    if (focuses.length > 0 || (data?.channelTrends.length || 0) > 0) setTrendMode('comparison');
+    if (hasComparisonSeries(data, focuses)) setTrendMode('comparison');
   }
 
   const yearTrend = useMemo(() => {
@@ -237,6 +253,14 @@ export default function InternetSalesDashboard({
         rows.set(key, row);
       });
     });
+    [...new Set((data.segmentTrends || []).map(point => point.name))].forEach((name, index) => {
+      (data.segmentTrends || []).filter(point => point.name === name).forEach(point => {
+        const key = `${point.year}-${String(point.month).padStart(2, '0')}`;
+        const row = rows.get(key) || { period: key };
+        row[`segment_${index}`] = point.value;
+        rows.set(key, row);
+      });
+    });
     return [...rows.values()].sort((a, b) => String(a.period).localeCompare(String(b.period)));
   }, [data, focuses]);
 
@@ -255,6 +279,7 @@ export default function InternetSalesDashboard({
   const networkFocusNames = new Set(focuses.filter(item => item.type === 'network').map(item => item.name));
   const productFocusNames = new Set(focuses.filter(item => item.type === 'product').map(item => item.name));
   const channels = [...new Set(data.channelTrends.map(point => point.name))];
+  const segments = [...new Set((data.segmentTrends || []).map(point => point.name))];
   // Разрезы идут от крупного к мелкому: сеть, её бренды, их SKU. Бренд между
   // ними — та ступень, на которой разговор о вкладе обычно и ведётся.
   const driversByDimension = {
@@ -280,7 +305,10 @@ export default function InternetSalesDashboard({
     const numericValue = Number(value);
     const seriesName = String(name);
     const focusIndex = focuses.findIndex(focus => focus.name === seriesName);
-    if (focusIndex >= 0 && focuses[focusIndex].type === 'network') {
+    // Сегмент — часть общего ряда, как и сеть, поэтому долю показываем и для
+    // него. Каналы сравнения из общего среза не выделяются, доли у них нет.
+    const isSegment = segments.some(segment => seriesName === `Сегмент: ${segment}`);
+    if (isSegment || (focusIndex >= 0 && focuses[focusIndex].type === 'network')) {
       const total = Number(item.payload?.overall || 0);
       const share = total > 0 ? ` · доля ${((numericValue / total) * 100).toFixed(1)}%` : '';
       return [`${fullNumber(numericValue, data.unit)}${share}`, seriesName];
@@ -380,6 +408,7 @@ export default function InternetSalesDashboard({
                       всем сразу превращают график в кашу. */}
                   <Line yAxisId="main" type="monotone" dataKey="overall" name="Общий срез" stroke="#a0a8b5" strokeWidth={2} strokeDasharray="6 4" dot={false} isAnimationActive={false} />
                   {channels.map((name, index) => <Line key={name} yAxisId="main" type="monotone" dataKey={`channel_${index}`} name={`Канал: ${name}`} stroke={CHANNEL_COLORS[index % CHANNEL_COLORS.length]} strokeWidth={2.5} dot={false} connectNulls isAnimationActive={false} />)}
+                  {segments.map((name, index) => <Line key={`segment:${name}`} yAxisId="main" type="monotone" dataKey={`segment_${index}`} name={`Сегмент: ${name}`} stroke={SEGMENT_COLORS[index % SEGMENT_COLORS.length]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />)}
                   {focuses.map((focus, index) => (
                     <Line key={`${focus.type}:${focus.name}`} yAxisId={useFocusAxis ? 'selected' : 'main'} type="monotone" dataKey={`focus_${index}`} name={focus.name} stroke={SERIES_COLORS[index % SERIES_COLORS.length]} strokeWidth={3} dot={false} connectNulls isAnimationActive={false}>
                       {showValues && <LabelList dataKey={`focus_${index}`} position="top" offset={8} formatter={(value) => labelText(value, compactNumber)} style={LINE_LABEL_STYLE} />}

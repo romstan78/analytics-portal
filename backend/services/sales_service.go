@@ -754,12 +754,14 @@ func (b *dashboardBuilder) fillSegmentTotals(response *models.SalesDashboardResp
 	}
 
 	values := make(map[string]float64)
+	monthly := make([]models.SalesDashboardSeriesPoint, 0, len(rows))
 	for _, row := range rows {
 		value, convertErr := b.convert(row.Value, row.Year, row.Month)
 		if convertErr != nil {
 			return salesError(http.StatusInternalServerError, "Dashboard segment currency conversion failed")
 		}
 		values[row.Name] += value
+		monthly = append(monthly, models.SalesDashboardSeriesPoint{Name: row.Name, Year: row.Year, Month: row.Month, Value: value})
 	}
 
 	totals := make([]models.SalesDashboardRank, 0, len(values))
@@ -773,7 +775,46 @@ func (b *dashboardBuilder) fillSegmentTotals(response *models.SalesDashboardResp
 		return totals[i].Value > totals[j].Value
 	})
 	response.SegmentTotals = totals
+	response.SegmentTrends = b.segmentTrends(monthly, totals)
 	return nil
+}
+
+// segmentTrends раскладывает общий ряд на выбранные сегменты канала: у каналов
+// вроде PURE их несколько, и сумма сама по себе не показывает, чей это рост.
+//
+// Один сегмент повторил бы общий ряд линия в линию, поэтому разбивки нет.
+// Порядок берётся из totals: крупные сегменты идут первыми, и цвет линии не
+// прыгает между сегментами при смене периода.
+func (b *dashboardBuilder) segmentTrends(monthly []models.SalesDashboardSeriesPoint, totals []models.SalesDashboardRank) []models.SalesDashboardSeriesPoint {
+	points := make([]models.SalesDashboardSeriesPoint, 0)
+	if len(b.req.Segments) < 2 {
+		return points
+	}
+
+	selected := make(map[string]bool, len(b.req.Segments))
+	for _, segment := range b.req.Segments {
+		selected[segment] = true
+	}
+	order := make(map[string]int, len(totals))
+	for index, item := range totals {
+		order[item.Name] = index
+	}
+
+	for _, point := range monthly {
+		if selected[point.Name] {
+			points = append(points, point)
+		}
+	}
+	sort.SliceStable(points, func(i, j int) bool {
+		if points[i].Name != points[j].Name {
+			return order[points[i].Name] < order[points[j].Name]
+		}
+		if points[i].Year != points[j].Year {
+			return points[i].Year < points[j].Year
+		}
+		return points[i].Month < points[j].Month
+	})
+	return points
 }
 
 // fillSeriesComparisons строит тренды топовых сетей и сравниваемых каналов.

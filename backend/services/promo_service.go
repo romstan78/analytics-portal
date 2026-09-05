@@ -211,12 +211,18 @@ func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFie
 	// Пока факта в упаковках нет, остаются значения карточки: факт заливает
 	// импорт напрямую в БД (sync_script/import_promo.py), и пересчёт при
 	// сохранении не должен затирать залитое нулями.
+	// База фактического uplift — скорректированный baseline, если он заполнен:
+	// на факте плановый baseline уже неактуален, для того его и корректируют.
+	actualBaseline := bu
+	if acb > 0 {
+		actualBaseline = acb
+	}
 	afr := input.ActualPromoRub
 	afupl := input.ActualPromoUpliftUnits
 	afupr := input.ActualPromoUpliftRub
 	if afu != 0 {
 		afr = afu * cp
-		afupl = afu - bu
+		afupl = afu - actualBaseline
 		afupr = afupl * cp
 	}
 

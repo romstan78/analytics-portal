@@ -104,6 +104,22 @@ func TestCalculateFieldsActualFromSalesUnits(t *testing.T) {
 	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, -4000)
 }
 
+// Скорректированный baseline вытесняет плановый: на факте сравнивают с ним.
+func TestCalculateFieldsActualUsesCorrectedBaseline(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
+		ActualCorrectedBaseline: 120, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 30)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 6000)
+
+	// Пустой скорректированный baseline оставляет базой плановый.
+	got = calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 50)
+}
+
 // Без факта в упаковках значения карточки сохраняются: факт заливает импорт
 // напрямую в БД, и пересчёт при сохранении не должен затирать залитое нулями.
 func TestCalculateFieldsActualKeptWithoutSalesUnits(t *testing.T) {
