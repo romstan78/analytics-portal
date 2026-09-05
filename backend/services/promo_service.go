@@ -77,6 +77,9 @@ type CalculatedFields struct {
 	PlanInvestmentsPct           float64 `json:"plan_investments_pct"`
 	PlanROI                      float64 `json:"plan_roi"`
 	BaselineRub                  float64 `json:"baseline_rub"`
+	ActualPromoRub               float64 `json:"actual_promo_rub"`
+	ActualPromoUpliftUnits       float64 `json:"actual_promo_uplift_units"`
+	ActualPromoUpliftRub         float64 `json:"actual_promo_uplift_rub"`
 	NetPromoUpliftRub            float64 `json:"net_promo_uplift_rub"`
 	NetPromoUpliftPct            float64 `json:"net_promo_uplift_pct"`
 	ActualInvestmentsPct         float64 `json:"actual_investments_pct"`
@@ -192,15 +195,29 @@ func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFie
 	baselineRub := bu * cp
 
 	afu := input.ActualPromoSalesUnits
-	afr := input.ActualPromoRub
 	afi := input.ActualInvestments
-	afupl := input.ActualPromoUpliftUnits
-	afupr := input.ActualPromoUpliftRub
 	afeu := input.ActualExternalEcomUnits
 	acb := input.ActualCorrectedBaseline
 	ph := float64(input.PromoPharmacies)
 	if ph == 0 {
 		ph = 1
+	}
+
+	// Факт в упаковках — единственный ручной ввод фактического объёма: рубли и
+	// uplift выводятся из него так же, как плановые из плановых упаковок.
+	// Вручную остаются только те факты, которых из объёма не вывести:
+	// инвестиции, внешний e-com и скорректированный baseline.
+	//
+	// Пока факта в упаковках нет, остаются значения карточки: факт заливает
+	// импорт напрямую в БД (sync_script/import_promo.py), и пересчёт при
+	// сохранении не должен затирать залитое нулями.
+	afr := input.ActualPromoRub
+	afupl := input.ActualPromoUpliftUnits
+	afupr := input.ActualPromoUpliftRub
+	if afu != 0 {
+		afr = afu * cp
+		afupl = afu - bu
+		afupr = afupl * cp
 	}
 
 	netPromoUpliftRub := afupr * gm
@@ -263,6 +280,9 @@ func CalculateFields(input *PromoInputDTO, ctx CalculationContext) CalculatedFie
 		PlanInvestmentsPct:           planInvestmentsPct,
 		PlanROI:                      planROI,
 		BaselineRub:                  baselineRub,
+		ActualPromoRub:               afr,
+		ActualPromoUpliftUnits:       afupl,
+		ActualPromoUpliftRub:         afupr,
 		NetPromoUpliftRub:            netPromoUpliftRub,
 		NetPromoUpliftPct:            netPromoUpliftPct,
 		ActualInvestmentsPct:         actualInvestmentsPct,
@@ -321,6 +341,11 @@ func MergeCalculatedIntoDBRow(r *models.PromoRowDB, c CalculatedFields) {
 	r.PlanInvestmentsPct = ptrFloat(c.PlanInvestmentsPct)
 	r.PlanROI = ptrFloat(c.PlanROI)
 	r.BaselineRub = ptrFloat(c.BaselineRub)
+	// optFloat, а не ptrFloat: у карточки без факта колонки остаются NULL —
+	// пустой факт и факт, равный нулю, различаются в отчётах.
+	r.ActualPromoRub = optFloat(c.ActualPromoRub)
+	r.ActualPromoUpliftUnits = optFloat(c.ActualPromoUpliftUnits)
+	r.ActualPromoUpliftRub = optFloat(c.ActualPromoUpliftRub)
 	r.NetPromoUpliftRub = ptrFloat(c.NetPromoUpliftRub)
 	r.NetPromoUpliftPct = ptrFloat(c.NetPromoUpliftPct)
 	r.ActualInvestmentsPct = ptrFloat(c.ActualInvestmentsPct)

@@ -75,6 +75,49 @@ func TestCalculateFieldsNegativeUplift(t *testing.T) {
 	assertClose(t, "plan_promo_uplift_rub", got.PlanPromoUpliftRub, -4000)
 }
 
+// Факт в упаковках — единственный ввод: рубли и uplift выводятся из него.
+func TestCalculateFieldsActualFromSalesUnits(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
+		ActualInvestments: 50000, Year: 2026, Month: 1,
+	}, 0.5)
+	assertClose(t, "actual_promo_rub", got.ActualPromoRub, 30000)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 50)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 10000)
+	assertClose(t, "actual_roi", got.ActualROI, -90)
+
+	// Присланные рубли и uplift не спорят с фактом в упаковках, а заменяются им.
+	got = calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
+		ActualPromoRub: 999, ActualPromoUpliftUnits: 999, ActualPromoUpliftRub: 999,
+		ActualInvestments: 50000, Year: 2026, Month: 1,
+	}, 0.5)
+	assertClose(t, "actual_promo_rub", got.ActualPromoRub, 30000)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 50)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 10000)
+
+	// Продажи ниже базовой линии: отрицательный uplift не обнуляется.
+	got = calcWith(PromoInputDTO{
+		ActualPromoSalesUnits: 80, ContractPrice: 200, BaselineUnits: 100, Year: 2026, Month: 1,
+	}, 1)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, -20)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, -4000)
+}
+
+// Без факта в упаковках значения карточки сохраняются: факт заливает импорт
+// напрямую в БД, и пересчёт при сохранении не должен затирать залитое нулями.
+func TestCalculateFieldsActualKeptWithoutSalesUnits(t *testing.T) {
+	got := calcWith(PromoInputDTO{
+		ContractPrice: 200, BaselineUnits: 100,
+		ActualPromoRub: 30000, ActualPromoUpliftUnits: 50, ActualPromoUpliftRub: 10000,
+		ActualInvestments: 50000, Year: 2026, Month: 1,
+	}, 0.5)
+	assertClose(t, "actual_promo_rub", got.ActualPromoRub, 30000)
+	assertClose(t, "actual_promo_uplift_units", got.ActualPromoUpliftUnits, 50)
+	assertClose(t, "actual_promo_uplift_rub", got.ActualPromoUpliftRub, 10000)
+	assertClose(t, "actual_roi", got.ActualROI, -90)
+}
+
 func TestCalculateFieldsActualROI(t *testing.T) {
 	got := calcWith(PromoInputDTO{
 		ActualPromoSalesUnits: 150, ContractPrice: 200, BaselineUnits: 100,
@@ -93,12 +136,15 @@ func TestCalculateFieldsActualROI(t *testing.T) {
 func TestCalculateFieldsAllZeroes(t *testing.T) {
 	got := calcWith(PromoInputDTO{Year: 2026, Month: 1}, 1)
 	for name, value := range map[string]float64{
-		"plan_promo_rub":          got.PlanPromoRub,
-		"plan_promo_uplift_units": got.PlanPromoUpliftUnits,
-		"plan_promo_uplift_rub":   got.PlanPromoUpliftRub,
-		"plan_roi":                got.PlanROI,
-		"baseline_rub":            got.BaselineRub,
-		"actual_roi":              got.ActualROI,
+		"plan_promo_rub":            got.PlanPromoRub,
+		"plan_promo_uplift_units":   got.PlanPromoUpliftUnits,
+		"plan_promo_uplift_rub":     got.PlanPromoUpliftRub,
+		"plan_roi":                  got.PlanROI,
+		"baseline_rub":              got.BaselineRub,
+		"actual_promo_rub":          got.ActualPromoRub,
+		"actual_promo_uplift_units": got.ActualPromoUpliftUnits,
+		"actual_promo_uplift_rub":   got.ActualPromoUpliftRub,
+		"actual_roi":                got.ActualROI,
 	} {
 		assertClose(t, name, value, 0)
 	}

@@ -61,7 +61,9 @@ export function usePromoCalculations(
         plan_investments_rub: num(draft.plan_investments_rub),
         actual_promo_sales_units: num(draft.actual_promo_sales_units),
         actual_investments: num(draft.actual_investments),
-        actual_promo_uplift_units: num(draft.actual_promo_uplift_units),
+        // Факт в рублях и uplift не отправляются: сервер выводит их из факта
+        // в упаковках. Отправить прежние значения — значит удержать их на
+        // экране после того, как факт в упаковках стёрли.
         actual_external_ecom_units: num(draft.actual_external_ecom_units),
         promo_pharmacies: num(draft.promo_pharmacies),
         total_pharmacies: num(draft.total_pharmacies),
