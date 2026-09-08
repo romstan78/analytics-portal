@@ -14,6 +14,16 @@ export const SERIES_PLAN = '#6366f1';
 export const SERIES_FACT = '#149174';
 export const SERIES_EAC = '#c57a24';
 export const SERIES_PREV = '#8793a5';
+
+// Инвестиции по типам: тон различает тип (GTN — синий, OPEX — янтарный),
+// светлота — план и факт. Светлота несёт пару «план — факт» намеренно: она
+// читается и в чёрно-белой печати, и при дальтонизме, где два тона рядом
+// сливаются. Источник суммы (реестр или промо) показан штриховкой сегмента,
+// а не пятым цветом.
+export const SERIES_GTN_PLAN = '#818cf8';
+export const SERIES_GTN_FACT = '#4338ca';
+export const SERIES_OPEX_PLAN = '#e0a458';
+export const SERIES_OPEX_FACT = '#a35f16';
 export const NEUTRAL = '#8793a5';
 export const GRID = '#e9edf2';
 export const BORDER = '#dfe5ee';

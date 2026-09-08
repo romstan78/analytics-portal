@@ -1664,3 +1664,95 @@ func TestDashboardPaysFromFactWithoutThreshold(t *testing.T) {
 		t.Errorf("прогнозные инвестиции = %v, ожидалось 50000: режим оплаты от факта", got.Summary.EACInvestmentsRub)
 	}
 }
+
+// Разбивка инвестиций промо по типам. Тип ведётся только в карточке промо;
+// незаполненный читается как GTN — реестр все свои инвестиции ведёт так же.
+// Обе базы НДС заполняются всегда, ставкой того квартала сети, в котором
+// прошло промо.
+func TestDashboardSplitsPromoInvestmentsByType(t *testing.T) {
+	opex := "OPEX Marketing"
+	gtn := "GTN"
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 400000, 40000),
+			dashboardFact(1, 2, "Альфа", 300000, 30000),
+			dashboardFact(1, 3, "Альфа", 300000, 30000),
+		},
+		promos: []repository.NetworkDashboardPromoRow{
+			// Промо OPEX: план 120 000, факта ещё нет.
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				GTNOpex: &opex, PromoCount: 1, InvestRub: 120000, EffectiveInvest: 120000},
+			// Промо OPEX, закрытое фактом.
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 3, BrandAS: brandPtr("Альфа"),
+				GTNOpex: &opex, PromoCount: 1, InvestRub: 60000, FactInvest: 36000,
+				EffectiveInvest: 36000},
+			// Промо GTN и промо без типа: и то и другое идёт в GTN.
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				GTNOpex: &gtn, PromoCount: 1, InvestRub: 90000, FactInvest: 84000,
+				EffectiveInvest: 84000},
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				PromoCount: 1, InvestRub: 30000, FactInvest: 24000, EffectiveInvest: 24000},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.Quarters) != 1 {
+		t.Fatalf("кварталов = %d, ожидался 1", len(got.Quarters))
+	}
+	quarter := got.Quarters[0].Metrics
+
+	// OPEX: план 120 000 + 60 000 как введено, без НДС 20% — 150 000.
+	if quarter.PromoInvestmentsOPEX.PlanRub != 180000 {
+		t.Errorf("план OPEX с НДС = %v, ожидалось 180000", quarter.PromoInvestmentsOPEX.PlanRub)
+	}
+	if quarter.PromoInvestmentsOPEX.PlanRubNet != 150000 {
+		t.Errorf("план OPEX без НДС = %v, ожидалось 150000", quarter.PromoInvestmentsOPEX.PlanRubNet)
+	}
+	// Факт планом не достраивается: незакрытое промо приносит в факт ноль.
+	if quarter.PromoInvestmentsOPEX.FactRub != 36000 {
+		t.Errorf("факт OPEX с НДС = %v, ожидалось 36000", quarter.PromoInvestmentsOPEX.FactRub)
+	}
+	if quarter.PromoInvestmentsOPEX.FactRubNet != 30000 {
+		t.Errorf("факт OPEX без НДС = %v, ожидалось 30000", quarter.PromoInvestmentsOPEX.FactRubNet)
+	}
+	// Ожидаемое достраивается планом там, где факта ещё нет: 120 000 плана
+	// незакрытого промо плюс 36 000 факта закрытого.
+	if quarter.PromoInvestmentsOPEX.EACRub != 156000 {
+		t.Errorf("ожидаемое OPEX с НДС = %v, ожидалось 156000", quarter.PromoInvestmentsOPEX.EACRub)
+	}
+	if quarter.PromoInvestmentsOPEX.EACRubNet != 130000 {
+		t.Errorf("ожидаемое OPEX без НДС = %v, ожидалось 130000", quarter.PromoInvestmentsOPEX.EACRubNet)
+	}
+
+	// GTN промо: 90 000 помеченных плюс 30 000 без типа.
+	if quarter.PromoInvestmentsGTN.PlanRub != 120000 {
+		t.Errorf("план GTN промо с НДС = %v, ожидалось 120000", quarter.PromoInvestmentsGTN.PlanRub)
+	}
+	if quarter.PromoInvestmentsGTN.PlanRubNet != 100000 {
+		t.Errorf("план GTN промо без НДС = %v, ожидалось 100000", quarter.PromoInvestmentsGTN.PlanRubNet)
+	}
+	if quarter.PromoInvestmentsGTN.FactRub != 108000 {
+		t.Errorf("факт GTN промо с НДС = %v, ожидалось 108000", quarter.PromoInvestmentsGTN.FactRub)
+	}
+	if quarter.PromoInvestmentsGTN.FactRubNet != 90000 {
+		t.Errorf("факт GTN промо без НДС = %v, ожидалось 90000", quarter.PromoInvestmentsGTN.FactRubNet)
+	}
+
+	// Инвестиции реестра разбивка не трогает: это отдельная часть столбца.
+	if quarter.PlanInvestmentsRub != 100000 || quarter.PlanInvestmentsRubNet != 83333.33 {
+		t.Errorf("план реестра = %v / %v, ожидалось 100000 / 83333.33",
+			quarter.PlanInvestmentsRub, quarter.PlanInvestmentsRubNet)
+	}
+	// Плановая сумма всех промо среза остаётся прежней величиной.
+	if quarter.PromoInvestmentsRub != 300000 {
+		t.Errorf("инвестиции промо = %v, ожидалось 300000", quarter.PromoInvestmentsRub)
+	}
+}

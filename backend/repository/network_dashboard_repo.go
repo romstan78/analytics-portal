@@ -81,16 +81,25 @@ type NetworkDashboardPeriodData struct {
 // NetworkDashboardPromoRow — промо, проведённое в срезе. Канал приходит из
 // справочника механик, где он размечен как онлайн/оффлайн.
 type NetworkDashboardPromoRow struct {
-	NetworkName     string
-	Year            int
-	Month           int
-	BrandAS         *string
-	Mechanics       *string
-	Channel         *string
-	ShortCode       *string
-	PromoCount      int
-	PlanRub         float64
-	InvestRub       float64
+	NetworkName string
+	Year        int
+	Month       int
+	BrandAS     *string
+	Mechanics   *string
+	Channel     *string
+	ShortCode   *string
+	// GTNOpex — тип инвестиций из карточки промо. В реестре сетей типа нет
+	// вовсе, и это единственное место, где он проставлен человеком.
+	GTNOpex    *string
+	PromoCount int
+	PlanRub    float64
+	InvestRub  float64
+	// FactInvest — только закрытые деньги, без достройки планом.
+	// EffectiveInvest — ожидаемое: факт, если есть, иначе план, и выбор
+	// сделан по каждому промо, а не по уже сложенной сумме — в одной группе
+	// часть промо закрыта, часть ещё нет.
+	FactInvest      float64
+	EffectiveInvest float64
 	PlanUpliftRub   float64
 	PlanUpliftUnits float64
 }
@@ -400,6 +409,10 @@ func dashboardForecasts(
 // Канал и короткий код берутся из справочника механик. Механика без записи
 // в справочнике остаётся без канала, а не приписывается к оффлайну по
 // умолчанию; код в этом случае соберёт сам сервис.
+//
+// Тип инвестиций (gtn_opex) идёт в группировку рядом с механикой: разбивка
+// инвестиций на GTN и OPEX ведётся только здесь, в реестре сетей этого поля
+// нет.
 func dashboardPromos(
 	filter NetworkDashboardFilter,
 	scope string,
@@ -408,10 +421,13 @@ func dashboardPromos(
 ) ([]NetworkDashboardPromoRow, error) {
 	monthPlaceholders, monthArgs := intArgs(months)
 	query := `SELECT n.name, p.[year], p.[month],
-			p.brand_as, p.mechanics, m.channel, m.short_code,
+			p.brand_as, p.mechanics, m.channel, m.short_code, p.gtn_opex,
 			COUNT(*) AS promo_count,
 			SUM(ISNULL(p.plan_promo_rub, 0)),
 			SUM(ISNULL(p.plan_investments_rub, 0)),
+			SUM(ISNULL(p.actual_investments, 0)),
+			SUM(CASE WHEN ISNULL(p.actual_investments, 0) > 0
+				THEN p.actual_investments ELSE ISNULL(p.plan_investments_rub, 0) END),
 			SUM(CASE WHEN p.agreement1_status = 'approved' AND p.agreement2_status = 'approved'
 				THEN ISNULL(p.plan_promo_uplift_rub, 0) ELSE 0 END),
 			SUM(CASE WHEN p.agreement1_status = 'approved' AND p.agreement2_status = 'approved'
@@ -424,7 +440,8 @@ func dashboardPromos(
 		  AND p.[year] = ?
 		  AND p.[month] IN (` + monthPlaceholders + `)
 		  AND n.is_active = 1` + scope + `
-		GROUP BY n.name, p.[year], p.[month], p.brand_as, p.mechanics, m.channel, m.short_code`
+		GROUP BY n.name, p.[year], p.[month], p.brand_as, p.mechanics, m.channel, m.short_code,
+			p.gtn_opex`
 
 	args := append(append([]interface{}{filter.Year}, monthArgs...), scopeArgs...)
 	rows, err := config.DB.Query(query, args...)
@@ -437,8 +454,9 @@ func dashboardPromos(
 	for rows.Next() {
 		var row NetworkDashboardPromoRow
 		if err := rows.Scan(&row.NetworkName, &row.Year, &row.Month, &row.BrandAS,
-			&row.Mechanics, &row.Channel, &row.ShortCode, &row.PromoCount,
-			&row.PlanRub, &row.InvestRub, &row.PlanUpliftRub, &row.PlanUpliftUnits); err != nil {
+			&row.Mechanics, &row.Channel, &row.ShortCode, &row.GTNOpex, &row.PromoCount,
+			&row.PlanRub, &row.InvestRub, &row.FactInvest, &row.EffectiveInvest,
+			&row.PlanUpliftRub, &row.PlanUpliftUnits); err != nil {
 			return nil, fmt.Errorf("scan dashboard promo: %w", err)
 		}
 		result = append(result, row)

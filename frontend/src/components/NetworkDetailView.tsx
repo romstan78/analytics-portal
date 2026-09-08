@@ -50,7 +50,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { formatRubShort, pluralRu } from '../utils/networkPlan';
+import { formatRubShort, pluralRu, round2 } from '../utils/networkPlan';
 import {
   BORDER,
   CHANNEL_COLOR,
@@ -62,6 +62,10 @@ import {
   SERIES_EAC,
   SERIES_FACT,
   SERIES_PLAN,
+  SERIES_GTN_FACT,
+  SERIES_GTN_PLAN,
+  SERIES_OPEX_FACT,
+  SERIES_OPEX_PLAN,
   SERIES_PREV,
   amount,
   amountFull,
@@ -99,6 +103,16 @@ const MONTH_FULL = [
 // Что показывает раскрытие строки бренда. Кварталы — те же строки плана,
 // SKU — объяснение снизу, где плановых величин нет.
 type DetailKind = 'quarters' | 'skus';
+
+// База инвестиций: до вычета НДС или после. Сети работают на разных ставках,
+// поэтому сравнивать их между собой можно только «после», а сверять с
+// документами — «до».
+type VatBase = 'gross' | 'net';
+
+const VAT_BASE_LABEL: Record<VatBase, string> = {
+  gross: 'с НДС',
+  net: 'без НДС',
+};
 
 // Подписи значений — как в витрине по всем сетям: приглушённый цвет, чтобы
 // читались как разметка, а не спорили с самими рядами. Ряды с подписями не
@@ -201,11 +215,38 @@ function GapTooltip({ active, payload, unit }: {
   );
 }
 
+// Точка графика инвестиций: четыре столбца квартала (план и ожидаемое, по
+// каждому типу), и в каждом — часть реестра и часть промо.
+//
+// Тип инвестиций реестр не хранит: всё, что он начисляет процентом от
+// товарооборота, — это GTN. OPEX существует только в карточках промо, поэтому
+// у столбцов OPEX части реестра нет вовсе.
 interface InvestmentPoint {
   key: string;
   tick: string;
-  plan: number;
-  eac: number;
+
+  planRegistry: number;
+  planPromoGTN: number;
+  planPromoOPEX: number;
+
+  // Ожидаемое, а не факт: у реестра это EAC — факт закрытых месяцев плюс
+  // прогноз открытых; у промо — факт, если он есть, иначе план. Пустой столбец
+  // рядом с планом означал бы «денег не будет», а не «квартал ещё не закрыт».
+  eacRegistry: number;
+  eacPromoGTN: number;
+  eacPromoOPEX: number;
+
+  // Закрытые деньги, как они есть. На графике их нет — только в подсказке:
+  // столбцов и так четыре, а вопрос «сколько уже закрыто» второй по счёту.
+  factRegistry: number;
+  factPromoGTN: number;
+  factPromoOPEX: number;
+
+  planGTN: number;
+  eacGTN: number;
+  planOPEX: number;
+  eacOPEX: number;
+
   effective: number | null;
   // Плановая ставка квартала. Подпись под столбцом — это ставка, поэтому и
   // сравнивать её надо со ставкой: перерасход в рублях при выросшем объёме
@@ -244,29 +285,59 @@ function InvestmentTick(props: {
   );
 }
 
-function InvestmentTooltip({ active, payload, year }: {
+// Строка подсказки «реестр + промо»: показывается только там, где обе части
+// не нулевые. Иначе «0 ₽ реестра» у OPEX читалось бы как потерянные деньги.
+function InvestmentParts({ registry, promo }: { registry: number; promo: number }) {
+  if (registry === 0 && promo === 0) return null;
+  return (
+    <Typography variant="caption" sx={{ display: 'block', color: INK_MUTED, pl: 0.75 }}>
+      {registry !== 0 && `реестр ${formatRubShort(registry)}`}
+      {registry !== 0 && promo !== 0 && ' · '}
+      {promo !== 0 && `промо ${formatRubShort(promo)}`}
+      {' ₽'}
+    </Typography>
+  );
+}
+
+function InvestmentTooltip({ active, payload, year, vatLabel }: {
   active?: boolean;
   payload?: Array<{ payload: InvestmentPoint }>;
   year: number;
+  vatLabel: string;
 }) {
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
-  const variance = point.eac - point.plan;
+  const plan = round2(point.planGTN + point.planOPEX);
+  const eac = round2(point.eacGTN + point.eacOPEX);
+  const fact = round2(point.factRegistry + point.factPromoGTN + point.factPromoOPEX);
+  const variance = round2(eac - plan);
   return (
-    <Paper sx={{ p: 1.25, border: `1px solid ${BORDER}`, maxWidth: 280 }}>
-      <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>{point.tick} {year}</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>План: {formatRubShort(point.plan)} ₽</Typography>
-      <Typography variant="caption" sx={{ display: 'block' }}>Прогноз: {formatRubShort(point.eac)} ₽</Typography>
-      {point.eac < point.plan && (
-        <Typography variant="caption" sx={{ display: 'block', color: INK_MUTED }}>
-          Недобор {formatRubShort(point.plan - point.eac)} ₽: план выполнен не всеми брендами
-        </Typography>
-      )}
+    <Paper sx={{ p: 1.25, border: `1px solid ${BORDER}`, maxWidth: 320 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
+        {point.tick} {year} · {vatLabel}
+      </Typography>
+
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontWeight: 700 }}>
+        GTN: план {formatRubShort(point.planGTN)} → {formatRubShort(point.eacGTN)} ₽
+      </Typography>
+      <InvestmentParts registry={point.planRegistry} promo={point.planPromoGTN} />
+      <InvestmentParts registry={point.eacRegistry} promo={point.eacPromoGTN} />
+
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontWeight: 700 }}>
+        OPEX: план {formatRubShort(point.planOPEX)} → {formatRubShort(point.eacOPEX)} ₽
+      </Typography>
+      <InvestmentParts registry={0} promo={point.planPromoOPEX} />
+
+      <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: INK_MUTED }}>
+        Уже закрыто фактом: {formatRubShort(fact)} ₽
+      </Typography>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, color: gapColor(-variance) }}>
         {variance >= 0 ? 'Перерасход' : 'Экономия'}: {signedShort(variance)} ₽
       </Typography>
+      {/* Ставка считается по инвестициям реестра: у промо процента от
+          товарооборота сети нет вовсе. */}
       <Typography variant="caption" sx={{ display: 'block', color: INK_MUTED }}>
-        Ставка: {pctLabel(point.effective)} при плановой {pctLabel(point.planRate)}
+        Ставка реестра: {pctLabel(point.effective)} при плановой {pctLabel(point.planRate)}
       </Typography>
     </Paper>
   );
@@ -314,6 +385,9 @@ export default function NetworkDetailView({
   data, loading, error, onBackToAll, onBackToKAM, kamCrumb, onOpenCard,
 }: NetworkDetailViewProps) {
   const [unit, setUnit] = useState<Unit>('rub');
+  // База НДС графика инвестиций. По умолчанию «без НДС»: сети работают на
+  // разных ставках, и складывать их суммы можно только после вычета.
+  const [vatBase, setVatBase] = useState<VatBase>('net');
   const [showValues, setShowValues] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [detailKind, setDetailKind] = useState<DetailKind>('quarters');
@@ -493,19 +567,49 @@ export default function NetworkDetailView({
     return map;
   }, [data]);
 
-  const investments = useMemo(() => {
+  const investments = useMemo<InvestmentPoint[]>(() => {
     if (!data) return [];
-    return data.quarters.map((point) => ({
-      key: `q${point.quarter}`,
-      tick: `Q${point.quarter}`,
-      plan: point.metrics.planInvestmentsRubNet,
-      eac: point.metrics.eacInvestmentsRubNet,
-      effective: point.metrics.effectiveInvestmentsPct,
-      planRate: point.metrics.planRub > 0
-        ? Math.round((point.metrics.planInvestmentsRub / point.metrics.planRub) * 10000) / 100
-        : null,
-    }));
-  }, [data]);
+    // База НДС выбирается один раз на весь график: смешивать «до вычета» и
+    // «после» в одном столбце нельзя, а спорить с подписью тем более.
+    const base = (gross: number, net: number) => (vatBase === 'gross' ? gross : net);
+    return data.quarters.map((point) => {
+      const metrics = point.metrics;
+      const promoGTN = metrics.promoInvestmentsGtn;
+      const promoOPEX = metrics.promoInvestmentsOpex;
+
+      const planRegistry = base(metrics.planInvestmentsRub, metrics.planInvestmentsRubNet);
+      const eacRegistry = base(metrics.eacInvestmentsRub, metrics.eacInvestmentsRubNet);
+      const factRegistry = base(metrics.factInvestmentsRub, metrics.factInvestmentsRubNet);
+      const planPromoGTN = base(promoGTN.planRub, promoGTN.planRubNet);
+      const eacPromoGTN = base(promoGTN.eacRub, promoGTN.eacRubNet);
+      const factPromoGTN = base(promoGTN.factRub, promoGTN.factRubNet);
+      const planPromoOPEX = base(promoOPEX.planRub, promoOPEX.planRubNet);
+      const eacPromoOPEX = base(promoOPEX.eacRub, promoOPEX.eacRubNet);
+      const factPromoOPEX = base(promoOPEX.factRub, promoOPEX.factRubNet);
+
+      return {
+        key: `q${point.quarter}`,
+        tick: `Q${point.quarter}`,
+        planRegistry,
+        planPromoGTN,
+        planPromoOPEX,
+        eacRegistry,
+        eacPromoGTN,
+        eacPromoOPEX,
+        factRegistry,
+        factPromoGTN,
+        factPromoOPEX,
+        planGTN: round2(planRegistry + planPromoGTN),
+        eacGTN: round2(eacRegistry + eacPromoGTN),
+        planOPEX: planPromoOPEX,
+        eacOPEX: eacPromoOPEX,
+        effective: metrics.effectiveInvestmentsPct,
+        planRate: metrics.planRub > 0
+          ? Math.round((metrics.planInvestmentsRub / metrics.planRub) * 10000) / 100
+          : null,
+      };
+    });
+  }, [data, vatBase]);
 
   if (loading && !data) {
     return <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', minHeight: 320 }}><CircularProgress /></Box>;
@@ -1244,24 +1348,48 @@ export default function NetworkDetailView({
       {/* ── Полоса 5: инвестиции ─────────────────────────────────────────── */}
       <ChartPaper
         title="Инвестиции по кварталам"
-        subtitle="План против прогноза, база без НДС: сети работают на разных ставках, и сравнивать их можно только так. Бренд, не закрывший план, инвестиций не приносит."
+        subtitle={`Четыре столбца на квартал: план и ожидаемое по каждому типу инвестиций. Ожидаемое — это факт, а где его ещё нет, у реестра прогноз итога, у промо план. Внутри столбца сплошная часть — инвестиции реестра (бонус за товарооборот), штриховка — промо; тип OPEX ведётся только в промо. База — ${VAT_BASE_LABEL[vatBase]}.`}
+        action={(
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={vatBase}
+            onChange={(_, value: VatBase | null) => value && setVatBase(value)}
+            aria-label="База НДС для инвестиций"
+          >
+            <ToggleButton value="gross">С НДС</ToggleButton>
+            <ToggleButton value="net">Без НДС</ToggleButton>
+          </ToggleButtonGroup>
+        )}
         legend={(
           <SeriesLegend
             items={[
-              { label: 'План', color: SERIES_PLAN },
-              { label: 'Прогноз', color: SERIES_EAC },
+              { label: 'GTN · план', color: SERIES_GTN_PLAN },
+              { label: 'GTN · ожидаемое', color: SERIES_GTN_FACT },
+              { label: 'OPEX · план', color: SERIES_OPEX_PLAN },
+              { label: 'OPEX · ожидаемое', color: SERIES_OPEX_FACT },
             ]}
           />
         )}
         height={290}
       >
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={investments} margin={{ top: showValues ? 26 : 18, right: 8, left: 0, bottom: 0 }} maxBarSize={78}>
+          <BarChart data={investments} margin={{ top: showValues ? 26 : 18, right: 8, left: 0, bottom: 0 }} maxBarSize={34}>
+            {/* Штриховка отделяет промо от реестра внутри столбца. Цвет у неё
+                тот же, что у столбца: тон здесь занят типом инвестиций, и
+                пятый цвет спорил бы с легендой. */}
             <defs>
-              <pattern id="detail-hatch-invest" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-                <rect width="6" height="6" fill={SERIES_EAC} fillOpacity={0.26} />
-                <line x1="0" y1="0" x2="0" y2="6" stroke={SERIES_EAC} strokeWidth={3} />
-              </pattern>
+              {[
+                ['detail-hatch-gtn-plan', SERIES_GTN_PLAN],
+                ['detail-hatch-gtn-eac', SERIES_GTN_FACT],
+                ['detail-hatch-opex-plan', SERIES_OPEX_PLAN],
+                ['detail-hatch-opex-eac', SERIES_OPEX_FACT],
+              ].map(([id, color]) => (
+                <pattern key={id} id={id} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                  <rect width="6" height="6" fill={color} fillOpacity={0.22} />
+                  <line x1="0" y1="0" x2="0" y2="6" stroke={color} strokeWidth={3} />
+                </pattern>
+              ))}
             </defs>
             <CartesianGrid stroke={GRID} vertical={false} />
             <XAxis
@@ -1279,22 +1407,74 @@ export default function NetworkDetailView({
               tickFormatter={(value: number) => formatRubShort(value)}
               width={66}
             />
-            <Tooltip content={<InvestmentTooltip year={data.year} />} cursor={{ fill: 'rgba(99,102,241,.06)' }} />
-            {/* Здесь подписаны оба ряда: кварталов не больше четырёх, места
-                хватает, а весь смысл графика — расхождение плана с ожидаемым. */}
-            <Bar dataKey="plan" name="План" fill={SERIES_PLAN} fillOpacity={0.10} stroke={SERIES_PLAN} strokeWidth={1.75} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            <Tooltip
+              content={<InvestmentTooltip year={data.year} vatLabel={VAT_BASE_LABEL[vatBase]} />}
+              cursor={{ fill: 'rgba(99,102,241,.06)' }}
+            />
+
+            {/* Подпись значения ставится на верхний сегмент столбца и
+                показывает его итог: сумма важнее, чем высота одной части. */}
+            <Bar
+              dataKey="planRegistry" name="GTN · план · реестр" stackId="planGtn"
+              fill={SERIES_GTN_PLAN} fillOpacity={0.85} stroke={SERIES_GTN_PLAN} strokeWidth={1}
+              isAnimationActive={false}
+            />
+            <Bar
+              dataKey="planPromoGTN" name="GTN · план · промо" stackId="planGtn"
+              fill="url(#detail-hatch-gtn-plan)" stroke={SERIES_GTN_PLAN} strokeWidth={1}
+              radius={[3, 3, 0, 0]} isAnimationActive={false}
+            >
               {showValues && (
                 <LabelList
-                  dataKey="plan" position="top" offset={6}
+                  dataKey="planGTN" position="top" offset={6}
                   formatter={(value) => labelText(value, formatRubShort)}
                   style={BAR_LABEL_STYLE}
                 />
               )}
             </Bar>
-            <Bar dataKey="eac" name="Прогноз" fill="url(#detail-hatch-invest)" stroke={SERIES_EAC} strokeWidth={1} radius={[3, 3, 0, 0]} isAnimationActive={false}>
+
+            <Bar
+              dataKey="eacRegistry" name="GTN · ожидаемое · реестр" stackId="eacGtn"
+              fill={SERIES_GTN_FACT} fillOpacity={0.85} stroke={SERIES_GTN_FACT} strokeWidth={1}
+              isAnimationActive={false}
+            />
+            <Bar
+              dataKey="eacPromoGTN" name="GTN · ожидаемое · промо" stackId="eacGtn"
+              fill="url(#detail-hatch-gtn-eac)" stroke={SERIES_GTN_FACT} strokeWidth={1}
+              radius={[3, 3, 0, 0]} isAnimationActive={false}
+            >
               {showValues && (
                 <LabelList
-                  dataKey="eac" position="top" offset={6}
+                  dataKey="eacGTN" position="top" offset={6}
+                  formatter={(value) => labelText(value, formatRubShort)}
+                  style={BAR_LABEL_STYLE}
+                />
+              )}
+            </Bar>
+
+            {/* У OPEX части реестра нет: тип ведётся только в карточке промо.
+                Появится он в реестре — сюда добавится второй сегмент, как у GTN. */}
+            <Bar
+              dataKey="planPromoOPEX" name="OPEX · план · промо" stackId="planOpex"
+              fill="url(#detail-hatch-opex-plan)" stroke={SERIES_OPEX_PLAN} strokeWidth={1}
+              radius={[3, 3, 0, 0]} isAnimationActive={false}
+            >
+              {showValues && (
+                <LabelList
+                  dataKey="planOPEX" position="top" offset={6}
+                  formatter={(value) => labelText(value, formatRubShort)}
+                  style={BAR_LABEL_STYLE}
+                />
+              )}
+            </Bar>
+            <Bar
+              dataKey="eacPromoOPEX" name="OPEX · ожидаемое · промо" stackId="eacOpex"
+              fill="url(#detail-hatch-opex-eac)" stroke={SERIES_OPEX_FACT} strokeWidth={1}
+              radius={[3, 3, 0, 0]} isAnimationActive={false}
+            >
+              {showValues && (
+                <LabelList
+                  dataKey="eacOPEX" position="top" offset={6}
                   formatter={(value) => labelText(value, formatRubShort)}
                   style={BAR_LABEL_STYLE}
                 />

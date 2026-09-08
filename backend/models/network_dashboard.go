@@ -59,6 +59,20 @@ type NetworkDashboardMetrics struct {
 	InvestmentVarianceRub   float64  `json:"investmentVarianceRub"`
 	EffectiveInvestmentsPct *float64 `json:"effectiveInvestmentsPct"`
 
+	// ─── Инвестиции промо в разрезе типа ────────────────────────────────
+	//
+	// Тип инвестиций (GTN или OPEX) ведётся только в карточке промо, в поле
+	// gtn_opex. В реестре такого поля нет вовсе, поэтому его инвестиции
+	// целиком считаются GTN, а разделить столбец по типу можно лишь добавив
+	// к нему промо.
+	//
+	// Эти суммы не входят в PlanInvestmentsRub и FactInvestmentsRub: реестр
+	// считает процент от товарооборота, промо — деньги конкретных активностей,
+	// и складывать их в одно число значило бы потерять, откуда они взялись.
+	// На графике они и показаны отдельной частью столбца.
+	PromoInvestmentsGTN  NetworkDashboardInvestmentSplit `json:"promoInvestmentsGtn"`
+	PromoInvestmentsOPEX NetworkDashboardInvestmentSplit `json:"promoInvestmentsOpex"`
+
 	// UndistributedRub — остаток валового пула, не разобранный брендами.
 	// nil означает, что пула в срезе нет вовсе, а не что остаток нулевой.
 	UndistributedRub *float64 `json:"undistributedRub"`
@@ -84,6 +98,29 @@ type NetworkDashboardMetrics struct {
 	PromoOnlineCount    int     `json:"promoOnlineCount"`
 	PromoOfflineCount   int     `json:"promoOfflineCount"`
 	PromoInvestmentsRub float64 `json:"promoInvestmentsRub"`
+}
+
+// NetworkDashboardInvestmentSplit — инвестиции одного типа: план и факт,
+// каждый в двух базах.
+//
+// Обе базы заполняются всегда, тем же обещанием, что и в реестре: колонка
+// «без НДС» пригодна для сложения сетей с разными ставками. Промо своей ставки
+// не ведут, поэтому сумма приводится ставкой того квартала сети, в котором
+// прошло промо, — иначе один столбец сложился бы из двух разных баз.
+//
+// Факт и ожидаемое разделены намеренно. FactRub — только закрытые деньги, без
+// достройки планом: иначе незакрытое промо выглядело бы выполненным. EACRub —
+// ожидаемый итог: факт, если он есть, иначе план, и решается это по каждому
+// промо отдельно. На графике рядом с планом стоит именно ожидаемое — так же,
+// как у инвестиций реестра, где EAC складывается из факта закрытых месяцев и
+// прогноза открытых.
+type NetworkDashboardInvestmentSplit struct {
+	PlanRub    float64 `json:"planRub"`
+	PlanRubNet float64 `json:"planRubNet"`
+	FactRub    float64 `json:"factRub"`
+	FactRubNet float64 `json:"factRubNet"`
+	EACRub     float64 `json:"eacRub"`
+	EACRubNet  float64 `json:"eacRubNet"`
 }
 
 // NetworkDashboardPromoTag — метка проведённого промо: короткий код механики

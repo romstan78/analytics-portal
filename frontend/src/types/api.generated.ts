@@ -603,6 +603,15 @@ export interface NetworkPricesSaveResponse {
   data: NetworkPricesResponse;
 }
 
+export interface NetworkDashboardInvestmentSplit {
+  planRub: number;
+  planRubNet: number;
+  factRub: number;
+  factRubNet: number;
+  eacRub: number;
+  eacRubNet: number;
+}
+
 export interface NetworkDashboardMetrics {
   networkCount: number;
   brandCount: number;
@@ -624,6 +633,8 @@ export interface NetworkDashboardMetrics {
   eacInvestmentsRubNet: number;
   investmentVarianceRub: number;
   effectiveInvestmentsPct: number | null;
+  promoInvestmentsGtn: NetworkDashboardInvestmentSplit;
+  promoInvestmentsOpex: NetworkDashboardInvestmentSplit;
   undistributedRub: number | null;
   closedCells: number;
   closedCellsWithFact: number;

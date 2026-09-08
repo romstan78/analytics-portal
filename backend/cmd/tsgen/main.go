@@ -87,6 +87,7 @@ var exported = []entry{
 	{models.NetworkPriceSKUOption{}, ""},
 	{models.NetworkPricesResponse{}, ""},
 	{models.NetworkPricesSaveResponse{}, ""},
+	{models.NetworkDashboardInvestmentSplit{}, ""},
 	{models.NetworkDashboardMetrics{}, ""},
 	{models.NetworkDashboardPromoTag{}, ""},
 	{models.NetworkDashboardPeriodPoint{}, ""},

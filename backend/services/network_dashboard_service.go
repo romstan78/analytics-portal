@@ -82,12 +82,44 @@ type networkDashboardValues struct {
 	promo dashboardPromoTotals
 }
 
-// dashboardPromoTotals — промо среза в разбивке по каналу.
+// investmentSplit — инвестиции одного типа: план, факт и ожидаемое, каждое в
+// двух базах НДС.
+type investmentSplit struct {
+	planRub, planNet float64
+	factRub, factNet float64
+	eacRub, eacNet   float64
+}
+
+func (s *investmentSplit) add(other investmentSplit) {
+	s.planRub = round2(s.planRub + other.planRub)
+	s.planNet = round2(s.planNet + other.planNet)
+	s.factRub = round2(s.factRub + other.factRub)
+	s.factNet = round2(s.factNet + other.factNet)
+	s.eacRub = round2(s.eacRub + other.eacRub)
+	s.eacNet = round2(s.eacNet + other.eacNet)
+}
+
+func (s investmentSplit) model() models.NetworkDashboardInvestmentSplit {
+	return models.NetworkDashboardInvestmentSplit{
+		PlanRub: s.planRub, PlanRubNet: s.planNet,
+		FactRub: s.factRub, FactRubNet: s.factNet,
+		EACRub: s.eacRub, EACRubNet: s.eacNet,
+	}
+}
+
+// dashboardPromoTotals — промо среза в разбивке по каналу и по типу инвестиций.
+//
+// gtn и opex — те же деньги, что и в invest, но разложенные по типу из
+// карточки промо и по паре «план — факт». invest остаётся плановой суммой всех
+// промо среза: на него смотрят карточки, которым тип не нужен.
 type dashboardPromoTotals struct {
 	count   int
 	online  int
 	offline int
 	invest  float64
+
+	gtn  investmentSplit
+	opex investmentSplit
 }
 
 func (p *dashboardPromoTotals) add(other dashboardPromoTotals) {
@@ -95,6 +127,8 @@ func (p *dashboardPromoTotals) add(other dashboardPromoTotals) {
 	p.online += other.online
 	p.offline += other.offline
 	p.invest = round2(p.invest + other.invest)
+	p.gtn.add(other.gtn)
+	p.opex.add(other.opex)
 }
 
 type networkDashboardAccumulator struct {
@@ -241,6 +275,9 @@ func (a networkDashboardAccumulator) metrics() models.NetworkDashboardMetrics {
 		PromoOnlineCount:    a.promo.online,
 		PromoOfflineCount:   a.promo.offline,
 		PromoInvestmentsRub: a.promo.invest,
+
+		PromoInvestmentsGTN:  a.promo.gtn.model(),
+		PromoInvestmentsOPEX: a.promo.opex.model(),
 	}
 	if a.undistributedSet {
 		rest := a.undistributed
@@ -1066,10 +1103,53 @@ type promoIndex struct {
 	forecastUplifts    map[promoForecastKey]forecastPromoTotals
 }
 
+// isOPEXInvestment — промо, помеченное типом OPEX. Справочник даёт «OPEX» и
+// «OPEX Marketing», но поле в форме свободное, поэтому сверяется префикс, а не
+// полный список значений.
+//
+// Всё остальное, включая незаполненный тип, считается GTN: реестр типа не
+// хранит и ведёт все свои инвестиции как GTN, и промо без пометки логично
+// читать так же. Отдельная корзина «без типа» дала бы на графике третью пару
+// столбцов ради данных, которых в реестре нет.
+func isOPEXInvestment(value *string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(valueOrEmpty(value))), "OPEX")
+}
+
+// promoNetRub — приведение промо-инвестиций к базе «без НДС» ставкой того
+// квартала сети, в котором прошло промо.
+//
+// Промо НДС не ведут вовсе, а на графике инвестиций их суммы складываются с
+// инвестициями реестра, где база «без НДС» — обещание потребителю. Без общего
+// приведения один столбец собрался бы из двух разных баз.
+func promoNetRub(
+	networks []models.Network,
+	periods map[int][]models.NetworkPeriod,
+	year int,
+) func(network string, quarter int, gross float64) float64 {
+	byName := make(map[string]map[int]models.NetworkPeriod, len(networks))
+	for _, network := range networks {
+		quarters := make(map[int]models.NetworkPeriod, 4)
+		for _, period := range NetworkPeriodsWithDefaults(network, year, periods[network.ID]) {
+			quarters[period.Quarter] = period
+		}
+		byName[network.Name] = quarters
+	}
+	return func(network string, quarter int, gross float64) float64 {
+		period, ok := byName[network][quarter]
+		if !ok {
+			return round2(gross)
+		}
+		return NetRub(gross, period.VATIncluded, period.VATRate)
+	}
+}
+
 // indexPromos сворачивает промо в счётчики и в набор меток.
 // Метки склеиваются по коду и каналу: в одном квартале одна и та же механика
 // идёт много раз, и десять одинаковых плиток ничего не добавляют.
-func indexPromos(rows []repository.NetworkDashboardPromoRow) promoIndex {
+func indexPromos(
+	rows []repository.NetworkDashboardPromoRow,
+	netRub func(network string, quarter int, gross float64) float64,
+) promoIndex {
 	totals := map[promoCellKey]dashboardPromoTotals{}
 	byMonth := map[int]dashboardPromoTotals{}
 	byBrandMonth := map[promoBrandKey]dashboardPromoTotals{}
@@ -1095,11 +1175,28 @@ func indexPromos(rows []repository.NetworkDashboardPromoRow) promoIndex {
 			forecastUplifts[forecastKey] = uplift
 		}
 
+		// Приведение к базе «без НДС» делается один раз на строку: в четыре
+		// разреза уходит уже посчитанная сумма, иначе одно и то же промо
+		// получило бы разную базу в разных разрезах.
+		split := investmentSplit{
+			planRub: row.InvestRub,
+			planNet: netRub(row.NetworkName, quarter, row.InvestRub),
+			factRub: row.FactInvest,
+			factNet: netRub(row.NetworkName, quarter, row.FactInvest),
+			eacRub:  row.EffectiveInvest,
+			eacNet:  netRub(row.NetworkName, quarter, row.EffectiveInvest),
+		}
+
 		// Один и тот же вклад ложится в четыре разреза, поэтому счёт сведён в
 		// одно место: разойтись между разрезами он не должен.
 		countIn := func(totals dashboardPromoTotals) dashboardPromoTotals {
 			totals.count += row.PromoCount
 			totals.invest = round2(totals.invest + row.InvestRub)
+			if isOPEXInvestment(row.GTNOpex) {
+				totals.opex.add(split)
+			} else {
+				totals.gtn.add(split)
+			}
 			switch channel {
 			case promoChannelOnline:
 				totals.online += row.PromoCount
@@ -1209,7 +1306,7 @@ func AggregateNetworkDashboard(
 
 	current := indexPeriodData(data.Current)
 	previous := indexPeriodData(data.Prev)
-	promos := indexPromos(data.Promos)
+	promos := indexPromos(data.Promos, promoNetRub(data.Networks, current.periods, filter.Year))
 
 	summary := &networkDashboardAccumulator{}
 	quarters := map[int]*networkDashboardAccumulator{}
