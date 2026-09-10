@@ -143,13 +143,21 @@ type NetworkDashboardPeriodPoint struct {
 // NetworkDashboardMonthPoint — точка месячного тренда.
 //
 // Тип отдельный, а не общий с кварталом, намеренно: на месяце реальны не все
-// величины. Инвестиций здесь нет — процент инвестиций ведётся на квартальной
-// строке бренда, и раскладывать его по месяцам значило бы показывать
-// вычисленное как измеренное.
+// величины.
 //
 // План месяца — квартальное обязательство, распределённое по схеме из профиля
 // сети (те же три процента, что применяет карточка). Это раскладка плана, а не
 // отдельный план на месяц: помесячных планов в реестре не существует.
+//
+// То же и с инвестициями реестра: процент ведётся на квартальной строке
+// бренда, а право на выплату проверяется на квартале целиком. Поэтому месяцу
+// достаётся не отдельный расчёт, а доля уже посчитанной квартальной суммы —
+// разложенная по тому, чем инвестиции и являются: по обороту месяца (факт и
+// прогноз) и по схеме распределения (план). Сумма месяцев квартала обязана
+// сойтись с кварталом до копейки, второго правила здесь нет.
+//
+// Инвестиции промо — наоборот, величина именно месячная: у каждой активности
+// есть свой месяц, и раскладывать там нечего.
 type NetworkDashboardMonthPoint struct {
 	Year    int `json:"year"`
 	Month   int `json:"month"`
@@ -164,6 +172,20 @@ type NetworkDashboardMonthPoint struct {
 
 	PrevFactRub   *float64 `json:"prevFactRub"`
 	PrevFactUnits *float64 `json:"prevFactUnits"`
+
+	// Инвестиции реестра — доля квартальной суммы, приходящаяся на месяц.
+	// Порог выплаты уже применён: у строки, не закрывшей план, месяцы пусты,
+	// как пуст и её квартал.
+	PlanInvestmentsRub    float64 `json:"planInvestmentsRub"`
+	PlanInvestmentsRubNet float64 `json:"planInvestmentsRubNet"`
+	FactInvestmentsRub    float64 `json:"factInvestmentsRub"`
+	FactInvestmentsRubNet float64 `json:"factInvestmentsRubNet"`
+	EACInvestmentsRub     float64 `json:"eacInvestmentsRub"`
+	EACInvestmentsRubNet  float64 `json:"eacInvestmentsRubNet"`
+
+	// Инвестиции промо месяца, в том же разрезе по типу, что и в квартале.
+	PromoInvestmentsGTN  NetworkDashboardInvestmentSplit `json:"promoInvestmentsGtn"`
+	PromoInvestmentsOPEX NetworkDashboardInvestmentSplit `json:"promoInvestmentsOpex"`
 
 	PromoCount        int `json:"promoCount"`
 	PromoOnlineCount  int `json:"promoOnlineCount"`

@@ -124,7 +124,14 @@ export function ChartPaper({
 
 // Своя легенда вместо recharts: там порядок элементов обратен порядку серий
 // и подписи не совпадают с тем, что читается слева направо.
-export function SeriesLegend({ items }: { items: Array<{ label: string; color: string; dashed?: boolean }> }) {
+//
+// Образец повторяет то, чем ряд нарисован на графике: сплошная заливка,
+// пунктир для линии, штриховка для достроенной части столбца. Без этого
+// два ряда одного цвета различались бы только на самом графике, а в легенде
+// выглядели бы одинаково.
+export function SeriesLegend({ items }: {
+  items: Array<{ label: string; color: string; dashed?: boolean; hatched?: boolean }>;
+}) {
   return (
     <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', mt: 0.75 }}>
       {items.map((item) => (
@@ -132,8 +139,12 @@ export function SeriesLegend({ items }: { items: Array<{ label: string; color: s
           <Box
             sx={{
               width: 12, height: item.dashed ? 0 : 10, borderRadius: 0.5,
-              bgcolor: item.dashed ? 'transparent' : item.color,
+              bgcolor: item.dashed || item.hatched ? 'transparent' : item.color,
               borderTop: item.dashed ? `2px dashed ${item.color}` : 'none',
+              ...(item.hatched ? {
+                backgroundImage: `repeating-linear-gradient(45deg, ${item.color} 0 2px, transparent 2px 4px)`,
+                border: `1px solid ${item.color}`,
+              } : null),
             }}
           />
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>{item.label}</Typography>

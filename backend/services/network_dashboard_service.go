@@ -422,12 +422,51 @@ type networkSlice struct {
 
 	// Месячные ряды. План месяца — квартальное обязательство, разложенное по
 	// схеме из профиля сети: помесячных планов в реестре не существует.
-	monthPlan  map[int]quarterFact
-	monthFact  map[int]quarterFact
-	monthEAC   map[int]quarterFact
-	monthCells map[int]dashboardCells
+	monthPlan   map[int]quarterFact
+	monthFact   map[int]quarterFact
+	monthEAC    map[int]quarterFact
+	monthInvest map[int]monthInvestments
+	monthCells  map[int]dashboardCells
 
 	annualInvestmentCumulative *models.NetworkAnnualInvestmentCumulative
+}
+
+// monthInvestments — инвестиции реестра, приходящиеся на месяц. Обе базы, как
+// и везде: колонка «без НДС» обязана оставаться пригодной для сложения сетей.
+type monthInvestments struct {
+	planRub, planNet float64
+	factRub, factNet float64
+	eacRub, eacNet   float64
+}
+
+func (m *monthInvestments) add(other monthInvestments) {
+	m.planRub = round2(m.planRub + other.planRub)
+	m.planNet = round2(m.planNet + other.planNet)
+	m.factRub = round2(m.factRub + other.factRub)
+	m.factNet = round2(m.factNet + other.factNet)
+	m.eacRub = round2(m.eacRub + other.eacRub)
+	m.eacNet = round2(m.eacNet + other.eacNet)
+}
+
+// monthShares — доли месяцев квартала в одной величине. Сумма долей равна
+// единице, поэтому разложенная сумма сходится с исходной.
+//
+// Пустой знаменатель означает, что делить не по чему: месяц без оборота не
+// получает ничего, а вся сумма (она бывает и при нулевом обороте — разовая
+// выплата, введённая руками) раскладывается запасной схемой.
+func monthShares(values map[int]float64, fallback map[int]float64) map[int]float64 {
+	total := 0.0
+	for _, value := range values {
+		total += value
+	}
+	if total <= 0 {
+		return fallback
+	}
+	shares := make(map[int]float64, len(values))
+	for month, value := range values {
+		shares[month] = value / total
+	}
+	return shares
 }
 
 // buildNetworkSlice дополняет строки плана фактом и EAC из помесячных таблиц
@@ -460,6 +499,10 @@ func buildNetworkSlice(
 	monthFact := map[int]quarterFact{}
 	monthEAC := map[int]quarterFact{}
 	monthCells := map[int]dashboardCells{}
+	// Помесячный оборот каждой строки плана — основа для разложения её
+	// квартальных инвестиций по месяцам.
+	rowMonthFact := map[brandQuarterKey]map[int]float64{}
+	rowMonthEAC := map[brandQuarterKey]map[int]float64{}
 
 	unitsOf := func(quarter int) *quarterUnitParts {
 		parts := units[quarter]
@@ -555,6 +598,16 @@ func buildNetworkSlice(
 				eacPoint.rub = round2(eacPoint.rub + valueOrZero(eac))
 				eacPoint.units = round2(eacPoint.units + valueOrZero(eacUnits))
 				monthEAC[month] = eacPoint
+
+				// Оборот строки по месяцам запоминается здесь: по нему ниже
+				// раскладываются квартальные инвестиции этой же строки.
+				volumeKey := brandQuarterKey{brand: strings.TrimSpace(brand), quarter: plan.Quarter}
+				if rowMonthFact[volumeKey] == nil {
+					rowMonthFact[volumeKey] = map[int]float64{}
+					rowMonthEAC[volumeKey] = map[int]float64{}
+				}
+				rowMonthFact[volumeKey][month] = round2(rowMonthFact[volumeKey][month] + valueOrZero(fact.rub))
+				rowMonthEAC[volumeKey][month] = round2(rowMonthEAC[volumeKey][month] + valueOrZero(eac))
 			}
 
 			addPtrValue(&factSum, fact.rub)
@@ -692,6 +745,7 @@ func buildNetworkSlice(
 		monthPlan:                  map[int]quarterFact{},
 		monthFact:                  monthFact,
 		monthEAC:                   monthEAC,
+		monthInvest:                map[int]monthInvestments{},
 		monthCells:                 monthCells,
 		annualInvestmentCumulative: annualInvestmentCumulative,
 	}
@@ -718,6 +772,38 @@ func buildNetworkSlice(
 				rub:   round2(total.ContractPlanRub * share),
 				units: round2(quarterUnitsTotal.plan * share),
 			}
+		}
+	}
+
+	// Инвестиции по месяцам. Своего расчёта здесь нет: берётся уже посчитанная
+	// сумма строки плана и раскладывается по месяцам — факт и прогноз по
+	// обороту (инвестиции и есть процент от него), план по схеме сети. Так
+	// месяц наследует и порог выплаты, и режим оплаты от факта, и НДС
+	// квартала, а сумма месяцев сходится с кварталом.
+	for _, plan := range enriched {
+		if plan.BrandAS == nil || !quarters[plan.Quarter] {
+			continue
+		}
+		key := brandQuarterKey{brand: strings.TrimSpace(*plan.BrandAS), quarter: plan.Quarter}
+		byScheme := map[int]float64{}
+		for index := 0; index < 3; index++ {
+			byScheme[(plan.Quarter-1)*3+1+index] = distribution[index] / 100
+		}
+		planShares := byScheme
+		factShares := monthShares(rowMonthFact[key], byScheme)
+		eacShares := monthShares(rowMonthEAC[key], byScheme)
+		for index := 0; index < 3; index++ {
+			month := (plan.Quarter-1)*3 + 1 + index
+			amounts := slice.monthInvest[month]
+			amounts.add(monthInvestments{
+				planRub: round2(valueOrZero(plan.InvestmentsRub) * planShares[month]),
+				planNet: round2(valueOrZero(plan.InvestmentsNet) * planShares[month]),
+				factRub: round2(valueOrZero(plan.FactInvestmentsRub) * factShares[month]),
+				factNet: round2(valueOrZero(plan.FactInvestmentsNet) * factShares[month]),
+				eacRub:  round2(valueOrZero(plan.ForecastInvestmentsRub) * eacShares[month]),
+				eacNet:  round2(valueOrZero(plan.ForecastInvestmentsNet) * eacShares[month]),
+			})
+			slice.monthInvest[month] = amounts
 		}
 	}
 
@@ -1060,6 +1146,7 @@ type monthAccumulator struct {
 	prev    quarterFact
 	hasPrev bool
 	cells   dashboardCells
+	invest  monthInvestments
 }
 
 type promoCellKey struct {
@@ -1442,6 +1529,9 @@ func AggregateNetworkDashboard(
 			acc.eac.rub = round2(acc.eac.rub + eac.rub)
 			acc.eac.units = round2(acc.eac.units + eac.units)
 		}
+		for month, invest := range slice.monthInvest {
+			monthOf(month).invest.add(invest)
+		}
 		for month, cells := range slice.monthCells {
 			monthOf(month).cells.add(cells)
 		}
@@ -1508,11 +1598,20 @@ func AggregateNetworkDashboard(
 			EACUnits:             acc.eac.units,
 			Closed:               isClosedForecastMonth(filter.Year, month, now),
 			CellsWithoutForecast: acc.cells.openWithoutForecast,
+
+			PlanInvestmentsRub:    acc.invest.planRub,
+			PlanInvestmentsRubNet: acc.invest.planNet,
+			FactInvestmentsRub:    acc.invest.factRub,
+			FactInvestmentsRubNet: acc.invest.factNet,
+			EACInvestmentsRub:     acc.invest.eacRub,
+			EACInvestmentsRubNet:  acc.invest.eacNet,
 		}
 		if promo, ok := promos.byMonth[month]; ok {
 			point.PromoCount = promo.count
 			point.PromoOnlineCount = promo.online
 			point.PromoOfflineCount = promo.offline
+			point.PromoInvestmentsGTN = promo.gtn.model()
+			point.PromoInvestmentsOPEX = promo.opex.model()
 		}
 		if acc.hasPrev {
 			prevRub, prevUnits := acc.prev.rub, acc.prev.units

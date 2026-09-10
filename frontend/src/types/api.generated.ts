@@ -677,6 +677,14 @@ export interface NetworkDashboardMonthPoint {
   eacUnits: number;
   prevFactRub: number | null;
   prevFactUnits: number | null;
+  planInvestmentsRub: number;
+  planInvestmentsRubNet: number;
+  factInvestmentsRub: number;
+  factInvestmentsRubNet: number;
+  eacInvestmentsRub: number;
+  eacInvestmentsRubNet: number;
+  promoInvestmentsGtn: NetworkDashboardInvestmentSplit;
+  promoInvestmentsOpex: NetworkDashboardInvestmentSplit;
   promoCount: number;
   promoOnlineCount: number;
   promoOfflineCount: number;

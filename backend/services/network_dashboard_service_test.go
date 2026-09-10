@@ -1756,3 +1756,97 @@ func TestDashboardSplitsPromoInvestmentsByType(t *testing.T) {
 		t.Errorf("инвестиции промо = %v, ожидалось 300000", quarter.PromoInvestmentsRub)
 	}
 }
+
+// Помесячные инвестиции — это разложение квартальных, а не второй расчёт.
+// Сумма месяцев обязана сойтись с кварталом до копейки: разойдутся — и два
+// экрана одной витрины начнут показывать разные деньги.
+func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
+	opex := "OPEX"
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Бета"),
+				PlanRub: models.PtrFloat(500000), InvestmentsPct: models.PtrFloat(4),
+			},
+		},
+		// Оборот распределён по месяцам неравномерно: разложение обязано идти
+		// за оборотом, а не делить сумму поровну.
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 500000, 0),
+			dashboardFact(1, 2, "Альфа", 300000, 0),
+			dashboardFact(1, 3, "Альфа", 400000, 0),
+			dashboardFact(1, 2, "Бета", 600000, 0),
+		},
+		promos: []repository.NetworkDashboardPromoRow{
+			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
+				GTNOpex: &opex, PromoCount: 1, InvestRub: 120000, EffectiveInvest: 120000},
+		},
+	}
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if len(got.Quarters) != 1 {
+		t.Fatalf("кварталов = %d, ожидался 1", len(got.Quarters))
+	}
+	quarter := got.Quarters[0].Metrics
+
+	var plan, planNet, fact, factNet, eac, eacNet, opexPlan float64
+	months := 0
+	for _, point := range got.Months {
+		if point.Quarter != 1 {
+			continue
+		}
+		months++
+		plan = round2(plan + point.PlanInvestmentsRub)
+		planNet = round2(planNet + point.PlanInvestmentsRubNet)
+		fact = round2(fact + point.FactInvestmentsRub)
+		factNet = round2(factNet + point.FactInvestmentsRubNet)
+		eac = round2(eac + point.EACInvestmentsRub)
+		eacNet = round2(eacNet + point.EACInvestmentsRubNet)
+		opexPlan = round2(opexPlan + point.PromoInvestmentsOPEX.PlanRub)
+	}
+	if months != 3 {
+		t.Fatalf("месяцев в квартале = %d, ожидалось 3", months)
+	}
+	// Сверка на нулях сошлась бы сама собой и ничего не проверила.
+	if quarter.FactInvestmentsRub == 0 || quarter.PlanInvestmentsRub == 0 {
+		t.Fatalf("квартал без инвестиций: план %v, факт %v — сверять нечего",
+			quarter.PlanInvestmentsRub, quarter.FactInvestmentsRub)
+	}
+
+	// Копейка расхождения допустима на округлении трёх долей, рубль — нет.
+	closeTo := func(name string, sum, want float64) {
+		t.Helper()
+		if diff := sum - want; diff > 0.05 || diff < -0.05 {
+			t.Errorf("%s: сумма месяцев = %v, квартал = %v", name, sum, want)
+		}
+	}
+	closeTo("план с НДС", plan, quarter.PlanInvestmentsRub)
+	closeTo("план без НДС", planNet, quarter.PlanInvestmentsRubNet)
+	closeTo("факт с НДС", fact, quarter.FactInvestmentsRub)
+	closeTo("факт без НДС", factNet, quarter.FactInvestmentsRubNet)
+	closeTo("прогноз с НДС", eac, quarter.EACInvestmentsRub)
+	closeTo("прогноз без НДС", eacNet, quarter.EACInvestmentsRubNet)
+	closeTo("план OPEX", opexPlan, quarter.PromoInvestmentsOPEX.PlanRub)
+
+	// Разложение идёт за оборотом: в январе «Альфа» отгрузила больше, чем в
+	// феврале, значит и инвестиций на январь приходится больше.
+	byMonth := map[int]models.NetworkDashboardMonthPoint{}
+	for _, point := range got.Months {
+		byMonth[point.Month] = point
+	}
+	if byMonth[1].FactInvestmentsRub <= byMonth[3].FactInvestmentsRub {
+		t.Errorf("январь %v не больше марта %v, хотя оборот января выше",
+			byMonth[1].FactInvestmentsRub, byMonth[3].FactInvestmentsRub)
+	}
+	// Промо-инвестиции стоят в своём месяце, а не размазаны по кварталу.
+	if byMonth[1].PromoInvestmentsOPEX.PlanRub != 0 || byMonth[2].PromoInvestmentsOPEX.PlanRub == 0 {
+		t.Errorf("OPEX по месяцам = %v / %v, ожидался только февраль",
+			byMonth[1].PromoInvestmentsOPEX.PlanRub, byMonth[2].PromoInvestmentsOPEX.PlanRub)
+	}
+}
