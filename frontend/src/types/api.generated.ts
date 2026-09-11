@@ -603,6 +603,61 @@ export interface NetworkPricesSaveResponse {
   data: NetworkPricesResponse;
 }
 
+export interface NetworkOpexArticle {
+  code: string;
+  label: string;
+}
+
+export interface NetworkOpexMonth {
+  month: number;
+  amount_rub: number;
+  amount_rub_net: number;
+}
+
+export interface NetworkOpexCell {
+  quarter: number;
+  brand_as: string;
+  article: string;
+  amount_rub: number;
+  amount_rub_net: number;
+  months: NetworkOpexMonth[];
+  updated_at: string;
+}
+
+export interface NetworkOpexQuarterTotals {
+  quarter: number;
+  amount_rub: number;
+  amount_rub_net: number;
+}
+
+export interface NetworkOpexBrandTotals {
+  brand_as: string;
+  quarters: NetworkOpexQuarterTotals[];
+  amount_rub: number;
+  amount_rub_net: number;
+}
+
+export interface NetworkOpexTotals {
+  quarters: NetworkOpexQuarterTotals[];
+  amount_rub: number;
+  amount_rub_net: number;
+}
+
+export interface NetworkOpexResponse {
+  network: Network;
+  year: number;
+  articles: NetworkOpexArticle[];
+  brands: string[];
+  cells: NetworkOpexCell[];
+  by_brand: NetworkOpexBrandTotals[];
+  totals: NetworkOpexTotals;
+}
+
+export interface NetworkOpexSaveResponse {
+  message: string;
+  data: NetworkOpexResponse;
+}
+
 export interface NetworkDashboardInvestmentSplit {
   planRub: number;
   planRubNet: number;
@@ -635,6 +690,8 @@ export interface NetworkDashboardMetrics {
   effectiveInvestmentsPct: number | null;
   promoInvestmentsGtn: NetworkDashboardInvestmentSplit;
   promoInvestmentsOpex: NetworkDashboardInvestmentSplit;
+  registryOpexBudgetRub: number;
+  registryOpexBudgetRubNet: number;
   undistributedRub: number | null;
   closedCells: number;
   closedCellsWithFact: number;
@@ -685,6 +742,8 @@ export interface NetworkDashboardMonthPoint {
   eacInvestmentsRubNet: number;
   promoInvestmentsGtn: NetworkDashboardInvestmentSplit;
   promoInvestmentsOpex: NetworkDashboardInvestmentSplit;
+  registryOpexBudgetRub: number;
+  registryOpexBudgetRubNet: number;
   promoCount: number;
   promoOnlineCount: number;
   promoOfflineCount: number;
@@ -793,6 +852,14 @@ export interface NetworkContractPriceInput {
   valid_from: string;
   valid_to: string;
   is_confirmed: boolean;
+  updated_at: string;
+}
+
+export interface NetworkOpexInput {
+  quarter: number;
+  brand_as: string;
+  article: string;
+  amount_rub: number | null;
   updated_at: string;
 }
 

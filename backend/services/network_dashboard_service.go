@@ -61,6 +61,10 @@ type networkDashboardValues struct {
 	factInvest, factInvestNet float64
 	eacInvest, eacInvestNet   float64
 
+	// Бюджет OPEX идёт рядом с процентными инвестициями, а не внутри них:
+	// у них разные источники и разная природа.
+	opex opexBudget
+
 	undistributed *float64
 	cells         dashboardCells
 
@@ -107,6 +111,21 @@ func (s investmentSplit) model() models.NetworkDashboardInvestmentSplit {
 	}
 }
 
+// opexBudget — бюджет OPEX реестра в двух базах НДС.
+//
+// Пары «план — факт» у него нет намеренно: это согласованная сумма за услуги
+// сети, и источника факта по ней в портале не существует. Одно число честнее
+// split с нулевым фактом — см. NetworkDashboardMetrics.RegistryOpexBudgetRub.
+type opexBudget struct {
+	rub float64
+	net float64
+}
+
+func (o *opexBudget) add(other opexBudget) {
+	o.rub = round2(o.rub + other.rub)
+	o.net = round2(o.net + other.net)
+}
+
 // dashboardPromoTotals — промо среза в разбивке по каналу и по типу инвестиций.
 //
 // gtn и opex — те же деньги, что и в invest, но разложенные по типу из
@@ -143,6 +162,8 @@ type networkDashboardAccumulator struct {
 	planInvest, planInvestNet float64
 	factInvest, factInvestNet float64
 	eacInvest, eacInvestNet   float64
+
+	opex opexBudget
 
 	undistributed    float64
 	undistributedSet bool
@@ -209,6 +230,7 @@ func (a *networkDashboardAccumulator) add(v networkDashboardValues) {
 	a.factInvestNet = round2(a.factInvestNet + v.factInvestNet)
 	a.eacInvest = round2(a.eacInvest + v.eacInvest)
 	a.eacInvestNet = round2(a.eacInvestNet + v.eacInvestNet)
+	a.opex.add(v.opex)
 
 	a.units.add(v.units)
 
@@ -278,6 +300,9 @@ func (a networkDashboardAccumulator) metrics() models.NetworkDashboardMetrics {
 
 		PromoInvestmentsGTN:  a.promo.gtn.model(),
 		PromoInvestmentsOPEX: a.promo.opex.model(),
+
+		RegistryOpexBudgetRub:    a.opex.rub,
+		RegistryOpexBudgetRubNet: a.opex.net,
 	}
 	if a.undistributedSet {
 		rest := a.undistributed
@@ -420,6 +445,11 @@ type networkSlice struct {
 	// SKU внутри бренда: только факт и прогноз. Плана на SKU в реестре нет.
 	skuTotals map[networkSKUKey]*networkSKUTotals
 
+	// Бюджет OPEX: по кварталам сети и по месяцам. Раскладывать нечего — он
+	// хранится помесячно, и квартал здесь собирается из месяцев, а не наоборот.
+	quarterOpex map[int]opexBudget
+	monthOpex   map[int]opexBudget
+
 	// Месячные ряды. План месяца — квартальное обязательство, разложенное по
 	// схеме из профиля сети: помесячных планов в реестре не существует.
 	monthPlan   map[int]quarterFact
@@ -482,6 +512,7 @@ func buildNetworkSlice(
 	forecasts []models.NetworkForecastLine,
 	promoUplifts map[promoForecastKey]forecastPromoTotals,
 	groups []models.NetworkPeriodGroup,
+	opexRows []models.NetworkOpexBudgetRow,
 	now time.Time,
 ) networkSlice {
 	periods := NetworkPeriodsWithDefaults(network, year, persistedPeriods)
@@ -742,6 +773,8 @@ func buildNetworkSlice(
 		brandQuarterUnits:          brandQuarterUnits,
 		brandQuarterCells:          brandQuarterCells,
 		skuTotals:                  skuTotals,
+		quarterOpex:                map[int]opexBudget{},
+		monthOpex:                  map[int]opexBudget{},
 		monthPlan:                  map[int]quarterFact{},
 		monthFact:                  monthFact,
 		monthEAC:                   monthEAC,
@@ -881,6 +914,50 @@ func buildNetworkSlice(
 			values.cells = totals
 		}
 	}
+
+	// Бюджет OPEX. Он не зависит ни от строк плана, ни от выполнения, поэтому
+	// складывается отдельным обходом: месяц даёт месячный ряд, его квартал —
+	// квартальный, а бренд — разрезы бренда.
+	//
+	// Строка бренда создаётся, даже если плана у бренда в этом квартале уже нет:
+	// иначе бюджет, заведённый до вывода бренда из плана, исчез бы из разреза
+	// брендов, оставшись в итоге сети, и сумма брендов перестала бы сходиться
+	// с сетью.
+	for _, row := range opexRows {
+		quarter := (row.Month-1)/3 + 1
+		if !quarters[quarter] {
+			continue
+		}
+		budget := opexBudget{rub: row.AmountRub, net: row.AmountNet}
+
+		quarterBudget := slice.quarterOpex[quarter]
+		quarterBudget.add(budget)
+		slice.quarterOpex[quarter] = quarterBudget
+
+		monthBudget := slice.monthOpex[row.Month]
+		monthBudget.add(budget)
+		slice.monthOpex[row.Month] = monthBudget
+
+		brand := strings.TrimSpace(row.BrandAS)
+		if brand == "" {
+			continue
+		}
+		values := slice.brandValues[brand]
+		if values == nil {
+			values = &networkDashboardValues{networkID: network.ID, brand: brand}
+			slice.brandValues[brand] = values
+		}
+		values.opex.add(budget)
+
+		rowKey := brandQuarterKey{brand: brand, quarter: quarter}
+		quarterValues := slice.brandQuarterValues[rowKey]
+		if quarterValues == nil {
+			quarterValues = &networkDashboardValues{networkID: network.ID, brand: brand}
+			slice.brandQuarterValues[rowKey] = quarterValues
+		}
+		quarterValues.opex.add(budget)
+	}
+
 	return slice
 }
 
@@ -994,6 +1071,7 @@ type periodIndex struct {
 	facts     map[int][]models.NetworkMonthlyFact
 	forecasts map[int][]models.NetworkForecastLine
 	groups    map[int][]models.NetworkPeriodGroup
+	opex      map[int][]models.NetworkOpexBudgetRow
 }
 
 func indexPeriodData(data repository.NetworkDashboardPeriodData) periodIndex {
@@ -1003,6 +1081,10 @@ func indexPeriodData(data repository.NetworkDashboardPeriodData) periodIndex {
 		facts:     map[int][]models.NetworkMonthlyFact{},
 		forecasts: map[int][]models.NetworkForecastLine{},
 		groups:    map[int][]models.NetworkPeriodGroup{},
+		opex:      map[int][]models.NetworkOpexBudgetRow{},
+	}
+	for _, row := range data.Opex {
+		index.opex[row.NetworkID] = append(index.opex[row.NetworkID], row)
 	}
 	for _, group := range data.Groups {
 		index.groups[group.NetworkID] = append(index.groups[group.NetworkID], group)
@@ -1147,6 +1229,7 @@ type monthAccumulator struct {
 	hasPrev bool
 	cells   dashboardCells
 	invest  monthInvestments
+	opex    opexBudget
 }
 
 type promoCellKey struct {
@@ -1431,7 +1514,7 @@ func AggregateNetworkDashboard(
 			plans, current.periods[network.ID],
 			current.facts[network.ID], recommendationFacts, current.forecasts[network.ID],
 			promos.forecastUplifts,
-			current.groups[network.ID], now,
+			current.groups[network.ID], current.opex[network.ID], now,
 		)
 		if len(data.Networks) == 1 && len(selectedQuarters) == 4 {
 			annualInvestmentCumulative = slice.annualInvestmentCumulative
@@ -1455,7 +1538,7 @@ func AggregateNetworkDashboard(
 				prevPlans, previous.periods[network.ID],
 				previous.facts[network.ID], previous.facts[network.ID], previous.forecasts[network.ID],
 				nil,
-				previous.groups[network.ID], now,
+				previous.groups[network.ID], previous.opex[network.ID], now,
 			)
 			prevSlice = &built
 		}
@@ -1474,6 +1557,9 @@ func AggregateNetworkDashboard(
 				continue
 			}
 			values := valuesFromTotals(network.ID, total, slice.quarterCells[quarter], slice.quarterUnits[quarter])
+			// Бюджет OPEX приходит не из квартального итога плана: у него своя
+			// таблица и свой обход, порога выполнения он не знает.
+			values.opex = slice.quarterOpex[quarter]
 
 			if prevFact, exists := prevFacts[quarter]; exists {
 				values.hasPrevFact = true
@@ -1531,6 +1617,9 @@ func AggregateNetworkDashboard(
 		}
 		for month, invest := range slice.monthInvest {
 			monthOf(month).invest.add(invest)
+		}
+		for month, budget := range slice.monthOpex {
+			monthOf(month).opex.add(budget)
 		}
 		for month, cells := range slice.monthCells {
 			monthOf(month).cells.add(cells)
@@ -1605,6 +1694,9 @@ func AggregateNetworkDashboard(
 			FactInvestmentsRubNet: acc.invest.factNet,
 			EACInvestmentsRub:     acc.invest.eacRub,
 			EACInvestmentsRubNet:  acc.invest.eacNet,
+
+			RegistryOpexBudgetRub:    acc.opex.rub,
+			RegistryOpexBudgetRubNet: acc.opex.net,
 		}
 		if promo, ok := promos.byMonth[month]; ok {
 			point.PromoCount = promo.count

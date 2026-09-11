@@ -50,6 +50,7 @@ import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkVATEditor from '../components/NetworkVATEditor';
 import NetworkInvestmentPaymentModes from '../components/NetworkInvestmentPaymentModes';
+import NetworkOpexTab from '../components/NetworkOpexTab';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
 import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
@@ -211,6 +212,19 @@ function sameQuarters(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+// Вкладки карточки сети по имени, а не по номеру. Значение вкладки в MUI —
+// её позиция, и вставка новой сдвигала бы номера сразу в нескольких условиях
+// рендера и в переходе с витрины; один раз это уже стоило бы починки.
+const TAB = {
+  profile: 0,
+  prices: 1,
+  plan: 2,
+  opex: 3,
+  forecast: 4,
+  comments: 5,
+  history: 6,
+} as const;
+
 // Прямая ссылка на карточку: сеть и год приходят в адресе. Значения читаются
 // один раз, при первом рендере, — дальше состоянием управляет сама страница.
 function paramNetworkID(params: URLSearchParams): number | null {
@@ -237,7 +251,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const [listOpen, setListOpen] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(() => paramNetworkID(searchParams));
   const [year, setYear] = useState(() => paramYear(searchParams));
-  const [tab, setTab] = useState(0);
+  const [tab, setTab] = useState<number>(TAB.profile);
   // Реестр открывается списком сетей: работа идёт по конкретной сети, а итоги
   // смотрят отдельным переключением.
   const [view, setView] = useState<RegistryView>('networks');
@@ -335,7 +349,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   const auditQuery = useQuery({
     queryKey: ['networkAudit', selectedId],
     queryFn: () => networkAPI.getAudit(selectedId!),
-    enabled: selectedId != null && tab === 5,
+    enabled: selectedId != null && tab === TAB.history,
   });
 
   const showError = (error: unknown) =>
@@ -480,7 +494,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     setProfile({});
     setProfilePeriods({});
     setYear(effectiveDashboardYear);
-    setTab(2);
+    setTab(TAB.plan);
     setView('networks');
   };
 
@@ -828,12 +842,13 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 <Tab label="Профиль сети" />
                 <Tab label="Цены и SKU" />
                 <Tab label="План и факт" />
+                <Tab label="Инвестиции OPEX" />
                 <Tab label="Прогноз" />
                 <Tab label={`Комментарии${comments.length ? ` · ${comments.length}` : ''}`} />
                 <Tab label="История" />
               </Tabs>
 
-              {tab === 2 && (
+              {tab === TAB.plan && (
                 <>
                   {planQuery.isLoading && <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box>}
                   {planQuery.isError && <Alert severity="error">Не удалось загрузить планы</Alert>}
@@ -852,15 +867,19 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </>
               )}
 
-              {tab === 3 && (
+              {tab === TAB.opex && (
+                <NetworkOpexTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
+              )}
+
+              {tab === TAB.forecast && (
                 <NetworkForecastTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
               )}
 
-              {tab === 1 && (
+              {tab === TAB.prices && (
                 <NetworkPricesTab key={`${selectedId}-${year}`} networkId={selectedId!} year={year} canEdit={canEdit} />
               )}
 
-              {tab === 0 && (
+              {tab === TAB.profile && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, maxWidth: 820 }}>
                   <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
                     <Box sx={{ p: 1.5, display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -989,7 +1008,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </Box>
               )}
 
-              {tab === 4 && (
+              {tab === TAB.comments && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 720 }}>
                   <Box sx={{ display: 'flex', gap: 1 }}>
                     <TextField
@@ -1036,7 +1055,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                 </Box>
               )}
 
-              {tab === 5 && (
+              {tab === TAB.history && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxWidth: 860 }}>
                   {auditQuery.isLoading && <CircularProgress size={22} />}
                   {auditQuery.isError && <Alert severity="error">Не удалось загрузить историю</Alert>}

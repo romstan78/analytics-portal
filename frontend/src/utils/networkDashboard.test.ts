@@ -47,6 +47,8 @@ const metrics = (patch: Partial<NetworkDashboardMetrics> = {}): NetworkDashboard
   effectiveInvestmentsPct: 10.91,
   promoInvestmentsGtn: { planRub: 0, planRubNet: 0, factRub: 0, factRubNet: 0, eacRub: 0, eacRubNet: 0 },
   promoInvestmentsOpex: { planRub: 0, planRubNet: 0, factRub: 0, factRubNet: 0, eacRub: 0, eacRubNet: 0 },
+  registryOpexBudgetRub: 0,
+  registryOpexBudgetRubNet: 0,
   undistributedRub: null,
   closedCells: 21,
   closedCellsWithFact: 20,

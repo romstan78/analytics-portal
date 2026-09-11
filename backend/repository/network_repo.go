@@ -977,7 +977,7 @@ func GetNetworkAuditLog(networkID int) ([]models.AuditLogRow, error) {
 		`SELECT id, entity_type, entity_id, user_name, action_type, changed_fields,
 			CONVERT(NVARCHAR, created_at, 121)
 		 FROM dbo.tbl_AuditLog
-		 WHERE entity_id = ? AND entity_type IN ('network', 'network_plan', 'network_forecast', 'network_price')
+		 WHERE entity_id = ? AND entity_type IN ('network', 'network_plan', 'network_forecast', 'network_price', 'network_opex')
 		 ORDER BY id DESC`,
 		networkID,
 	)

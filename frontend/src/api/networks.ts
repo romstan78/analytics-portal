@@ -20,6 +20,9 @@ import type {
   NetworkEntryLevel,
   NetworkEntryUnit,
   NetworkListResponse,
+  NetworkOpexResponse,
+  NetworkOpexSaveRequest,
+  NetworkOpexSaveResponse,
   NetworkPlanPreviewResponse,
   NetworkPlanResponse,
   NetworkPlanSaveRequest,
@@ -182,6 +185,15 @@ export const networkAPI = {
   savePrices: (id: number, data: NetworkPricesSaveRequest): Promise<NetworkPricesSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}/prices`, { method: 'POST', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkPricesSaveResponse>(r, 'Ошибка сохранения цен')),
+
+  // Бюджет OPEX по контракту: ввод квартальный, в БД уходят месяцы
+  getOpex: (id: number, year: number): Promise<NetworkOpexResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/opex?year=${year}`)
+      .then(r => parseJSONResponse<NetworkOpexResponse>(r, 'Ошибка загрузки бюджета OPEX')),
+
+  saveOpex: (id: number, data: NetworkOpexSaveRequest): Promise<NetworkOpexSaveResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/opex`, { method: 'POST', body: JSON.stringify(data) })
+      .then(r => parseJSONResponse<NetworkOpexSaveResponse>(r, 'Ошибка сохранения бюджета OPEX')),
 
   // Комментарии: без года/квартала/бренда — ко всей сети
   getComments: (id: number): Promise<NetworkCommentsResponse> =>

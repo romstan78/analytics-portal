@@ -69,6 +69,9 @@ func intArgs(values []int) (string, []interface{}) {
 // Groups — правила совместного зачёта смежных кварталов. Витрине они нужны
 // по той же причине, что и карточке: право на инвестиции проверяется в
 // границах правила, и без них Q1+Q2 считались бы двумя порогами вместо одного.
+//
+// Opex — бюджет OPEX по статьям договора. Он хранится помесячно и от строк
+// плана не зависит: это второй механизм инвестиций реестра, а не разрез первого.
 type NetworkDashboardPeriodData struct {
 	Year      int
 	Periods   []models.NetworkPeriod
@@ -76,6 +79,7 @@ type NetworkDashboardPeriodData struct {
 	Facts     []models.NetworkMonthlyFact
 	Forecasts []models.NetworkForecastLine
 	Groups    []models.NetworkPeriodGroup
+	Opex      []models.NetworkOpexBudgetRow
 }
 
 // NetworkDashboardPromoRow — промо, проведённое в срезе. Канал приходит из
@@ -143,7 +147,8 @@ func (f NetworkDashboardFilter) networkScope(alias string) (string, []interface{
 	return where, args
 }
 
-// GetNetworkDashboardData читает всё, что нужно витрине, пятью запросами.
+// GetNetworkDashboardData читает всё, что нужно витрине, одним набором запросов:
+// по запросу на каждую таблицу периода, плюс сети, промо и доступные годы.
 //
 // Помесячные факт и прогноз читаются целиком за период: квартальные колонки
 // tbl_NetworkPlans для витрины не годятся — они заполняются только загрузкой
@@ -207,7 +212,38 @@ func dashboardPeriodData(
 	if result.Groups, err = dashboardPeriodGroups(year, scope, scopeArgs); err != nil {
 		return result, err
 	}
+	if result.Opex, err = dashboardOpex(year, scope, scopeArgs); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+// dashboardOpex читает бюджет OPEX всех сетей области за год. Год целиком, как
+// и всё остальное: срез накладывает агрегатор.
+func dashboardOpex(year int, scope string, scopeArgs []interface{}) ([]models.NetworkOpexBudgetRow, error) {
+	query := `SELECT o.network_id, o.[year], o.[month], o.brand_as, o.article,
+			o.amount_rub, o.amount_rub_net
+		FROM dbo.tbl_NetworkOpexBudgets o
+		JOIN dbo.tbl_Networks n ON n.id = o.network_id
+		WHERE o.[year] = ? AND n.is_active = 1` + scope
+
+	args := append([]interface{}{year}, scopeArgs...)
+	rows, err := config.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query dashboard opex: %w", err)
+	}
+	defer rows.Close()
+
+	result := []models.NetworkOpexBudgetRow{}
+	for rows.Next() {
+		var row models.NetworkOpexBudgetRow
+		if err := rows.Scan(&row.NetworkID, &row.Year, &row.Month, &row.BrandAS,
+			&row.Article, &row.AmountRub, &row.AmountNet); err != nil {
+			return nil, fmt.Errorf("scan dashboard opex: %w", err)
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 // dashboardPeriodGroups читает правила совместного зачёта всех сетей области.

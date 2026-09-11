@@ -59,19 +59,32 @@ type NetworkDashboardMetrics struct {
 	InvestmentVarianceRub   float64  `json:"investmentVarianceRub"`
 	EffectiveInvestmentsPct *float64 `json:"effectiveInvestmentsPct"`
 
-	// ─── Инвестиции промо в разрезе типа ────────────────────────────────
+	// ─── Инвестиции в разрезе типа ──────────────────────────────────────
 	//
-	// Тип инвестиций (GTN или OPEX) ведётся только в карточке промо, в поле
-	// gtn_opex. В реестре такого поля нет вовсе, поэтому его инвестиции
-	// целиком считаются GTN, а разделить столбец по типу можно лишь добавив
-	// к нему промо.
+	// Всё, что реестр начисляет процентом от товарооборота, — это бонус за
+	// объём, то есть GTN; он и лежит в PlanInvestmentsRub выше. OPEX реестра —
+	// отдельный механизм: бюджет по статьям договора, который КАМ заводит во
+	// вкладке «Инвестиции OPEX». У промо тип ведётся в карточке, в поле
+	// gtn_opex, поэтому по типу делятся обе части столбца.
 	//
-	// Эти суммы не входят в PlanInvestmentsRub и FactInvestmentsRub: реестр
+	// Промо-суммы не входят в PlanInvestmentsRub и FactInvestmentsRub: реестр
 	// считает процент от товарооборота, промо — деньги конкретных активностей,
 	// и складывать их в одно число значило бы потерять, откуда они взялись.
 	// На графике они и показаны отдельной частью столбца.
 	PromoInvestmentsGTN  NetworkDashboardInvestmentSplit `json:"promoInvestmentsGtn"`
 	PromoInvestmentsOPEX NetworkDashboardInvestmentSplit `json:"promoInvestmentsOpex"`
+
+	// Бюджет OPEX реестра, в двух базах НДС. Пары «план — факт» у него нет и
+	// быть не может: это согласованная сумма за услуги сети, и источника факта
+	// по ней в портале не существует — деньги по договору не приходят
+	// загрузкой, как отгрузки. Поэтому одно число, а не split: на графике оно
+	// стоит и в плане, и в ожидаемом итоге OPEX.
+	//
+	// В PlanInvestmentsRub бюджет намеренно не входит: из той суммы и планового
+	// объёма считается ставка (EffectiveInvestmentsPct), а бюджет от объёма не
+	// зависит — он поднял бы ставку, которой сеть не обещала.
+	RegistryOpexBudgetRub    float64 `json:"registryOpexBudgetRub"`
+	RegistryOpexBudgetRubNet float64 `json:"registryOpexBudgetRubNet"`
 
 	// UndistributedRub — остаток валового пула, не разобранный брендами.
 	// nil означает, что пула в срезе нет вовсе, а не что остаток нулевой.
@@ -186,6 +199,12 @@ type NetworkDashboardMonthPoint struct {
 	// Инвестиции промо месяца, в том же разрезе по типу, что и в квартале.
 	PromoInvestmentsGTN  NetworkDashboardInvestmentSplit `json:"promoInvestmentsGtn"`
 	PromoInvestmentsOPEX NetworkDashboardInvestmentSplit `json:"promoInvestmentsOpex"`
+
+	// Бюджет OPEX реестра месяца. Здесь, в отличие от инвестиций GTN, ничего не
+	// раскладывается: бюджет и хранится по месяцам — квартал делится на них при
+	// вводе, а не при показе.
+	RegistryOpexBudgetRub    float64 `json:"registryOpexBudgetRub"`
+	RegistryOpexBudgetRubNet float64 `json:"registryOpexBudgetRubNet"`
 
 	PromoCount        int `json:"promoCount"`
 	PromoOnlineCount  int `json:"promoOnlineCount"`

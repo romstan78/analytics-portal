@@ -461,6 +461,107 @@ type NetworkForecastSaveResponse struct {
 	Data    NetworkForecastResponse `json:"data"`
 }
 
+// ─── Бюджет OPEX по контракту ───────────────────────────────────────────────
+//
+// Второй механизм инвестиций реестра. Первый — процент от товарооборота
+// (NetworkPlan.InvestmentsPct): бонус за объём, то есть GTN. Этот — бюджет за
+// услуги сети, разложенный по статьям договора; от объёма он не зависит и
+// порога выполнения не знает.
+//
+// Ввод квартальный, хранение помесячное: КАМ согласует квартал, а потребляют
+// бюджет по месяцам. Раскладка ровная — квартальная сумма делится на три
+// одинаковые части до копейки, остаток от деления уходит в последний месяц
+// квартала. Схема распределения плана (Network.Month1Pct…) здесь не участвует:
+// бюджет услуги не следует за сезонностью отгрузок.
+
+// NetworkOpexArticle — статья бюджета OPEX: код для хранения и подпись для
+// интерфейса. Список закрыт контрактом и живёт в services.
+type NetworkOpexArticle struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+}
+
+// NetworkOpexBudgetRow — хранимая строка: статья бренда в месяце, в двух базах
+// НДС. Наружу не отдаётся — из этих строк собираются квартальные ячейки.
+type NetworkOpexBudgetRow struct {
+	ID        int64
+	NetworkID int
+	Year      int
+	Month     int
+	BrandAS   string
+	Article   string
+	AmountRub float64
+	AmountNet float64
+	UpdatedBy *string
+	UpdatedAt string
+}
+
+// NetworkOpexMonth — месяц квартальной ячейки. Показывается на раскрытии и
+// правке не подлежит: месяцы считает сервер из квартальной суммы.
+type NetworkOpexMonth struct {
+	Month     int     `json:"month"`
+	AmountRub float64 `json:"amount_rub"`
+	AmountNet float64 `json:"amount_rub_net"`
+}
+
+// NetworkOpexCell — квартальная ячейка ввода: бренд, статья, квартал.
+//
+// AmountRub равна сумме месяцев по построению, а не приблизительно: раскладка
+// отдаёт остаток последнему месяцу, поэтому введённое и сохранённое совпадают.
+//
+// UpdatedAt — версия ячейки для оптимистичной блокировки: самая свежая из трёх
+// месячных строк. Пустая строка означает, что ячейки в базе ещё нет.
+type NetworkOpexCell struct {
+	Quarter   int                `json:"quarter"`
+	BrandAS   string             `json:"brand_as"`
+	Article   string             `json:"article"`
+	AmountRub float64            `json:"amount_rub"`
+	AmountNet float64            `json:"amount_rub_net"`
+	Months    []NetworkOpexMonth `json:"months"`
+	UpdatedAt string             `json:"updated_at"`
+}
+
+// NetworkOpexQuarterTotals — итог квартала в двух базах НДС.
+type NetworkOpexQuarterTotals struct {
+	Quarter   int     `json:"quarter"`
+	AmountRub float64 `json:"amount_rub"`
+	AmountNet float64 `json:"amount_rub_net"`
+}
+
+// NetworkOpexBrandTotals — итог бренда: четыре квартала и год.
+type NetworkOpexBrandTotals struct {
+	BrandAS   string                     `json:"brand_as"`
+	Quarters  []NetworkOpexQuarterTotals `json:"quarters"`
+	AmountRub float64                    `json:"amount_rub"`
+	AmountNet float64                    `json:"amount_rub_net"`
+}
+
+// NetworkOpexTotals — итог всей сетки: четыре квартала и год.
+type NetworkOpexTotals struct {
+	Quarters  []NetworkOpexQuarterTotals `json:"quarters"`
+	AmountRub float64                    `json:"amount_rub"`
+	AmountNet float64                    `json:"amount_rub_net"`
+}
+
+// NetworkOpexResponse — данные вкладки «Инвестиции OPEX» за год.
+//
+// Brands — бренды, у которых есть строка плана в этом году: бюджет заводится
+// только на них, иначе он повис бы вне любого разреза витрины.
+type NetworkOpexResponse struct {
+	Network  Network                  `json:"network"`
+	Year     int                      `json:"year"`
+	Articles []NetworkOpexArticle     `json:"articles"`
+	Brands   []string                 `json:"brands"`
+	Cells    []NetworkOpexCell        `json:"cells"`
+	ByBrand  []NetworkOpexBrandTotals `json:"by_brand"`
+	Totals   NetworkOpexTotals        `json:"totals"`
+}
+
+type NetworkOpexSaveResponse struct {
+	Message string              `json:"message"`
+	Data    NetworkOpexResponse `json:"data"`
+}
+
 // NetworkContractPrice — цена договора с периодом действия и последней
 // доступной OLAP-ценой для сравнения.
 type NetworkContractPrice struct {

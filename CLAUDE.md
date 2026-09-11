@@ -34,6 +34,7 @@ vitest), состояние форм — в `hooks/`.
 | Интернет-продажи: дашборд, сводная, дрилл-даун, выгрузка | `handlers/sales.go`, `sales_pivot.go`, `sales_export_jobs.go`; `services/sales_service.go`, `sales_pivot_service.go`; `repository/sales_repo.go`; `models/sales.go` | `pages/InternetSales.tsx`, `components/InternetSalesDashboard.tsx`, `InternetSalesSummaryTable.tsx`, `DrilldownModal.tsx`, `utils/salesPivot.ts` |
 | Промо: таблица, карточка, согласование, формулы | `handlers/promo.go`; `services/promo_service.go` (формулы), `promo_dashboard_service.go`; `repository/promo_repo.go`, `promo_lock.go`, `promo_idempotency.go`; `models/types.go` | `pages/PromoAnalysis.tsx`, `PromoForm.tsx`, `PromoApproval.tsx`; `components/PromoEditDialog.tsx`, `ApprovalCard.tsx`; `hooks/usePromo*.ts` |
 | Реестр сетей: план и факт, прогноз, инвестиции, цены | `handlers/network.go`, `network_dashboard.go`, `network_forecast_import.go`; `services/network_service.go` (план, валовый пул, пороги), `network_forecast_service.go`, `network_dashboard_service.go`, `network_investment_columns.go`; `repository/network_repo.go`, `network_monthly_repo.go`, `network_dashboard_repo.go`; `models/network.go` | `pages/NetworkRegistry.tsx`; `components/NetworkDetailView.tsx`, `NetworkForecastTab.tsx`, `NetworkPlanGrid.tsx`, `NetworkDashboardView.tsx`, `NetworkPricesTab.tsx`; `utils/networkPlan.ts`, `networkPrices.ts` |
+| Реестр сетей: бюджет OPEX по статьям договора | `handlers/network_opex.go`; `services/network_opex_service.go` (раскладка квартала по месяцам, статьи); `repository/network_opex_repo.go` | `components/NetworkOpexTab.tsx`; `utils/networkOpex.ts` |
 | Вход, роли, сессии, лимиты попыток | `handlers/auth.go`; `middleware/auth.go`; `config/auth.go`; `repository/user_repo.go`, `session_repo.go`, `login_attempts_repo.go` | `pages/Login.tsx`, `api/auth.ts` |
 | Админ-справочники | `handlers/dictionaries.go`; `repository/dictionaries_repo.go` | `pages/AdminDictionaries.tsx`, `api/dictionaries.ts` |
 | Роут, CORS, rate limit, graceful shutdown | `main.go` | — |
@@ -61,7 +62,7 @@ vitest), состояние форм — в `hooks/`.
 | **Анализ промо** → вкладки «Дашборд» / «Просмотр данных» | `pages/PromoAnalysis.tsx` | `handlers/promo.go` |
 | Промо → Дашборд → «План–факт и эффективность», «Календарь и сезонность» | `components/PromoDashboard.tsx` | `services/promo_dashboard_service.go` |
 | Промо → карточка, форма, согласование | `pages/PromoForm.tsx`, `PromoApproval.tsx`, `components/PromoEditDialog.tsx` | `services/promo_service.go` (формулы) |
-| **Реестр сетей** → карточка сети: «Профиль сети», «Цены и SKU», «План и факт», «Прогноз», «Комментарии», «История» | `pages/NetworkRegistry.tsx`, `components/NetworkDetailView.tsx`, `NetworkPricesTab.tsx`, `NetworkPlanGrid.tsx`, `NetworkForecastTab.tsx` | `handlers/network.go`, `services/network_service.go`, `network_forecast_service.go` |
+| **Реестр сетей** → карточка сети: «Профиль сети», «Цены и SKU», «План и факт», «Инвестиции OPEX», «Прогноз», «Комментарии», «История» | `pages/NetworkRegistry.tsx`, `components/NetworkDetailView.tsx`, `NetworkPricesTab.tsx`, `NetworkPlanGrid.tsx`, `NetworkOpexTab.tsx`, `NetworkForecastTab.tsx` | `handlers/network.go`, `network_opex.go`, `services/network_service.go`, `network_opex_service.go`, `network_forecast_service.go` |
 | **Справочники** (только admin) | `pages/AdminDictionaries.tsx` | `handlers/dictionaries.go` |
 
 ## Инварианты
@@ -88,7 +89,7 @@ vitest), состояние форм — в `hooks/`.
    решение, а не упущение; см. README «Интернет-продажи областью не ограничены».
 
 4. **Миграции goose встроены в бинарник и применяются при старте.** Файлы
-   `backend/migrations/0NN_*.sql` пронумерованы до 030; изменение уже применённого файла
+   `backend/migrations/0NN_*.sql` пронумерованы до 031; изменение уже применённого файла
    ломает установленные базы — новое изменение = новый файл. Запуск миграций и правка
    схемы — только с явного разрешения.
 

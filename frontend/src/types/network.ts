@@ -8,6 +8,7 @@ import type {
   AuditLogRow,
   NetworkContractPriceInput,
   NetworkForecastInput,
+  NetworkOpexInput,
   NetworkPeriodGroupInput,
   NetworkPlanInput,
 } from './api.generated';
@@ -47,6 +48,15 @@ export type {
   NetworkPricesSaveResponse,
   NetworkForecastInput,
   NetworkContractPriceInput,
+  NetworkOpexArticle,
+  NetworkOpexMonth,
+  NetworkOpexCell,
+  NetworkOpexQuarterTotals,
+  NetworkOpexBrandTotals,
+  NetworkOpexTotals,
+  NetworkOpexResponse,
+  NetworkOpexSaveResponse,
+  NetworkOpexInput,
   NetworkDashboardMetrics,
   NetworkDashboardPromoTag,
   NetworkDashboardPeriodPoint,
@@ -153,4 +163,11 @@ export interface NetworkPricesSaveRequest {
 export interface NetworkContractPriceDeleteInput {
   id: number;
   updated_at: string;
+}
+
+// Тело POST /api/networks/:id/opex. Уходят квартальные ячейки — то, что ввёл
+// КАМ; раскладку по месяцам и базу «без НДС» считает сервер.
+export interface NetworkOpexSaveRequest {
+  year: number;
+  rows: NetworkOpexInput[];
 }

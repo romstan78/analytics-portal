@@ -87,6 +87,14 @@ var exported = []entry{
 	{models.NetworkPriceSKUOption{}, ""},
 	{models.NetworkPricesResponse{}, ""},
 	{models.NetworkPricesSaveResponse{}, ""},
+	{models.NetworkOpexArticle{}, ""},
+	{models.NetworkOpexMonth{}, ""},
+	{models.NetworkOpexCell{}, ""},
+	{models.NetworkOpexQuarterTotals{}, ""},
+	{models.NetworkOpexBrandTotals{}, ""},
+	{models.NetworkOpexTotals{}, ""},
+	{models.NetworkOpexResponse{}, ""},
+	{models.NetworkOpexSaveResponse{}, ""},
 	{models.NetworkDashboardInvestmentSplit{}, ""},
 	{models.NetworkDashboardMetrics{}, ""},
 	{models.NetworkDashboardPromoTag{}, ""},
@@ -102,6 +110,7 @@ var exported = []entry{
 	{repository.NetworkPeriodGroupInput{}, ""},
 	{repository.NetworkForecastInput{}, ""},
 	{repository.NetworkContractPriceInput{}, ""},
+	{repository.NetworkOpexInput{}, ""},
 
 	// ─── Промо ──────────────────────────────────────────────────────────
 	{models.PromoRow{}, ""},
