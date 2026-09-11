@@ -117,8 +117,9 @@ const VAT_BASE_LABEL: Record<VatBase, string> = {
   net: 'без НДС',
 };
 
-// Тип инвестиций. Реестр его не хранит: процент от товарооборота — это всегда
-// GTN, а OPEX заводится только в карточке промо.
+// Тип инвестиций. Процент от товарооборота реестра — это всегда GTN; OPEX
+// реестра — бюджет по статьям договора из вкладки «Инвестиции OPEX». У промо
+// тип ведётся в карточке, поэтому части есть у обоих полей.
 type InvestmentKind = 'gtn' | 'opex';
 
 const INVESTMENT_KIND_LABEL: Record<InvestmentKind, string> = {
@@ -236,9 +237,11 @@ function GapTooltip({ active, payload, unit }: {
 // а столбец собирается из закрытого факта и достройки прогнозом до ожидаемого
 // итога.
 //
-// Тип инвестиций реестр не хранит: всё, что он начисляет процентом от
-// товарооборота, — это GTN. OPEX существует только в карточках промо, поэтому
-// у столбцов OPEX части реестра нет вовсе.
+// Реестровая часть есть у обоих типов, но устроена по-разному. У GTN это
+// процент от товарооборота: у него есть и план, и факт, и прогноз. У OPEX —
+// бюджет по статьям договора: одно число, которое стоит и в плане, и в
+// ожидаемом итоге. Факта у него нет и быть не может — источника факта по
+// бюджету услуг в портале не существует, деньги по нему не приходят загрузкой.
 interface InvestmentPoint {
   key: string;
   tick: string;
@@ -246,11 +249,13 @@ interface InvestmentPoint {
   // Разложение на реестр и промо осталось в подсказке: столбец теперь занят
   // парой «факт и прогноз», и третьим измерением он стал бы нечитаем.
   planRegistry: number;
+  planRegistryOPEX: number;
   planPromoGTN: number;
   planPromoOPEX: number;
 
   // Ожидаемое, а не факт: у реестра это EAC — факт закрытых месяцев плюс
-  // прогноз открытых; у промо — факт, если он есть, иначе план.
+  // прогноз открытых; у промо — факт, если он есть, иначе план. У бюджета
+  // OPEX ожидаемое равно самому бюджету: другого знания о нём нет.
   eacRegistry: number;
   eacPromoGTN: number;
   eacPromoOPEX: number;
@@ -351,13 +356,16 @@ function InvestmentTooltip({ active, payload, year, vatLabel, kind }: {
         План: {formatRubShort(plan)} ₽
       </Typography>
       <InvestmentParts
-        registry={gtn ? point.planRegistry : 0}
+        registry={gtn ? point.planRegistry : point.planRegistryOPEX}
         promo={gtn ? point.planPromoGTN : point.planPromoOPEX}
       />
 
       <Typography variant="caption" sx={{ display: 'block' }}>
         Факт: {formatRubShort(fact)} ₽
       </Typography>
+      {/* Реестровая часть факта — только у GTN: бюджет OPEX фактом не
+          подтверждается, и ноль реестра здесь означал бы «не потратили»,
+          а не «мерить нечем». */}
       <InvestmentParts
         registry={gtn ? point.factRegistry : 0}
         promo={gtn ? point.factPromoGTN : point.factPromoOPEX}
@@ -372,7 +380,7 @@ function InvestmentTooltip({ active, payload, year, vatLabel, kind }: {
         Ожидаемый итог: {formatRubShort(eac)} ₽
       </Typography>
       <InvestmentParts
-        registry={gtn ? point.eacRegistry : 0}
+        registry={gtn ? point.eacRegistry : point.planRegistryOPEX}
         promo={gtn ? point.eacPromoGTN : point.eacPromoOPEX}
       />
 
@@ -760,6 +768,8 @@ export default function NetworkDetailView({
       const promoOPEX = metrics.promoInvestmentsOpex;
 
       const planRegistry = base(metrics.planInvestmentsRub, metrics.planInvestmentsRubNet);
+      // Бюджет OPEX реестра: одно число на план и на ожидаемое.
+      const planRegistryOPEX = base(metrics.registryOpexBudgetRub, metrics.registryOpexBudgetRubNet);
       const eacRegistry = base(metrics.eacInvestmentsRub, metrics.eacInvestmentsRubNet);
       const factRegistry = base(metrics.factInvestmentsRub, metrics.factInvestmentsRubNet);
       const planPromoGTN = base(promoGTN.planRub, promoGTN.planRubNet);
@@ -771,13 +781,16 @@ export default function NetworkDetailView({
 
       const factGTN = round2(factRegistry + factPromoGTN);
       const eacGTN = round2(eacRegistry + eacPromoGTN);
+      // Факт OPEX — только промо: бюджет реестра фактом не подтверждается.
+      // В ожидаемое он входит целиком, поэтому столбец выше факта ровно на него.
       const factOPEX = factPromoOPEX;
-      const eacOPEX = eacPromoOPEX;
+      const eacOPEX = round2(planRegistryOPEX + eacPromoOPEX);
 
       return {
         key: entry.key,
         tick: entry.tick,
         planRegistry,
+        planRegistryOPEX,
         planPromoGTN,
         planPromoOPEX,
         eacRegistry,
@@ -793,7 +806,7 @@ export default function NetworkDetailView({
         // кривой строки данных сломал бы всю шкалу, поэтому ноль.
         forecastGTN: Math.max(0, round2(eacGTN - factGTN)),
         eacGTN,
-        planOPEX: planPromoOPEX,
+        planOPEX: round2(planRegistryOPEX + planPromoOPEX),
         factOPEX,
         forecastOPEX: Math.max(0, round2(eacOPEX - factOPEX)),
         eacOPEX,
@@ -1593,7 +1606,7 @@ export default function NetworkDetailView({
           <InvestmentChart
             kind="opex"
             title={`Инвестиции OPEX ${GRAIN_TITLE[grain]}`}
-            subtitle={`Тот же разрез для OPEX. Тип ведётся только в карточках промо, поэтому доли реестра в столбце нет: появится там — попадёт и сюда. Промо-инвестиции помесячны по своей природе: у каждой активности есть свой месяц. База — ${VAT_BASE_LABEL[vatBase]}.`}
+            subtitle={`Тот же разрез для OPEX: бюджет реестра по статьям договора плюс промо с типом OPEX. Бюджет стоит и в плане, и в ожидаемом итоге — факта по нему не существует, поэтому столбец выше факта ровно на него. Промо-инвестиции помесячны по своей природе: у каждой активности есть свой месяц. База — ${VAT_BASE_LABEL[vatBase]}.`}
             action={investmentControls}
             points={investments}
             year={data.year}

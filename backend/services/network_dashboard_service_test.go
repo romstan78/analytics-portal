@@ -39,6 +39,7 @@ type dashboardCase struct {
 	prevPlans []models.NetworkPlan
 	prevFacts []models.NetworkMonthlyFact
 	promos    []repository.NetworkDashboardPromoRow
+	opex      []models.NetworkOpexBudgetRow
 }
 
 func (c dashboardCase) data() repository.NetworkDashboardData {
@@ -46,7 +47,7 @@ func (c dashboardCase) data() repository.NetworkDashboardData {
 		Networks: c.networks,
 		Current: repository.NetworkDashboardPeriodData{
 			Year: 2026, Plans: c.plans, Facts: c.facts, Forecasts: c.forecasts,
-			Groups: c.groups,
+			Groups: c.groups, Opex: c.opex,
 		},
 		Prev: repository.NetworkDashboardPeriodData{
 			Year: 2025, Plans: c.prevPlans, Facts: c.prevFacts,
@@ -636,7 +637,7 @@ func TestAggregateNetworkDashboardMatchesCardTotals(t *testing.T) {
 	// Тот же расчёт «руками», как его делает карточка сети.
 	slice := buildNetworkSlice(
 		network, 2026, map[int]bool{1: true}, plans, nil,
-		facts, facts, nil, nil, nil, dashboardNow,
+		facts, facts, nil, nil, nil, nil, dashboardNow,
 	)
 	want := slice.quarterTotals[1]
 
@@ -1848,5 +1849,70 @@ func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
 	if byMonth[1].PromoInvestmentsOPEX.PlanRub != 0 || byMonth[2].PromoInvestmentsOPEX.PlanRub == 0 {
 		t.Errorf("OPEX по месяцам = %v / %v, ожидался только февраль",
 			byMonth[1].PromoInvestmentsOPEX.PlanRub, byMonth[2].PromoInvestmentsOPEX.PlanRub)
+	}
+}
+
+// Бюджет OPEX реестра доходит до витрины отдельной величиной: он не входит
+// в процентные инвестиции (иначе поднял бы ставку, которой сеть не обещала) и
+// не размазывается по кварталу — в базе он уже помесячный.
+func TestAggregateNetworkDashboardRegistryOpexBudget(t *testing.T) {
+	opexMonths := func(quarter int, brand, article string, amount float64) []models.NetworkOpexBudgetRow {
+		rows := make([]models.NetworkOpexBudgetRow, 0, 3)
+		for _, month := range NetworkOpexMonthlyRows(quarter, amount, true, 20) {
+			rows = append(rows, models.NetworkOpexBudgetRow{
+				NetworkID: 1, Year: 2026, Month: month.Month, BrandAS: brand, Article: article,
+				AmountRub: month.AmountRub, AmountNet: month.AmountNet,
+			})
+		}
+		return rows
+	}
+
+	testCase := dashboardCase{
+		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
+		plans: []models.NetworkPlan{
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
+				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+			},
+		},
+		facts: []models.NetworkMonthlyFact{
+			dashboardFact(1, 1, "Альфа", 400000, 40000),
+		},
+	}
+	testCase.opex = append(testCase.opex, opexMonths(1, "Альфа", "display", 90000.01)...)
+	// Квартал вне среза: в итог он попасть не должен.
+	testCase.opex = append(testCase.opex, opexMonths(3, "Альфа", "reports", 50000)...)
+
+	got := AggregateNetworkDashboard(testCase.data(), dashboardFilter(1), dashboardNow)
+
+	if got.Summary.RegistryOpexBudgetRub != 90000.01 {
+		t.Errorf("бюджет OPEX = %v, ожидалось 90000.01", got.Summary.RegistryOpexBudgetRub)
+	}
+	wantNet := NetRub(90000.01, true, 20)
+	if got.Summary.RegistryOpexBudgetRubNet != wantNet {
+		t.Errorf("бюджет OPEX без НДС = %v, ожидалось %v",
+			got.Summary.RegistryOpexBudgetRubNet, wantNet)
+	}
+	// Процентные инвестиции остались процентными: 10% от планового миллиона.
+	if got.Summary.PlanInvestmentsRub != 100000 {
+		t.Errorf("плановые инвестиции = %v, ожидалось 100000", got.Summary.PlanInvestmentsRub)
+	}
+
+	byMonth := map[int]models.NetworkDashboardMonthPoint{}
+	for _, point := range got.Months {
+		byMonth[point.Month] = point
+	}
+	monthSum := round2(byMonth[1].RegistryOpexBudgetRub +
+		byMonth[2].RegistryOpexBudgetRub + byMonth[3].RegistryOpexBudgetRub)
+	if monthSum != 90000.01 {
+		t.Errorf("сумма месяцев = %v, квартал = 90000.01", monthSum)
+	}
+	if byMonth[3].RegistryOpexBudgetRub <= byMonth[1].RegistryOpexBudgetRub {
+		t.Errorf("остаток копеек должен лежать в последнем месяце: %v против %v",
+			byMonth[3].RegistryOpexBudgetRub, byMonth[1].RegistryOpexBudgetRub)
+	}
+
+	if len(got.Brands) != 1 || got.Brands[0].Metrics.RegistryOpexBudgetRub != 90000.01 {
+		t.Errorf("разрез брендов не получил бюджет: %+v", got.Brands)
 	}
 }
