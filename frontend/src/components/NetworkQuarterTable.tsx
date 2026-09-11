@@ -231,8 +231,6 @@ export default function NetworkQuarterTable({
         acc.investPlanNet += a.investPlanNet ?? 0;
         acc.investForecast += a.investForecast ?? 0;
         acc.investForecastNet += a.investForecastNet ?? 0;
-		acc.investForecast += a.investForecast ?? 0;
-		acc.investForecastNet += a.investForecastNet ?? 0;
         acc.investFact += a.investFact ?? 0;
         acc.investFactNet += a.investFactNet ?? 0;
         return acc;
