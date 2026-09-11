@@ -499,6 +499,18 @@ func monthShares(values map[int]float64, fallback map[int]float64) map[int]float
 	return shares
 }
 
+// splitByShares раскладывает квартальную величину по трём месяцам, ничего не
+// теряя: первые два месяца берут свою долю с округлением, последний получает
+// остаток. Округлять каждый месяц по отдельности нельзя — три округления
+// расходятся с исходной суммой на копейку, а месяц и квартал стоят на соседних
+// экранах одной витрины. Правило то же, что у allocationForPlan в помесячном
+// плане: другого способа удержать точное равенство при долях вроде трети нет.
+func splitByShares(total float64, months [3]int, shares map[int]float64) [3]float64 {
+	first := round2(total * shares[months[0]])
+	second := round2(total * shares[months[1]])
+	return [3]float64{first, second, round2(total - first - second)}
+}
+
 // buildNetworkSlice дополняет строки плана фактом и EAC из помесячных таблиц
 // и считает по ним те же квартальные итоги, что показывает карточка сети.
 func buildNetworkSlice(
@@ -794,16 +806,24 @@ func buildNetworkSlice(
 
 	// План раскладывается по месяцам той же схемой, что применяет карточка,
 	// и от квартального обязательства, а не от суммы брендов: иначе месяц
-	// потерял бы нераспределённый остаток валового пула.
+	// потерял бы нераспределённый остаток валового пула. Раскладка с остатком
+	// по той же причине, что и у инвестиций ниже: обязательство квартала
+	// обязано разойтись по месяцам целиком, до копейки и до упаковки.
 	distribution := networkMonthlyDistribution(network)
 	for quarter, total := range slice.quarterTotals {
 		quarterUnitsTotal := slice.quarterUnits[quarter]
+		var months [3]int
+		byScheme := map[int]float64{}
 		for index := 0; index < 3; index++ {
-			month := (quarter-1)*3 + 1 + index
-			share := distribution[index] / 100
-			slice.monthPlan[month] = quarterFact{
-				rub:   round2(total.ContractPlanRub * share),
-				units: round2(quarterUnitsTotal.plan * share),
+			months[index] = (quarter-1)*3 + 1 + index
+			byScheme[months[index]] = distribution[index] / 100
+		}
+		planRub := splitByShares(total.ContractPlanRub, months, byScheme)
+		planUnits := splitByShares(quarterUnitsTotal.plan, months, byScheme)
+		for index := 0; index < 3; index++ {
+			slice.monthPlan[months[index]] = quarterFact{
+				rub:   planRub[index],
+				units: planUnits[index],
 			}
 		}
 	}
@@ -812,31 +832,40 @@ func buildNetworkSlice(
 	// сумма строки плана и раскладывается по месяцам — факт и прогноз по
 	// обороту (инвестиции и есть процент от него), план по схеме сети. Так
 	// месяц наследует и порог выплаты, и режим оплаты от факта, и НДС
-	// квартала, а сумма месяцев сходится с кварталом.
+	// квартала, а сумма месяцев сходится с кварталом до копейки: раскладка
+	// идёт с остатком (splitByShares), поэтому квартал строки распределяется
+	// целиком, сколько бы месяцев ни попало на неудобную долю.
 	for _, plan := range enriched {
 		if plan.BrandAS == nil || !quarters[plan.Quarter] {
 			continue
 		}
 		key := brandQuarterKey{brand: strings.TrimSpace(*plan.BrandAS), quarter: plan.Quarter}
+		var months [3]int
 		byScheme := map[int]float64{}
 		for index := 0; index < 3; index++ {
-			byScheme[(plan.Quarter-1)*3+1+index] = distribution[index] / 100
+			months[index] = (plan.Quarter-1)*3 + 1 + index
+			byScheme[months[index]] = distribution[index] / 100
 		}
 		planShares := byScheme
 		factShares := monthShares(rowMonthFact[key], byScheme)
 		eacShares := monthShares(rowMonthEAC[key], byScheme)
+		planRub := splitByShares(valueOrZero(plan.InvestmentsRub), months, planShares)
+		planNet := splitByShares(valueOrZero(plan.InvestmentsNet), months, planShares)
+		factRub := splitByShares(valueOrZero(plan.FactInvestmentsRub), months, factShares)
+		factNet := splitByShares(valueOrZero(plan.FactInvestmentsNet), months, factShares)
+		eacRub := splitByShares(valueOrZero(plan.ForecastInvestmentsRub), months, eacShares)
+		eacNet := splitByShares(valueOrZero(plan.ForecastInvestmentsNet), months, eacShares)
 		for index := 0; index < 3; index++ {
-			month := (plan.Quarter-1)*3 + 1 + index
-			amounts := slice.monthInvest[month]
+			amounts := slice.monthInvest[months[index]]
 			amounts.add(monthInvestments{
-				planRub: round2(valueOrZero(plan.InvestmentsRub) * planShares[month]),
-				planNet: round2(valueOrZero(plan.InvestmentsNet) * planShares[month]),
-				factRub: round2(valueOrZero(plan.FactInvestmentsRub) * factShares[month]),
-				factNet: round2(valueOrZero(plan.FactInvestmentsNet) * factShares[month]),
-				eacRub:  round2(valueOrZero(plan.ForecastInvestmentsRub) * eacShares[month]),
-				eacNet:  round2(valueOrZero(plan.ForecastInvestmentsNet) * eacShares[month]),
+				planRub: planRub[index],
+				planNet: planNet[index],
+				factRub: factRub[index],
+				factNet: factNet[index],
+				eacRub:  eacRub[index],
+				eacNet:  eacNet[index],
 			})
-			slice.monthInvest[month] = amounts
+			slice.monthInvest[months[index]] = amounts
 		}
 	}
 

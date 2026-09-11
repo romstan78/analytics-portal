@@ -1758,21 +1758,33 @@ func TestDashboardSplitsPromoInvestmentsByType(t *testing.T) {
 	}
 }
 
-// Помесячные инвестиции — это разложение квартальных, а не второй расчёт.
+// Помесячный ряд витрины — это разложение квартальных величин, а не второй
+// расчёт: и план, и инвестиции реестра приходят на месяц долей квартала.
 // Сумма месяцев обязана сойтись с кварталом до копейки: разойдутся — и два
 // экрана одной витрины начнут показывать разные деньги.
-func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
+func TestDashboardMonthlyValuesSumUpToQuarter(t *testing.T) {
 	opex := "OPEX"
 	testCase := dashboardCase{
 		networks: []models.Network{dashboardNetwork(1, "Аптека Плюс", "Иванов")},
 		plans: []models.NetworkPlan{
 			{
 				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Альфа"),
-				PlanRub: models.PtrFloat(1000000), InvestmentsPct: models.PtrFloat(10),
+				PlanRub: models.PtrFloat(1000000), PlanUnits: models.PtrFloat(20000),
+				InvestmentsPct: models.PtrFloat(10),
 			},
 			{
 				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Бета"),
-				PlanRub: models.PtrFloat(500000), InvestmentsPct: models.PtrFloat(4),
+				PlanRub: models.PtrFloat(500000), PlanUnits: models.PtrFloat(10000),
+				InvestmentsPct: models.PtrFloat(4),
+			},
+			// Оборот, поделённый на три равные части: доли по трети — как раз
+			// тот случай, где независимое округление месяцев теряет копейку.
+			// План с копейками добавляет второй такой случай, уже в схеме
+			// 30/30/40: 1 533 333,31 ровно на три месяца не делится.
+			{
+				NetworkID: 1, Year: 2026, Quarter: 1, BrandAS: brandPtr("Гамма"),
+				PlanRub: models.PtrFloat(33333.31), PlanUnits: models.PtrFloat(667),
+				InvestmentsPct: models.PtrFloat(10),
 			},
 		},
 		// Оборот распределён по месяцам неравномерно: разложение обязано идти
@@ -1782,6 +1794,9 @@ func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
 			dashboardFact(1, 2, "Альфа", 300000, 0),
 			dashboardFact(1, 3, "Альфа", 400000, 0),
 			dashboardFact(1, 2, "Бета", 600000, 0),
+			dashboardFact(1, 1, "Гамма", 33333.34, 0),
+			dashboardFact(1, 2, "Гамма", 33333.33, 0),
+			dashboardFact(1, 3, "Гамма", 33333.33, 0),
 		},
 		promos: []repository.NetworkDashboardPromoRow{
 			{NetworkName: "Аптека Плюс", Year: 2026, Month: 2, BrandAS: brandPtr("Альфа"),
@@ -1796,6 +1811,7 @@ func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
 	}
 	quarter := got.Quarters[0].Metrics
 
+	var planVolume, planVolumeUnits float64
 	var plan, planNet, fact, factNet, eac, eacNet, opexPlan float64
 	months := 0
 	for _, point := range got.Months {
@@ -1803,6 +1819,8 @@ func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
 			continue
 		}
 		months++
+		planVolume = round2(planVolume + point.PlanRub)
+		planVolumeUnits = round2(planVolumeUnits + point.PlanUnits)
 		plan = round2(plan + point.PlanInvestmentsRub)
 		planNet = round2(planNet + point.PlanInvestmentsRubNet)
 		fact = round2(fact + point.FactInvestmentsRub)
@@ -1819,21 +1837,28 @@ func TestDashboardMonthlyInvestmentsSumUpToQuarter(t *testing.T) {
 		t.Fatalf("квартал без инвестиций: план %v, факт %v — сверять нечего",
 			quarter.PlanInvestmentsRub, quarter.FactInvestmentsRub)
 	}
+	if quarter.PlanRub == 0 || quarter.PlanUnits == 0 {
+		t.Fatalf("квартал без плана: %v руб / %v уп — сверять нечего",
+			quarter.PlanRub, quarter.PlanUnits)
+	}
 
-	// Копейка расхождения допустима на округлении трёх долей, рубль — нет.
-	closeTo := func(name string, sum, want float64) {
+	// Не «примерно», а точно: месяц и квартал стоят на соседних экранах одной
+	// витрины, и потерянная на округлении копейка видна там сразу.
+	equal := func(name string, sum, want float64) {
 		t.Helper()
-		if diff := sum - want; diff > 0.05 || diff < -0.05 {
+		if sum != want {
 			t.Errorf("%s: сумма месяцев = %v, квартал = %v", name, sum, want)
 		}
 	}
-	closeTo("план с НДС", plan, quarter.PlanInvestmentsRub)
-	closeTo("план без НДС", planNet, quarter.PlanInvestmentsRubNet)
-	closeTo("факт с НДС", fact, quarter.FactInvestmentsRub)
-	closeTo("факт без НДС", factNet, quarter.FactInvestmentsRubNet)
-	closeTo("прогноз с НДС", eac, quarter.EACInvestmentsRub)
-	closeTo("прогноз без НДС", eacNet, quarter.EACInvestmentsRubNet)
-	closeTo("план OPEX", opexPlan, quarter.PromoInvestmentsOPEX.PlanRub)
+	equal("объём плана", planVolume, quarter.PlanRub)
+	equal("объём плана в упаковках", planVolumeUnits, quarter.PlanUnits)
+	equal("план с НДС", plan, quarter.PlanInvestmentsRub)
+	equal("план без НДС", planNet, quarter.PlanInvestmentsRubNet)
+	equal("факт с НДС", fact, quarter.FactInvestmentsRub)
+	equal("факт без НДС", factNet, quarter.FactInvestmentsRubNet)
+	equal("прогноз с НДС", eac, quarter.EACInvestmentsRub)
+	equal("прогноз без НДС", eacNet, quarter.EACInvestmentsRubNet)
+	equal("план OPEX", opexPlan, quarter.PromoInvestmentsOPEX.PlanRub)
 
 	// Разложение идёт за оборотом: в январе «Альфа» отгрузила больше, чем в
 	// феврале, значит и инвестиций на январь приходится больше.
