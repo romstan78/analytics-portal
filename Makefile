@@ -1,8 +1,8 @@
 .PHONY: up down logs bootstrap-user seed-dev test test-e2e config-prod \
 	types types-check demo-db-init demo-db-load demo-db-reset demo-up demo-down \
 	demo-bootstrap-user demo-ecom-load demo-ecom-reset demo-registry-load \
-	demo-registry-reset demo-kam-users demo-kam-users-preview demo-approval-scope \
-	recalc-investments backfill-forecast-pairs
+	demo-registry-reset demo-opex-load demo-opex-reset demo-kam-users \
+	demo-kam-users-preview demo-approval-scope recalc-investments backfill-forecast-pairs
 
 # Полный стек, включая SQL Server на постоянном томе mssql_data_volume.
 up:
@@ -62,6 +62,15 @@ backfill-forecast-pairs:
 demo-registry-reset:
 	python3 sync_script/create_demo_network_registry.py --replace --confirm RESET_DEMO_NETWORK_REGISTRY
 
+# Бюджет OPEX по контракту: 1–5 % плана брендов, по статьям, равными кварталами.
+# Запускать после demo-registry-load — бренд бюджета обязан быть в плане года.
+#   make demo-opex-load YEARS="2025 2026"
+demo-opex-load:
+	python3 sync_script/create_demo_network_opex.py $(if $(YEARS),--years $(YEARS),)
+
+demo-opex-reset:
+	python3 sync_script/create_demo_network_opex.py $(if $(YEARS),--years $(YEARS),) --replace --confirm RESET_DEMO_NETWORK_OPEX
+
 # Учётные записи КАМов демо-контура. Пароли генерируются на машине запускающего
 # и печатаются один раз — их нужно сохранить сразу.
 demo-kam-users-preview:
@@ -99,7 +108,7 @@ types-check:
 test: types-check
 	cd backend && go vet ./... && go test ./config ./middleware ./handlers ./repository ./services ./cmd/bootstrap_user
 	cd frontend && npm run lint && npm run test:unit && npm run build
-	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py test_import_network_facts.py test_create_demo_promo_db.py test_create_demo_ecom_sales.py test_create_demo_network_registry.py
+	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py test_import_network_facts.py test_create_demo_promo_db.py test_create_demo_ecom_sales.py test_create_demo_network_registry.py test_create_demo_network_opex.py
 
 test-e2e:
 	cd frontend && npm run test:e2e
