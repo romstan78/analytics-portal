@@ -97,11 +97,14 @@ export const networkAPI = {
     month2_pct?: number;
     month3_pct?: number;
     has_annual_investment_cumulative?: boolean;
+    default_scales_count?: number;
+    default_cap_mode?: string;
     year?: number;
     periods?: Array<{
       quarter: number;
       vat_included: boolean;
       vat_rate: number;
+      scales_count?: number;
     }>;
     updated_at: string;
   }): Promise<NetworkSaveResponse> =>

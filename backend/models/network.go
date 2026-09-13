@@ -55,7 +55,8 @@ type NetworkPeriod struct {
 // ограничивает базу, на которую начисляется процент:
 //   open   — весь объём;
 //   pct    — на последней ступени не больше план × (1 + CapPct/100);
-//   closed — ровно план достигнутой ступени, коридоры не оплачиваются.
+//   closed — не больше плана достигнутой ступени (min(объём, план)), коридоры
+//            не оплачиваются.
 // Между ступенями коридор оплачивается полностью: объём, дошедший до следующего
 // порога, уже считается по следующей ступени.
 
@@ -103,6 +104,9 @@ type NetworkPlanScale struct {
 	PlanRub        *float64 `json:"plan_rub"`
 	PlanUnits      *float64 `json:"plan_units"`
 	InvestmentsPct *float64 `json:"investments_pct"` // у пула не ведётся
+	// Процент, по которому ступень считается: свой либо унаследованный от
+	// ступени ниже, если свой не задан. Расчётное поле, не хранится.
+	EffectiveInvestmentsPct *float64 `json:"effective_investments_pct"`
 
 	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
 	PlanInvestmentsNet     *float64 `json:"plan_investments_rub_net"`

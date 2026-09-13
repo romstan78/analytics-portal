@@ -14,6 +14,11 @@ import type {
 } from './api.generated';
 
 export type {
+  NetworkPlanScale,
+  NetworkPlanScaleSKU,
+  NetworkPlanScaleTotals,
+  NetworkPlanScaleInput,
+  NetworkPlanScaleSKUInput,
   Network,
   NetworkPeriod,
   NetworkPlan,
@@ -106,6 +111,9 @@ export interface NetworkPlanSaveRequest {
   plans: NetworkPlanInput[];
   period_groups: NetworkPeriodGroupInput[];
 }
+
+// Крышка перевыполнения. В Go — строка с проверкой на сервере.
+export type NetworkCapMode = 'open' | 'pct' | 'closed';
 
 export interface NetworkInvestmentPaymentModesSaveRequest {
   year: number;

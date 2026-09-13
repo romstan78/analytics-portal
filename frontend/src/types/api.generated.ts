@@ -260,6 +260,7 @@ export interface NetworkPlanScale {
   plan_rub: number | null;
   plan_units: number | null;
   investments_pct: number | null;
+  effective_investments_pct: number | null;
   plan_investments_rub: number | null;
   plan_investments_rub_net: number | null;
   forecast_rub: number | null;

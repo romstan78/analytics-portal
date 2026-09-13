@@ -14,7 +14,7 @@ import (
 //
 // База к оплате считается по каждому SKU бренда (или по бренду целиком, если
 // SKU-строк нет) от его плана на ступени:
-//   закрытая крышка            → база = план;
+//   закрытая крышка            → база = min(объём, план);
 //   k* не последняя в области  → база = объём (коридор оплачивается полностью);
 //   последняя, открытая        → база = объём;
 //   последняя, процентная c    → база = min(объём, план × (1 + c/100)).
@@ -37,11 +37,18 @@ func planScales(plan models.NetworkPlan) []models.NetworkPlanScale {
 	first.PlanRub = plan.PlanRub
 	first.PlanUnits = plan.PlanUnits
 	first.InvestmentsPct = plan.InvestmentsPct
+	first.EffectiveInvestmentsPct = plan.InvestmentsPct
 	ladder := []models.NetworkPlanScale{first}
 	for no := 2; no <= 3; no++ {
 		scale, ok := byNo[no]
 		if !ok || scale.PlanRub == nil {
 			break
+		}
+		// Ступень без своего процента наследует процент ступени ниже: КАМ,
+		// заведший порог, не должен обнулить выплату до ввода процента.
+		scale.EffectiveInvestmentsPct = scale.InvestmentsPct
+		if scale.EffectiveInvestmentsPct == nil {
+			scale.EffectiveInvestmentsPct = ladder[len(ladder)-1].EffectiveInvestmentsPct
 		}
 		ladder = append(ladder, scale)
 	}
@@ -99,9 +106,15 @@ func capOf(mode string, pct *float64) capSetting {
 }
 
 // cappedBase — база к оплате одного ведра (SKU или бренда целиком) на ступени.
+// Закрытая крышка — «сверх плана не платим»: не больше плана ведра, но и не
+// больше его объёма. Иначе ведро без объёма (SKU без помесячных данных,
+// остаток бренда) получало бы план, и база бренда превышала бы его объём.
 func cappedBase(volume, plan float64, isLast bool, cap capSetting) float64 {
 	switch {
 	case cap.mode == models.CapModeClosed:
+		if volume < plan {
+			return round2(volume)
+		}
 		return round2(plan)
 	case !isLast, cap.mode == models.CapModeOpen:
 		return round2(volume)
@@ -143,7 +156,7 @@ func scaleBuckets(
 		row := &scale.SKUs[i]
 		pct := row.InvestmentsPct
 		if pct == nil {
-			pct = scale.InvestmentsPct
+			pct = scale.EffectiveInvestmentsPct
 		}
 		cap := ownerCap
 		if row.CapMode != "" {
@@ -162,7 +175,7 @@ func scaleBuckets(
 		restVolume = 0
 	}
 	// Ведро бренда есть всегда: у строки без SKU оно и есть бренд целиком.
-	buckets = append(buckets, bucket{plan: restPlan, volume: restVolume, pct: scale.InvestmentsPct, cap: ownerCap})
+	buckets = append(buckets, bucket{plan: restPlan, volume: restVolume, pct: scale.EffectiveInvestmentsPct, cap: ownerCap})
 	return buckets
 }
 

@@ -104,6 +104,7 @@ func InsertNetwork(
 	month1Pct, month2Pct, month3Pct float64,
 	hasAnnualInvestmentCumulative bool,
 	defaultEntryLevel, defaultEntryUnit string,
+	defaultScalesCount int, defaultCapMode string,
 ) (int, error) {
 	// Уникальность имени проверяет индекс UQ_Networks_name, а не отдельный
 	// SELECT перед вставкой: между проверкой и вставкой помещается чужой INSERT,
@@ -113,11 +114,13 @@ func InsertNetwork(
 		`INSERT INTO dbo.tbl_Networks (
 			name, kam, network_type, vat_included, vat_rate,
 			month1_pct, month2_pct, month3_pct,
-			has_annual_investment_cumulative, default_entry_level, default_entry_unit
-		 ) OUTPUT INSERTED.id VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			has_annual_investment_cumulative, default_entry_level, default_entry_unit,
+			default_scales_count, default_cap_mode
+		 ) OUTPUT INSERTED.id VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		name, nullIfEmpty(kam), networkType, vatIncluded, vatRate,
 		month1Pct, month2Pct, month3Pct,
 		hasAnnualInvestmentCumulative, defaultEntryLevel, defaultEntryUnit,
+		defaultScalesCount, defaultCapMode,
 	).Scan(&id)
 	if isUniqueViolation(err) {
 		return 0, ErrNetworkExists
@@ -147,6 +150,7 @@ func UpdateNetwork(
 	month1Pct, month2Pct, month3Pct float64,
 	hasAnnualInvestmentCumulative bool,
 	defaultEntryLevel, defaultEntryUnit string,
+	defaultScalesCount int, defaultCapMode string,
 	year int, periods []models.NetworkPeriod,
 	updatedAt string,
 ) error {
@@ -161,13 +165,15 @@ func UpdateNetwork(
 				vat_included = ?, vat_rate = ?,
 				month1_pct = ?, month2_pct = ?, month3_pct = ?,
 				has_annual_investment_cumulative = ?,
-				default_entry_level = ?, default_entry_unit = ?, updated_at = GETDATE()
+				default_entry_level = ?, default_entry_unit = ?,
+				default_scales_count = ?, default_cap_mode = ?, updated_at = GETDATE()
 			WHERE id = ?`
 	args := []interface{}{
 		name, nullIfEmpty(kam), networkType, isActive,
 		vatIncluded, vatRate,
 		month1Pct, month2Pct, month3Pct, hasAnnualInvestmentCumulative,
-		defaultEntryLevel, defaultEntryUnit, id,
+		defaultEntryLevel, defaultEntryUnit,
+		defaultScalesCount, defaultCapMode, id,
 	}
 	if updatedAt != "" {
 		query += " AND CONVERT(NVARCHAR, updated_at, 121) = ?"
@@ -194,7 +200,7 @@ func UpdateNetwork(
 		return ErrNetworkConflict
 	}
 	for _, period := range periods {
-		if err := upsertPeriodTx(tx, id, year, period); err != nil {
+		if err := upsertPeriodTx(tx, id, year, period, defaultScalesCount); err != nil {
 			return err
 		}
 	}
@@ -240,12 +246,19 @@ func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 	return result, rows.Err()
 }
 
-func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) error {
+// upsertPeriodTx пишет квартал. Число ступеней хранится только как исключение:
+// значение, совпадающее с умолчанием сети (или нулевое), уходит в базу NULL,
+// чтобы смена умолчания в профиле распространялась на обычные кварталы.
+func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod, defaultScales int) error {
+	var scales interface{}
+	if p.ScalesCount > 0 && p.ScalesCount != defaultScales {
+		scales = p.ScalesCount
+	}
 	res, err := tx.Exec(
 		`UPDATE dbo.tbl_NetworkPeriods
-		 SET vat_included = ?, vat_rate = ?, updated_at = GETDATE()
+		 SET vat_included = ?, vat_rate = ?, scales_count = ?, updated_at = GETDATE()
 		 WHERE network_id = ? AND [year] = ? AND [quarter] = ?`,
-		p.VATIncluded, p.VATRate, networkID, year, p.Quarter,
+		p.VATIncluded, p.VATRate, scales, networkID, year, p.Quarter,
 	)
 	if err != nil {
 		return err
@@ -258,9 +271,9 @@ func upsertPeriodTx(tx *sql.Tx, networkID, year int, p models.NetworkPeriod) err
 		return nil
 	}
 	_, err = tx.Exec(
-		`INSERT INTO dbo.tbl_NetworkPeriods (network_id, [year], [quarter], vat_included, vat_rate)
-		 VALUES (?, ?, ?, ?, ?)`,
-		networkID, year, p.Quarter, p.VATIncluded, p.VATRate,
+		`INSERT INTO dbo.tbl_NetworkPeriods (network_id, [year], [quarter], vat_included, vat_rate, scales_count)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		networkID, year, p.Quarter, p.VATIncluded, p.VATRate, scales,
 	)
 	return err
 }
@@ -842,7 +855,7 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		} else {
 			changes = append(changes, planChange{Quarter: p.Quarter, Field: "period", Old: nil, New: true})
 		}
-		if err := upsertPeriodTx(tx, in.NetworkID, in.Year, p); err != nil {
+		if err := upsertPeriodTx(tx, in.NetworkID, in.Year, p, network.DefaultScalesCount); err != nil {
 			return "", err
 		}
 	}

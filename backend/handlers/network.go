@@ -282,6 +282,8 @@ type networkInput struct {
 	HasAnnualInvestmentCumulative *bool                `json:"has_annual_investment_cumulative"`
 	DefaultEntryLevel             *string              `json:"default_entry_level"`
 	DefaultEntryUnit              *string              `json:"default_entry_unit"`
+	DefaultScalesCount            *int                 `json:"default_scales_count"`
+	DefaultCapMode                *string              `json:"default_cap_mode"`
 	UpdatedAt                     string               `json:"updated_at"`
 	VATIncluded                   *bool                `json:"vat_included"`
 	VATRate                       *float64             `json:"vat_rate"`
@@ -299,6 +301,9 @@ type networkProfile struct {
 	// привычка, и сеть должна открываться сразу в ней.
 	DefaultEntryLevel string
 	DefaultEntryUnit  string
+	// Ступени контракта по умолчанию: число порогов и крышка новых строк.
+	DefaultScalesCount int
+	DefaultCapMode     string
 }
 
 // oneOf возвращает значение, если оно есть в списке допустимых.
@@ -360,6 +365,28 @@ func networkProfileSettings(input networkInput, fallback models.Network) (networ
 		return networkProfile{}, errors.New("единица ведения: rub или units")
 	}
 
+	scalesCount := fallback.DefaultScalesCount
+	if scalesCount <= 0 {
+		scalesCount = 1
+	}
+	if input.DefaultScalesCount != nil {
+		scalesCount = *input.DefaultScalesCount
+	}
+	if scalesCount < 1 || scalesCount > 3 {
+		return networkProfile{}, errors.New("число ступеней: от 1 до 3")
+	}
+	capMode := fallback.DefaultCapMode
+	if capMode == "" {
+		capMode = models.CapModeOpen
+	}
+	if input.DefaultCapMode != nil {
+		capMode = strings.TrimSpace(*input.DefaultCapMode)
+	}
+	capMode, capOK := oneOf(capMode, models.CapModeOpen, models.CapModePct, models.CapModeClosed)
+	if !capOK {
+		return networkProfile{}, errors.New("крышка по умолчанию: open, pct или closed")
+	}
+
 	return networkProfile{
 		Month1Pct:                     month1Pct,
 		Month2Pct:                     month2Pct,
@@ -367,6 +394,8 @@ func networkProfileSettings(input networkInput, fallback models.Network) (networ
 		HasAnnualInvestmentCumulative: hasAnnualInvestmentCumulative,
 		DefaultEntryLevel:             entryLevel,
 		DefaultEntryUnit:              entryUnit,
+		DefaultScalesCount:            scalesCount,
+		DefaultCapMode:                capMode,
 	}, nil
 }
 
@@ -398,6 +427,9 @@ type networkPeriodInput struct {
 	Quarter     int     `json:"quarter"`
 	VATIncluded bool    `json:"vat_included"`
 	VATRate     float64 `json:"vat_rate"`
+	// Число ступеней квартала. Отсутствует — клиент про ступени не знает,
+	// сохранённое значение квартала остаётся (сетка планов шлёт только НДС).
+	ScalesCount *int `json:"scales_count,omitempty"`
 }
 
 func networkPeriodsFromInput(
@@ -418,6 +450,12 @@ func networkPeriodsFromInput(
 		}
 		periods[requested.Quarter-1].VATIncluded = requested.VATIncluded
 		periods[requested.Quarter-1].VATRate = requested.VATRate
+		if requested.ScalesCount != nil {
+			if *requested.ScalesCount < 1 || *requested.ScalesCount > 3 {
+				return nil, errors.New("число ступеней квартала: от 1 до 3")
+			}
+			periods[requested.Quarter-1].ScalesCount = *requested.ScalesCount
+		}
 	}
 	return periods, nil
 }
@@ -471,6 +509,7 @@ func CreateNetwork(c *gin.Context) {
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
 		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
+		profile.DefaultScalesCount, profile.DefaultCapMode,
 	)
 	if err != nil {
 		respondNetworkError(c, err, "network_create_failed")
@@ -579,6 +618,7 @@ func UpdateNetwork(c *gin.Context) {
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
 		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
+		profile.DefaultScalesCount, profile.DefaultCapMode,
 		input.Year, profilePeriods,
 		input.UpdatedAt,
 	); err != nil {
@@ -625,6 +665,16 @@ func UpdateNetwork(c *gin.Context) {
 			"new": []string{profile.DefaultEntryLevel, profile.DefaultEntryUnit},
 		}
 	}
+	if current.DefaultScalesCount != profile.DefaultScalesCount {
+		changes["default_scales_count"] = map[string]interface{}{
+			"old": current.DefaultScalesCount, "new": profile.DefaultScalesCount,
+		}
+	}
+	if current.DefaultCapMode != profile.DefaultCapMode {
+		changes["default_cap_mode"] = map[string]interface{}{
+			"old": current.DefaultCapMode, "new": profile.DefaultCapMode,
+		}
+	}
 	if input.Periods != nil {
 		previousWithDefaults := networkPeriodsWithDefaults(current, input.Year, previousProfilePeriods)
 		storedByQuarter := make(map[int]models.NetworkPeriod, len(previousWithDefaults))
@@ -641,6 +691,11 @@ func UpdateNetwork(c *gin.Context) {
 			if old.VATRate != period.VATRate {
 				changes[fmt.Sprintf("vat_rate_q%d", period.Quarter)] = map[string]interface{}{
 					"old": old.VATRate, "new": period.VATRate,
+				}
+			}
+			if old.ScalesCount != period.ScalesCount {
+				changes[fmt.Sprintf("scales_count_q%d", period.Quarter)] = map[string]interface{}{
+					"old": old.ScalesCount, "new": period.ScalesCount,
 				}
 			}
 		}

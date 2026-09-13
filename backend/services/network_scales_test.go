@@ -373,3 +373,45 @@ func TestCompletePairUsesMonthlyPrices(t *testing.T) {
 		t.Errorf("рубли без упаковок в режиме units считаются введёнными: %v / %v", models.ValFloat(rub), units)
 	}
 }
+
+func TestScalesClosedCapNeverExceedsVolume(t *testing.T) {
+	// Закрытая крышка — «сверх плана не платим», но и не сверх объёма: SKU с
+	// открытой крышкой забрал весь объём бренда, остатку бренда объёма не
+	// осталось, и его план не оплачивается.
+	plan := separateBrand(45, models.CapModeClosed, nil)
+	plan.PlanRub = models.PtrFloat(43)
+	plan.Scales = nil
+	plan.Scales = []models.NetworkPlanScale{{ScaleNo: 1, SKUs: []models.NetworkPlanScaleSKU{
+		{SKU: "A", PlanRub: models.PtrFloat(20), InvestmentsPct: models.PtrFloat(9),
+			CapMode: models.CapModeOpen, ForecastRub: models.PtrFloat(45)},
+	}}}
+	got, _ := BuildNetworkPlanCalculations([]models.NetworkPlan{plan}, noVAT, nil)
+	row := got[0]
+	if v := models.ValFloat(row.ForecastBaseRub); v != 45 {
+		t.Errorf("база не может превышать объём бренда: %v, ожидалось 45", v)
+	}
+	if v := models.ValFloat(row.ForecastInvestmentsRub); v != 4.05 {
+		t.Errorf("к выплате = %v, ожидалось 45 × 9 %% = 4,05", v)
+	}
+}
+
+func TestScalesUpperScaleInheritsPercent(t *testing.T) {
+	// Порог ступени 2 заведён, процент ещё нет: считается по проценту ступени 1,
+	// а не по нулю. Ступень 3 со своим процентом наследование не использует.
+	plan := separateBrand(115, models.CapModeOpen, nil)
+	plan.Scales[0].InvestmentsPct = nil
+	got, _ := BuildNetworkPlanCalculations([]models.NetworkPlan{plan}, noVAT, nil)
+	row := got[0]
+	if row.ForecastScale != 2 || models.ValFloat(row.ForecastInvestmentsRub) != 5.75 {
+		t.Errorf("ступень 2 без процента считается по 5 %%: ступень %d, %v", row.ForecastScale, models.ValFloat(row.ForecastInvestmentsRub))
+	}
+	if v := models.ValFloat(row.Scales[1].EffectiveInvestmentsPct); v != 5 {
+		t.Errorf("effective_investments_pct ступени 2 = %v, ожидалось 5", v)
+	}
+	if row.Scales[1].InvestmentsPct != nil {
+		t.Error("собственный процент ступени остаётся пустым: наследование — расчёт, а не запись")
+	}
+	if v := models.ValFloat(row.Scales[2].EffectiveInvestmentsPct); v != 8 {
+		t.Errorf("своя ступень 3 держит свой процент: %v", v)
+	}
+}
