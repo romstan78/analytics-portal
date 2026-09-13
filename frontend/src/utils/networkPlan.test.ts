@@ -81,6 +81,8 @@ describe('amountsOfPlan', () => {
     investment_scope: '', investment_period_start_quarter: 0, investment_period_end_quarter: 0,
     forecast_completion_pct: null, forecast_investments_earned: false,
     fact_completion_pct: null, fact_investments_earned: false,
+    cap_mode: 'open', cap_pct: null, scales: [],
+    forecast_scale: 0, fact_scale: 0, forecast_base_rub: null, fact_base_rub: null,
     updated_by: null, updated_at: '', ...patch,
   });
 

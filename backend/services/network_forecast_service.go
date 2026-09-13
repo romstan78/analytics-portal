@@ -825,6 +825,7 @@ func ApplyForecastRollup(
 		for _, brand := range response.Brands {
 			byBrand[brand.BrandAS] = brand
 		}
+		skuVolumes := quarterSKUVolumes(response.Months)
 
 		for i := range plans {
 			plan := &plans[i]
@@ -843,7 +844,49 @@ func ApplyForecastRollup(
 			plan.FactInvestmentsRub = rollupValue(total.FactInvestmentsRub)
 			plan.ForecastInvestmentsRub = rollupValue(total.EACInvestmentsRub)
 			plan.ForecastInvestmentsOverridden = brandHasOverride(response.Months, *plan.BrandAS)
+			carryQuarterSKUVolumes(plan, skuVolumes)
 		}
 	}
 	return plans
+}
+
+// skuQuarterVolume — факт и EAC одного SKU, сложенные по месяцам квартала.
+type skuQuarterVolume struct {
+	fact     *float64
+	forecast *float64
+}
+
+// quarterSKUVolumes складывает SKU-строки квартала по месяцам: факт и EAC.
+// У бренда без детализации EAC SKU — его доля по миксу; для крышки по SKU
+// это единственный доступный объём, и он же показан в «Прогнозе».
+func quarterSKUVolumes(rows []models.NetworkForecastMonth) map[string]skuQuarterVolume {
+	volumes := map[string]skuQuarterVolume{}
+	for _, row := range rows {
+		if row.SKU == nil {
+			continue
+		}
+		key := row.BrandAS + "|" + *row.SKU
+		v := volumes[key]
+		addPtrValue(&v.fact, row.FactRub)
+		addPtrValue(&v.forecast, row.EACRub)
+		volumes[key] = v
+	}
+	return volumes
+}
+
+// carryQuarterSKUVolumes кладёт сведённые объёмы на SKU-строки ступеней
+// строки плана. SKU без помесячных данных остаётся без объёма — его доля
+// считается в остатке бренда.
+func carryQuarterSKUVolumes(plan *models.NetworkPlan, volumes map[string]skuQuarterVolume) {
+	for i := range plan.Scales {
+		for j := range plan.Scales[i].SKUs {
+			sku := &plan.Scales[i].SKUs[j]
+			v, ok := volumes[*plan.BrandAS+"|"+sku.SKU]
+			if !ok {
+				sku.FactRub, sku.ForecastRub = nil, nil
+				continue
+			}
+			sku.FactRub, sku.ForecastRub = v.fact, v.forecast
+		}
+	}
 }

@@ -216,6 +216,8 @@ export interface Network {
   has_annual_investment_cumulative: boolean;
   default_entry_level: string;
   default_entry_unit: string;
+  default_scales_count: number;
+  default_cap_mode: string;
   created_at: string | null;
   updated_at: string;
 }
@@ -227,6 +229,51 @@ export interface NetworkPeriod {
   quarter: number;
   vat_included: boolean;
   vat_rate: number;
+  scales_count: number;
+  updated_at: string;
+}
+
+export interface NetworkPlanScaleSKU {
+  id: number;
+  sku: string;
+  plan_rub: number | null;
+  plan_units: number | null;
+  investments_pct: number | null;
+  cap_mode: string;
+  cap_pct: number | null;
+  plan_investments_rub: number | null;
+  plan_investments_rub_net: number | null;
+  forecast_rub: number | null;
+  forecast_base_rub: number | null;
+  forecast_investments_rub: number | null;
+  forecast_investments_rub_net: number | null;
+  fact_rub: number | null;
+  fact_base_rub: number | null;
+  fact_investments_rub: number | null;
+  fact_investments_rub_net: number | null;
+  updated_at: string;
+}
+
+export interface NetworkPlanScale {
+  id: number;
+  scale_no: number;
+  plan_rub: number | null;
+  plan_units: number | null;
+  investments_pct: number | null;
+  plan_investments_rub: number | null;
+  plan_investments_rub_net: number | null;
+  forecast_rub: number | null;
+  forecast_base_rub: number | null;
+  forecast_investments_rub: number | null;
+  forecast_investments_rub_net: number | null;
+  forecast_reached: boolean;
+  fact_rub: number | null;
+  fact_base_rub: number | null;
+  fact_investments_rub: number | null;
+  fact_investments_rub_net: number | null;
+  fact_reached: boolean;
+  skus: NetworkPlanScaleSKU[];
+  updated_by: string | null;
   updated_at: string;
 }
 
@@ -248,6 +295,13 @@ export interface NetworkPlan {
   forecast_rub: number | null;
   investments_pct: number | null;
   pay_investments_from_fact: boolean;
+  cap_mode: string;
+  cap_pct: number | null;
+  scales: NetworkPlanScale[];
+  forecast_scale: number;
+  fact_scale: number;
+  forecast_base_rub: number | null;
+  fact_base_rub: number | null;
   investments_rub: number | null;
   investments_rub_net: number | null;
   forecast_investments_rub: number | null;
@@ -265,6 +319,17 @@ export interface NetworkPlan {
   fact_investments_earned: boolean;
   updated_by: string | null;
   updated_at: string;
+}
+
+export interface NetworkPlanScaleTotals {
+  scale_no: number;
+  gross_pool_rub: number | null;
+  gross_brands_plan: number;
+  separate_plan_rub: number;
+  contract_plan_rub: number;
+  undistributed: number | null;
+  investments_rub: number;
+  investments_rub_net: number;
 }
 
 export interface NetworkPlanTotals {
@@ -289,6 +354,7 @@ export interface NetworkPlanTotals {
   eac_rub: number;
   completion_pct: number | null;
   completed: boolean;
+  scales: NetworkPlanScaleTotals[];
 }
 
 export interface NetworkPeriodGroup {
@@ -815,14 +881,36 @@ export interface NetworkDashboardResponse {
   annualInvestmentCumulative?: NetworkAnnualInvestmentCumulative;
 }
 
+export interface NetworkPlanScaleSKUInput {
+  sku: string;
+  plan_rub: number | null;
+  plan_units: number | null;
+  investments_pct: number | null;
+  cap_mode: string;
+  cap_pct: number | null;
+}
+
+export interface NetworkPlanScaleInput {
+  scale_no: number;
+  plan_rub: number | null;
+  plan_units: number | null;
+  investments_pct: number | null;
+  skus: NetworkPlanScaleSKUInput[];
+  updated_at: string;
+}
+
 export interface NetworkPlanInput {
   quarter: number;
   brand_as: string | null;
   in_gross: boolean;
   plan_rub: number | null;
+  plan_units?: number;
   investments_pct: number | null;
   entry_level: string;
   entry_unit: string;
+  cap_mode?: string;
+  cap_pct?: number;
+  scales?: NetworkPlanScaleInput[];
   updated_at: string;
 }
 

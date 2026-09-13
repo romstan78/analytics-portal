@@ -36,6 +36,7 @@ const networkColumns = `id, name, kam, network_type, is_active,
 		vat_included, vat_rate,
 		month1_pct, month2_pct, month3_pct, has_annual_investment_cumulative,
 		default_entry_level, default_entry_unit,
+		default_scales_count, default_cap_mode,
 		CONVERT(NVARCHAR, created_at, 121), CONVERT(NVARCHAR, updated_at, 121)`
 
 func scanNetwork(scanner interface{ Scan(...interface{}) error }) (models.Network, error) {
@@ -45,6 +46,7 @@ func scanNetwork(scanner interface{ Scan(...interface{}) error }) (models.Networ
 		&n.VATIncluded, &n.VATRate,
 		&n.Month1Pct, &n.Month2Pct, &n.Month3Pct, &n.HasAnnualInvestmentCumulative,
 		&n.DefaultEntryLevel, &n.DefaultEntryUnit,
+		&n.DefaultScalesCount, &n.DefaultCapMode,
 		&n.CreatedAt, &n.UpdatedAt,
 	)
 	return n, err
@@ -212,7 +214,7 @@ func nullIfEmpty(v string) interface{} {
 func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 	rows, err := config.DB.Query(
 		`SELECT id, network_id, [year], [quarter], vat_included, vat_rate,
-			CONVERT(NVARCHAR, updated_at, 121)
+			scales_count, CONVERT(NVARCHAR, updated_at, 121)
 		 FROM dbo.tbl_NetworkPeriods WHERE network_id = ? AND [year] = ? ORDER BY [quarter]`,
 		networkID, year,
 	)
@@ -224,9 +226,14 @@ func GetNetworkPeriods(networkID, year int) ([]models.NetworkPeriod, error) {
 	result := []models.NetworkPeriod{}
 	for rows.Next() {
 		var p models.NetworkPeriod
+		// NULL — «как в профиле сети»; ноль здесь разрешает services.
+		var scales sql.NullInt64
 		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.VATIncluded,
-			&p.VATRate, &p.UpdatedAt); err != nil {
+			&p.VATRate, &scales, &p.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if scales.Valid {
+			p.ScalesCount = int(scales.Int64)
 		}
 		result = append(result, p)
 	}
@@ -364,13 +371,15 @@ func GetNetworkPeriodGroups(networkID, year int) ([]models.NetworkPeriodGroup, e
 
 // ─── Планы ──────────────────────────────────────────────────────────────────
 
-// GetNetworkPlans возвращает строки плана сети за год.
+// GetNetworkPlans возвращает строки плана сети за год вместе со ступенями и
+// их SKU. Расчётные колонки ступеней не читаются: они пересчитываются на
+// каждом чтении, как и инвестиции самой строки.
 func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 	rows, err := config.DB.Query(
 		`SELECT p.id, p.network_id, p.[year], p.[quarter], p.brand_as, p.in_gross, p.plan_rub, p.plan_units,
 			n.month1_pct, n.month2_pct, n.month3_pct,
 			p.fact_rub, p.forecast_rub, p.investments_pct, p.paid_investments_rub,
-			p.pay_investments_from_fact,
+			p.pay_investments_from_fact, p.cap_mode, p.cap_pct,
 			p.entry_level, p.entry_unit, p.updated_by,
 			CONVERT(NVARCHAR, p.updated_at, 121)
 		 FROM dbo.tbl_NetworkPlans p
@@ -390,13 +399,97 @@ func GetNetworkPlans(networkID, year int) ([]models.NetworkPlan, error) {
 		if err := rows.Scan(&p.ID, &p.NetworkID, &p.Year, &p.Quarter, &p.BrandAS, &p.InGross,
 			&p.PlanRub, &p.PlanUnits, &p.Month1Pct, &p.Month2Pct, &p.Month3Pct,
 			&p.FactRub, &p.ForecastRub, &p.InvestmentsPct, &p.PaidInvestmentsRub,
-			&p.PayInvestmentsFromFact, &p.EntryLevel, &p.EntryUnit,
+			&p.PayInvestmentsFromFact, &p.CapMode, &p.CapPct, &p.EntryLevel, &p.EntryUnit,
 			&p.UpdatedBy, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, p)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := attachPlanScales(networkID, year, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// attachPlanScales дочитывает ступени и SKU строк плана двумя запросами и
+// раскладывает их по строкам. Ступень 1 в таблице есть у каждой строки с
+// миграции 032; строка без неё (заведена до пересчёта) получит её в services.
+func attachPlanScales(networkID, year int, plans []models.NetworkPlan) error {
+	if len(plans) == 0 {
+		return nil
+	}
+	byPlanID := make(map[int]int, len(plans))
+	for i := range plans {
+		byPlanID[plans[i].ID] = i
+	}
+
+	scaleRows, err := config.DB.Query(
+		`SELECT s.id, s.plan_id, s.scale_no, s.plan_rub, s.plan_units, s.investments_pct,
+			s.updated_by, CONVERT(NVARCHAR, s.updated_at, 121)
+		 FROM dbo.tbl_NetworkPlanScales s
+		 JOIN dbo.tbl_NetworkPlans p ON p.id = s.plan_id
+		 WHERE p.network_id = ? AND p.[year] = ?
+		 ORDER BY s.plan_id, s.scale_no`,
+		networkID, year,
+	)
+	if err != nil {
+		return err
+	}
+	defer scaleRows.Close()
+	scaleIndex := map[int64][2]int{} // id ступени → (строка плана, позиция ступени)
+	for scaleRows.Next() {
+		var s models.NetworkPlanScale
+		var planID int
+		if err := scaleRows.Scan(&s.ID, &planID, &s.ScaleNo, &s.PlanRub, &s.PlanUnits,
+			&s.InvestmentsPct, &s.UpdatedBy, &s.UpdatedAt); err != nil {
+			return err
+		}
+		i, ok := byPlanID[planID]
+		if !ok {
+			continue
+		}
+		s.SKUs = []models.NetworkPlanScaleSKU{}
+		plans[i].Scales = append(plans[i].Scales, s)
+		scaleIndex[s.ID] = [2]int{i, len(plans[i].Scales) - 1}
+	}
+	if err := scaleRows.Err(); err != nil {
+		return err
+	}
+
+	skuRows, err := config.DB.Query(
+		`SELECT k.id, k.scale_id, k.sku, k.plan_rub, k.plan_units, k.investments_pct,
+			k.cap_mode, k.cap_pct, CONVERT(NVARCHAR, k.updated_at, 121)
+		 FROM dbo.tbl_NetworkPlanScaleSKU k
+		 JOIN dbo.tbl_NetworkPlanScales s ON s.id = k.scale_id
+		 JOIN dbo.tbl_NetworkPlans p ON p.id = s.plan_id
+		 WHERE p.network_id = ? AND p.[year] = ?
+		 ORDER BY k.scale_id, k.sku`,
+		networkID, year,
+	)
+	if err != nil {
+		return err
+	}
+	defer skuRows.Close()
+	for skuRows.Next() {
+		var k models.NetworkPlanScaleSKU
+		var scaleID int64
+		var capMode sql.NullString
+		if err := skuRows.Scan(&k.ID, &scaleID, &k.SKU, &k.PlanRub, &k.PlanUnits, &k.InvestmentsPct,
+			&capMode, &k.CapPct, &k.UpdatedAt); err != nil {
+			return err
+		}
+		k.CapMode = capMode.String
+		at, ok := scaleIndex[scaleID]
+		if !ok {
+			continue
+		}
+		scale := &plans[at[0]].Scales[at[1]]
+		scale.SKUs = append(scale.SKUs, k)
+	}
+	return skuRows.Err()
 }
 
 // NetworkPlanInput — строка плана из запроса на сохранение.
@@ -409,12 +502,43 @@ type NetworkPlanInput struct {
 	BrandAS        *string  `json:"brand_as"`
 	InGross        bool     `json:"in_gross"`
 	PlanRub        *float64 `json:"plan_rub"`
+	PlanUnits      *float64 `json:"plan_units,omitempty"`
 	InvestmentsPct *float64 `json:"investments_pct"`
 	// Режим ведения бренда. Пустые значения означают клиента, который про
 	// режим ещё не знает: сохранённый режим строки в этом случае не меняется.
 	EntryLevel string `json:"entry_level"`
 	EntryUnit  string `json:"entry_unit"`
-	UpdatedAt  string `json:"updated_at"`
+	// Крышка перевыполнения владельца порога. Пустой режим — клиент про крышку
+	// не знает: сохранённая остаётся, новая строка берёт умолчание сети.
+	CapMode string   `json:"cap_mode,omitempty"`
+	CapPct  *float64 `json:"cap_pct,omitempty"`
+	// Ступени строки. Поле отсутствует — клиент про ступени не знает,
+	// сохранённые верхние ступени и SKU остаются; пустой массив — у строки нет
+	// ничего, кроме ступени 1. Ступень 1 в массиве несёт только свои SKU: её
+	// порог и процент — это plan_rub и investments_pct самой строки.
+	Scales    []NetworkPlanScaleInput `json:"scales,omitempty"`
+	UpdatedAt string                  `json:"updated_at"`
+}
+
+// NetworkPlanScaleInput — ступень из запроса на сохранение.
+type NetworkPlanScaleInput struct {
+	ScaleNo        int                        `json:"scale_no"`
+	PlanRub        *float64                   `json:"plan_rub"`
+	PlanUnits      *float64                   `json:"plan_units"`
+	InvestmentsPct *float64                   `json:"investments_pct"`
+	SKUs           []NetworkPlanScaleSKUInput `json:"skus"`
+	UpdatedAt      string                     `json:"updated_at"`
+}
+
+// NetworkPlanScaleSKUInput — SKU на ступени из запроса. Пустые процент и
+// крышка означают «как у бренда».
+type NetworkPlanScaleSKUInput struct {
+	SKU            string   `json:"sku"`
+	PlanRub        *float64 `json:"plan_rub"`
+	PlanUnits      *float64 `json:"plan_units"`
+	InvestmentsPct *float64 `json:"investments_pct"`
+	CapMode        string   `json:"cap_mode"`
+	CapPct         *float64 `json:"cap_pct"`
 }
 
 // entryModeValue выбирает режим ведения строки плана. Пустое значение в запросе —
@@ -491,8 +615,11 @@ func planRowsToWrite(
 			continue
 		}
 		if old.FactRub != nil || old.FactInvestmentsRub != nil {
+			// Пустые ступени, а не nil: бренд из плана убрали, его лестница
+			// уходит вместе с планом, факт остаётся.
 			write = append(write, NetworkPlanInput{
 				Quarter: old.Quarter, BrandAS: old.BrandAS, UpdatedAt: old.UpdatedAt,
+				Scales: []NetworkPlanScaleInput{},
 			})
 			continue
 		}
@@ -730,6 +857,9 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		if p.PlanRub != nil && *p.PlanRub < 0 {
 			return "", fmt.Errorf("план не может быть отрицательным: %.2f", *p.PlanRub)
 		}
+		if p.PlanUnits != nil && *p.PlanUnits < 0 {
+			return "", fmt.Errorf("план в упаковках не может быть отрицательным: %.2f", *p.PlanUnits)
+		}
 		// Пул сам в себя не входит: признак валового объёма — только у бренда.
 		if p.BrandAS == nil {
 			p.InGross = false
@@ -740,6 +870,32 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		brandLabel := ""
 		if p.BrandAS != nil {
 			brandLabel = *p.BrandAS
+		}
+
+		// Крышка: пустой режим — клиент про неё не знает; сохранённая
+		// остаётся, новая строка берёт умолчание сети. У валового бренда
+		// крышки нет — её несёт пул, — но хранить «open» безвредно.
+		capMode, capPct := p.CapMode, p.CapPct
+		if capMode == "" {
+			if exists {
+				capMode, capPct = old.CapMode, old.CapPct
+			} else {
+				capMode = network.DefaultCapMode
+			}
+		}
+		if capMode == "" {
+			capMode = models.CapModeOpen
+		}
+		if _, ok := oneOfString(capMode, models.CapModeOpen, models.CapModePct, models.CapModeClosed); !ok {
+			return "", fmt.Errorf("недопустимый режим крышки: %q", capMode)
+		}
+		if capMode != models.CapModePct {
+			capPct = nil
+		} else if capPct == nil || *capPct < 0 {
+			return "", errors.New("процентная крышка требует неотрицательный процент")
+		}
+		if err := validatePlanScalesInput(p); err != nil {
+			return "", err
 		}
 
 		// Режим ведения — свойство бренда; у строки пула его нет.
@@ -779,20 +935,38 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 			if old.EntryUnit != entryUnit {
 				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "entry_unit", Old: old.EntryUnit, New: entryUnit})
 			}
+			if !floatPtrEqual(old.PlanUnits, p.PlanUnits) && p.PlanUnits != nil {
+				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "plan_units", Old: floatPtrValue(old.PlanUnits), New: floatPtrValue(p.PlanUnits)})
+			}
+			if old.CapMode != capMode || !floatPtrEqual(old.CapPct, capPct) {
+				changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "cap", Old: capLabel(old.CapMode, old.CapPct), New: capLabel(capMode, capPct)})
+			}
 			// forecast_rub не в списке намеренно: прогноз ведётся помесячно, а
 			// в этой колонке живёт его свод. Сохранение плана его не трогает.
+			// plan_units пишется, только если клиент его прислал: старый клиент
+			// не должен стирать пару, которую закрепил пересчёт по ценам.
+			planUnits := p.PlanUnits
+			if planUnits == nil {
+				planUnits = old.PlanUnits
+			}
 			if _, err := tx.Exec(
 				`UPDATE dbo.tbl_NetworkPlans
-				 SET plan_rub = ?, investments_pct = ?, in_gross = ?,
+				 SET plan_rub = ?, plan_units = ?, investments_pct = ?, in_gross = ?,
 					 month1_pct = ?, month2_pct = ?, month3_pct = ?,
-					 entry_level = ?, entry_unit = ?,
+					 entry_level = ?, entry_unit = ?, cap_mode = ?, cap_pct = ?,
 					 updated_by = ?, updated_at = GETDATE()
 				 WHERE id = ?`,
-				p.PlanRub, p.InvestmentsPct, p.InGross,
-				month1Pct, month2Pct, month3Pct, entryLevel, entryUnit, in.UserName, old.ID,
+				p.PlanRub, planUnits, p.InvestmentsPct, p.InGross,
+				month1Pct, month2Pct, month3Pct, entryLevel, entryUnit, capMode, capPct,
+				in.UserName, old.ID,
 			); err != nil {
 				return "", err
 			}
+			scaleChanges, err := syncPlanScalesTx(tx, old.ID, p, planUnits, old.Scales, in.UserName)
+			if err != nil {
+				return "", err
+			}
+			changes = append(changes, scaleChanges...)
 			continue
 		}
 
@@ -815,17 +989,27 @@ func SaveNetworkPlan(in SaveNetworkPlanInput) (string, error) {
 		if p.InGross {
 			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "in_gross", Old: false, New: true})
 		}
-		if _, err := tx.Exec(
+		if capMode != models.CapModeOpen {
+			changes = append(changes, planChange{Quarter: p.Quarter, Brand: brandLabel, Field: "cap", Old: nil, New: capLabel(capMode, capPct)})
+		}
+		var planID int
+		if err := tx.QueryRow(
 			`INSERT INTO dbo.tbl_NetworkPlans (network_id, [year], [quarter], brand_as, in_gross,
-				plan_rub, investments_pct, month1_pct, month2_pct, month3_pct,
-				entry_level, entry_unit, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				plan_rub, plan_units, investments_pct, month1_pct, month2_pct, month3_pct,
+				entry_level, entry_unit, cap_mode, cap_pct, updated_by)
+			 OUTPUT INSERTED.id
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			in.NetworkID, in.Year, p.Quarter, p.BrandAS, p.InGross,
-			p.PlanRub, p.InvestmentsPct, month1Pct, month2Pct, month3Pct,
-			entryLevel, entryUnit, in.UserName,
-		); err != nil {
+			p.PlanRub, p.PlanUnits, p.InvestmentsPct, month1Pct, month2Pct, month3Pct,
+			entryLevel, entryUnit, capMode, capPct, in.UserName,
+		).Scan(&planID); err != nil {
 			return "", err
 		}
+		scaleChanges, err := syncPlanScalesTx(tx, planID, p, p.PlanUnits, nil, in.UserName)
+		if err != nil {
+			return "", err
+		}
+		changes = append(changes, scaleChanges...)
 	}
 
 	// Бренд убрали из плана года — строка уходит целиком: пока она есть,
@@ -1079,14 +1263,23 @@ func SaveNetworkInvestmentColumns(plans []models.NetworkPlan) error {
 			`UPDATE dbo.tbl_NetworkPlans
 			    SET plan_investments_rub = ?, plan_investments_rub_net = ?,
 			        forecast_investments_rub = ?, forecast_investments_rub_net = ?,
-			        fact_investments_rub = ?, fact_investments_rub_net = ?
+			        fact_investments_rub = ?, fact_investments_rub_net = ?,
+			        forecast_scale = ?, fact_scale = ?,
+			        forecast_base_rub = ?, fact_base_rub = ?
 			  WHERE id = ?`,
 			plan.InvestmentsRub, plan.InvestmentsNet,
 			plan.ForecastInvestmentsRub, plan.ForecastInvestmentsNet,
 			plan.FactInvestmentsRub, plan.FactInvestmentsNet,
+			plan.ForecastScale, plan.FactScale,
+			plan.ForecastBaseRub, plan.FactBaseRub,
 			plan.ID,
 		); err != nil {
 			return fmt.Errorf("save investment columns for plan %d: %w", plan.ID, err)
+		}
+		// Ступени и SKU — тем же зеркалом: «сколько было бы» на каждой ступени
+		// и что достигнуто, для тех, кто читает таблицы напрямую.
+		if err := saveScaleColumnsTx(tx, plan); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
