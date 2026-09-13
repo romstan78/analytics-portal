@@ -583,11 +583,16 @@ export interface NetworkForecastMonth {
   promo_uplift_rub: number;
   is_closed: boolean;
   is_current: boolean;
+  forecast_scale: number;
+  forecast_base_rub: number | null;
+  effective_investments_pct: number | null;
   updated_at: string;
 }
 
 export interface NetworkForecastBrandTotals {
   brand_as: string;
+  forecast_scale: number;
+  forecast_base_rub: number | null;
   plan_rub: number;
   fact_rub: number;
   fact_units: number;
@@ -629,6 +634,18 @@ export interface NetworkForecastResponse {
 export interface NetworkForecastSaveResponse {
   message: string;
   data: NetworkForecastResponse;
+}
+
+export interface NetworkSKUMixShare {
+  sku: string;
+  share: number;
+}
+
+export interface NetworkSKUMixResponse {
+  brand_as: string;
+  year: number;
+  quarter: number;
+  data: NetworkSKUMixShare[];
 }
 
 export interface NetworkContractPrice {

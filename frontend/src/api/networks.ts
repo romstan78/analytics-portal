@@ -31,6 +31,7 @@ import type {
   NetworkPricesSaveRequest,
   NetworkPricesSaveResponse,
   NetworkSaveResponse,
+  NetworkSKUMixResponse,
 } from '../types/network';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
@@ -110,6 +111,12 @@ export const networkAPI = {
   }): Promise<NetworkSaveResponse> =>
     fetchWithAuth(`${API_BASE}/api/networks/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
       .then(r => parseJSONResponse<NetworkSaveResponse>(r, 'Ошибка сохранения сети')),
+
+  // Доли SKU бренда за квартал по историческому миксу — для раскладки плана
+  // бренда по SKU в диалоге ступени.
+  getSkuMix: (id: number, year: number, quarter: number, brand: string): Promise<NetworkSKUMixResponse> =>
+    fetchWithAuth(`${API_BASE}/api/networks/${id}/sku-mix?${buildParams({ year, quarter, brand })}`)
+      .then(r => parseJSONResponse<NetworkSKUMixResponse>(r, 'Ошибка загрузки микса SKU')),
 
   // Планы, кварталы и итоги за год
   getPlan: (id: number, year: number): Promise<NetworkPlanResponse> =>

@@ -675,12 +675,14 @@ func clonePlans(plans []models.NetworkPlan) []models.NetworkPlan {
 	return result
 }
 
-// applyForecastInvestmentRule приводит вкладку «Прогноз» к общему правилу:
-// прогнозные инвестиции бренда, не закрывшего план своей области, обнуляются.
+// applyForecastInvestmentRule приводит вкладку «Прогноз» к общему правилу
+// ступеней: месяцы, считанные процентом, получают смешанную ставку квартала —
+// ту, что даёт правило с достигнутой ступенью, крышкой и процентами SKU, — а
+// бренд, не закрывший даже первый порог своей области, гасится целиком.
 //
-// Гасится весь квартал бренда целиком, а не отдельные месяцы. Порог — величина
-// квартальная (а с правилом зачёта и шире), помесячной доли у него нет, и
-// обнуление части месяцев развело бы сумму месяцев с итогом бренда.
+// Гасится и пересчитывается весь квартал бренда, а не отдельные месяцы. Порог
+// и крышка — величины квартальные (а с правилом зачёта и шире), помесячной
+// доли у них нет; месяц получает свою долю пропорционально своему EAC.
 func applyForecastInvestmentRule(
 	plans []models.NetworkPlan,
 	periods []models.NetworkPeriod,
@@ -691,11 +693,13 @@ func applyForecastInvestmentRule(
 ) {
 	// Свежие EAC и факт этого квартала кладутся в копию строк плана: правило
 	// должно мерить то, что показано на экране, а не то, что успело сохраниться.
+	// Объёмы SKU нужны крышкам и процентам по SKU — они берутся из тех же строк.
 	fresh := clonePlans(plans)
 	byBrand := make(map[string]models.NetworkForecastBrandTotals, len(brandTotals))
 	for _, brand := range brandTotals {
 		byBrand[brand.BrandAS] = brand
 	}
+	skuVolumes := quarterSKUVolumes(rows)
 	for i := range fresh {
 		row := &fresh[i]
 		if row.Quarter != quarter || row.BrandAS == nil {
@@ -707,44 +711,172 @@ func applyForecastInvestmentRule(
 		}
 		row.FactRub = rollupValue(total.FactRub)
 		row.ForecastRub = rollupValue(total.EACRub)
+		// Ступени и SKU разделяют массивы с исходными строками; копируем,
+		// чтобы свод объёмов не трогал вход.
+		row.Scales = cloneScales(row.Scales)
+		carryQuarterSKUVolumes(row, skuVolumes)
 	}
 
 	calculated, _ := BuildNetworkPlanCalculations(fresh, periods, groups)
-	earned := make(map[string]bool, len(brandTotals))
+	type outcome struct {
+		earned     bool
+		overridden bool
+		scale      int
+		base       *float64
+		invest     *float64 // итог правила за квартал
+		eac        float64
+		skuInvest  map[string]*float64 // квартальные инвестиции SKU со своей строкой
+		skuEAC     map[string]float64
+	}
+	results := make(map[string]outcome, len(brandTotals))
 	for _, row := range calculated {
 		if row.Quarter != quarter || row.BrandAS == nil {
 			continue
 		}
-		earned[*row.BrandAS] = row.ForecastInvestmentsEarned
+		out := outcome{
+			earned: row.ForecastInvestmentsEarned, overridden: row.ForecastInvestmentsOverridden,
+			scale: row.ForecastScale, base: row.ForecastBaseRub, invest: row.ForecastInvestmentsRub,
+			eac:       models.ValFloat(row.ForecastRub),
+			skuInvest: map[string]*float64{}, skuEAC: map[string]float64{},
+		}
+		for _, scale := range row.Scales {
+			if scale.ScaleNo != row.ForecastScale {
+				continue
+			}
+			for _, sku := range scale.SKUs {
+				out.skuInvest[sku.SKU] = sku.ForecastInvestmentsRub
+				out.skuEAC[sku.SKU] = models.ValFloat(sku.ForecastRub)
+			}
+		}
+		results[*row.BrandAS] = out
+	}
+
+	// Смешанная ставка квартала: итог правила к EAC бренда. Ею считаются
+	// открытые месяцы бренда и SKU без собственной строки на ступени. Месяц
+	// берёт долю итога по своему EAC без промежуточного округления ставки:
+	// при одной ступени и открытой крышке это ровно EAC × процент, как раньше.
+	blendedRate := func(out outcome) *float64 {
+		if out.invest == nil || out.eac <= 0 {
+			return nil
+		}
+		rate := round2(*out.invest / out.eac * 100)
+		return &rate
+	}
+	shareOfQuarter := func(out outcome, eacMonth float64) *float64 {
+		if out.invest == nil || out.eac <= 0 {
+			return nil
+		}
+		value := round2(eacMonth * *out.invest / out.eac)
+		return &value
+	}
+	// SKU без своей строки делят остаток бренда: итог правила без SKU со
+	// своими строками, пропорционально EAC. Так сумма SKU-строк сходится с
+	// итогом бренда, а не превышает его.
+	shareOfResidual := func(out outcome, eacMonth float64) *float64 {
+		if out.invest == nil {
+			return nil
+		}
+		invest, eac := *out.invest, out.eac
+		for sku, own := range out.skuInvest {
+			if own != nil {
+				invest = round2(invest - *own)
+				eac = round2(eac - out.skuEAC[sku])
+			}
+		}
+		if eac <= 0 {
+			zero := 0.0
+			return &zero
+		}
+		value := round2(eacMonth * invest / eac)
+		return &value
 	}
 
 	zero := 0.0
 	for i := range rows {
 		row := &rows[i]
-		if row.EACInvestmentsRub == nil || earned[row.BrandAS] {
+		out, ok := results[row.BrandAS]
+		if !ok {
 			continue
+		}
+		if row.SKU == nil {
+			row.ForecastScale = out.scale
+			row.ForecastBaseRub = out.base
+			row.EffectiveInvestmentsPct = blendedRate(out)
 		}
 		// Введённое человеком переопределение порогом не отменяется.
 		if row.InvestmentsSource == "override" {
 			continue
 		}
-		row.EACInvestmentsRub = &zero
-		row.InvestmentsSource = "unearned"
-	}
-	for i := range brandTotals {
-		total := &brandTotals[i]
-		if earned[total.BrandAS] {
+		if !out.earned {
+			if row.EACInvestmentsRub != nil || row.SKU != nil && row.EACRub != nil {
+				row.EACInvestmentsRub = &zero
+				row.InvestmentsSource = "unearned"
+			}
 			continue
 		}
+		// Бренд с переопределением хотя бы в одном месяце считается по своим
+		// месяцам: правило его итог не пересчитывает.
+		if out.overridden || row.EACRub == nil {
+			continue
+		}
+		if row.SKU == nil {
+			if row.InvestmentsSource != "pct" {
+				continue
+			}
+			if value := shareOfQuarter(out, *row.EACRub); value != nil {
+				row.EACInvestmentsRub = value
+			}
+			continue
+		}
+		// SKU-строка: своя строка на достигнутой ступени даёт свой квартальный
+		// итог, распределённый по месяцам долей EAC; иначе — ставка бренда.
+		if closed := row.IsClosed; closed && row.FactInvestmentsRub != nil {
+			row.EACInvestmentsRub = row.FactInvestmentsRub
+			row.InvestmentsSource = "fact"
+			continue
+		}
+		if invest, own := out.skuInvest[*row.SKU]; own && invest != nil {
+			if eac := out.skuEAC[*row.SKU]; eac > 0 {
+				value := round2(*row.EACRub / eac * *invest)
+				row.EACInvestmentsRub = &value
+				row.InvestmentsSource = "pct"
+			}
+			continue
+		}
+		if value := shareOfResidual(out, *row.EACRub); value != nil {
+			row.EACInvestmentsRub = value
+			row.InvestmentsSource = "pct"
+		}
+	}
+
+	// Итог бренда — сумма его месяцев после правила.
+	for i := range brandTotals {
+		total := &brandTotals[i]
+		out := results[total.BrandAS]
+		total.ForecastScale = out.scale
+		total.ForecastBaseRub = out.base
 		total.EACInvestmentsRub = 0
 		for _, row := range rows {
-			if row.BrandAS == total.BrandAS && row.SKU == nil && row.InvestmentsSource == "override" &&
-				row.EACInvestmentsRub != nil {
+			if row.BrandAS == total.BrandAS && row.SKU == nil && row.EACInvestmentsRub != nil {
 				total.EACInvestmentsRub = round2(total.EACInvestmentsRub + *row.EACInvestmentsRub)
 			}
 		}
 		total.InvestmentVarianceRub = round2(total.EACInvestmentsRub - total.PlanInvestmentsRub)
 	}
+}
+
+// cloneScales — глубокая копия ступеней вместе с SKU: расчёт пишет в них
+// результаты, а вход должен остаться нетронутым.
+func cloneScales(scales []models.NetworkPlanScale) []models.NetworkPlanScale {
+	if scales == nil {
+		return nil
+	}
+	result := make([]models.NetworkPlanScale, len(scales))
+	for i, scale := range scales {
+		result[i] = scale
+		result[i].SKUs = append([]models.NetworkPlanScaleSKU(nil), scale.SKUs...)
+	}
+	return result
 }
 
 // ─── Свод помесячного слоя в квартальную сетку ─────────────────────────────

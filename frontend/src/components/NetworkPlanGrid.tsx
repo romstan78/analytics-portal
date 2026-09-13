@@ -151,6 +151,9 @@ export default function NetworkPlanGrid({
   const [dirty, setDirty] = useState(false);
   const [period, setPeriod] = useState<Period>('year');
   const [yearMetric, setYearMetric] = useState<YearMetric>('plan');
+  // Ступень годового разреза: показывается только у сетей с несколькими
+  // ступенями и только для метрик, которые от ступени зависят.
+  const [yearScale, setYearScale] = useState(1);
 
   // Черновик прерванной работы. Читается при рендере — в эффекте с прямым
   // setState это запрещено правилом react-hooks/set-state-in-effect, да и
@@ -271,9 +274,34 @@ export default function NetworkPlanGrid({
 
   const view = dirty && previewQuery.data ? previewQuery.data : data;
   const totals = view.totals;
+  // Разрешённые ступени по кварталам — из настроек профиля.
+  const quarterScales = Object.fromEntries(QUARTERS.map((quarter) => [
+    quarter,
+    view.periods.find((p) => p.quarter === quarter)?.scales_count ?? data.network.default_scales_count ?? 1,
+  ])) as Record<number, number>;
+  const maxScales = Math.max(...Object.values(quarterScales));
+  const scaleMetric = yearMetric === 'plan' || yearMetric === 'pct' || yearMetric === 'investPlan';
+  const shownYearScale = scaleMetric && maxScales > 1 ? Math.min(yearScale, maxScales) : 1;
   const amounts = useMemo(() => buildAmounts(view.plans), [view.plans]);
   const periodTotals = period === 'year' ? view.year_totals : totals[period - 1];
   const periodLabel = period === 'year' ? `${data.year}` : `Q${period} ${data.year}`;
+  // Ступени для подписей сводки: достигнутая — у владельца порога квартала
+  // (пул, иначе наибольшая среди отдельных брендов); у года не показывается.
+  const summaryScaleInfo = useMemo(() => {
+    const scales = periodTotals.scales ?? [];
+    if (scales.length <= 1) return undefined;
+    const top = scales[scales.length - 1];
+    let reached: number | null = null;
+    if (period !== 'year') {
+      const rows = view.plans.filter((plan) => plan.quarter === period);
+      const pool = rows.find((plan) => plan.brand_as == null);
+      reached = pool
+        ? pool.forecast_scale
+        : rows.reduce((best, plan) => Math.max(best, plan.forecast_scale), 0);
+    }
+    return { count: scales.length, topPlanInvest: top.investments_rub || null, reached };
+  }, [periodTotals, period, view.plans]);
+
   const setCell = (quarter: number, brand: string | null, patch: Partial<DraftCell>) => {
     setDraft((prev) => {
       const key = planKey(quarter, brand);
@@ -446,6 +474,20 @@ export default function NetworkPlanGrid({
             ))}
           </ToggleButtonGroup>
         )}
+        {period === 'year' && scaleMetric && maxScales > 1 && (
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            aria-label="Ступень"
+            sx={{ '& .MuiToggleButton-root': { textTransform: 'none', px: 1.5 } }}
+            value={shownYearScale}
+            onChange={(_, value) => value != null && setYearScale(value as number)}
+          >
+            {Array.from({ length: maxScales }, (_, i) => i + 1).map((no) => (
+              <ToggleButton key={no} value={no}>{no === 1 ? 'Ступень 1' : `${no}`}</ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        )}
 
         <Box sx={{ flex: 1 }} />
 
@@ -485,12 +527,14 @@ export default function NetworkPlanGrid({
         />
       )}
 
-      <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} />
+      <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} scaleInfo={summaryScaleInfo} />
 
       {period === 'year' ? (
         <>
           <NetworkYearTable
             metric={yearMetric}
+            scale={shownYearScale}
+            quarterScales={quarterScales}
             brands={brands}
             draft={draft}
             amounts={amounts}
@@ -498,6 +542,7 @@ export default function NetworkPlanGrid({
             yearTotals={view.year_totals}
             canEdit={canEdit}
             onCellChange={setCell}
+            onScaleChange={setScale}
             onToggleGross={toggleGross}
             onRemoveBrand={removeBrand}
           />

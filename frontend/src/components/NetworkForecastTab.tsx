@@ -126,14 +126,28 @@ const monthLabel = (month: number, row?: NetworkForecastMonth): string => {
 const pctLabel = (value: number | null): string =>
   value == null ? '—' : `${value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`;
 
-// Подпись, откуда взялась сумма инвестиций. Вводить её нельзя: это процент
-// бренда из квартального плана, применённый к EAC объёма.
-const investmentsNote = (row: NetworkForecastMonth): string => ({
-  fact: 'факт выплат',
-  pct: row.investments_pct == null ? 'нет процента' : `${formatPct(row.investments_pct)} % от прогноза`,
-  override: 'переопределено вручную',
-  none: row.investments_pct == null ? 'процент не задан' : 'нет прогноза объёма',
-}[row.investments_source as NetworkInvestmentsSource] ?? '');
+// Подпись, откуда взялась сумма инвестиций. Вводить её нельзя: это правило
+// квартала — достигнутая ступень, крышка и проценты SKU, — применённое к EAC
+// месяца. Смешанная ставка квартала отличается от процента строки, когда
+// достигнута верхняя ступень или крышка срезала базу.
+const investmentsNote = (row: NetworkForecastMonth): string => {
+  const rate = row.effective_investments_pct ?? row.investments_pct;
+  const scale = row.forecast_scale > 1 ? ` · ступень ${row.forecast_scale}` : '';
+  return {
+    fact: 'факт выплат',
+    pct: rate == null ? 'нет процента' : `${formatPct(rate)} % от прогноза${scale}`,
+    override: 'переопределено вручную',
+    unearned: 'порог не пройден',
+    none: row.investments_pct == null ? 'процент не задан' : 'нет прогноза объёма',
+  }[row.investments_source as NetworkInvestmentsSource | 'unearned'] ?? '';
+};
+
+// Срез крышкой за квартал: база к оплате меньше EAC.
+const capCutNote = (row: NetworkForecastMonth | undefined, eacQuarter: number): string => {
+  if (row == null || row.forecast_base_rub == null || row.forecast_scale === 0) return '';
+  if (row.forecast_base_rub >= eacQuarter) return '';
+  return `база к оплате ${formatRubShort(row.forecast_base_rub)} из ${formatRubShort(eacQuarter)} · срез крышкой ${formatRubShort(eacQuarter - row.forecast_base_rub)}`;
+};
 
 export default function NetworkForecastTab({ networkId, year, canEdit }: Props) {
   const now = new Date();
@@ -297,6 +311,7 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
   // Раскрытая часть строки бренда: помесячный ввод и детализация по SKU.
   const renderDetail = (brand: string, mode: EntryMode) => {
     const brandMonths = monthNumbers.map((month) => rowsByKey.get(forecastKey(month, brand, null)));
+    const brandTotal = query.data.brands.find((total) => total.brand_as === brand);
     const skus = skusByBrand.get(brand) ?? [];
 
     return (
@@ -330,6 +345,11 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
             нужно рядом с прогнозом, от которого она и считается. */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mt: 1 }}>
           <Typography variant="caption" color="text.secondary">Инвестиции:</Typography>
+          {capCutNote(brandMonths.find((row) => row != null), brandTotal?.eac_rub ?? 0) && (
+            <Typography variant="caption" color="warning.main">
+              {capCutNote(brandMonths.find((row) => row != null), brandTotal?.eac_rub ?? 0)}
+            </Typography>
+          )}
           {monthNumbers.map((month, index) => {
             const row = brandMonths[index];
             if (row == null) return null;
@@ -400,6 +420,14 @@ export default function NetworkForecastTab({ networkId, year, canEdit }: Props) 
                               showPlan={false}
                               onChange={(next) => changeCell(row, next)}
                             />
+                            {/* Инвестиции SKU: своя строка на ступени даёт свой
+                                процент и крышку, остальные делят остаток бренда. */}
+                            {row.eac_investments_rub != null && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.3 }}>
+                                инв. {formatRubShort(row.eac_investments_rub)} ₽
+                                {row.investments_source === 'unearned' ? ' · порог не пройден' : ''}
+                              </Typography>
+                            )}
                           </TableCell>
                         );
                       })}

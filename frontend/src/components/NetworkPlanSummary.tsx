@@ -39,12 +39,23 @@ function SummaryCard({ label, value, hint, tone = 'neutral', accent }: CardProps
   );
 }
 
+// Ступени периода для подписей: сколько их, плановые инвестиции по верхней и
+// какая достигнута прогнозом (у квартала — по владельцу порога; у года —
+// не показывается, кварталы разные).
+export interface SummaryScaleInfo {
+  count: number;
+  topPlanInvest: number | null;
+  reached: number | null;
+}
+
 interface NetworkPlanSummaryProps {
   totals: NetworkPlanTotals;
   periodLabel: string;
+  scaleInfo?: SummaryScaleInfo;
 }
 
-export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanSummaryProps) {
+export default function NetworkPlanSummary({ totals, periodLabel, scaleInfo }: NetworkPlanSummaryProps) {
+  const scaled = (scaleInfo?.count ?? 1) > 1;
   const factPct = deltaPct(totals.fact_rub, totals.contract_plan_rub);
   const forecastPct = deltaPct(totals.forecast_rub, totals.contract_plan_rub);
   // Инвестиции сравниваем между собой по одной базе — до вычета НДС.
@@ -93,17 +104,27 @@ export default function NetworkPlanSummary({ totals, periodLabel }: NetworkPlanS
       <SummaryCard
         label="Инв. план"
         value={totals.investments_rub > 0 ? totals.investments_rub : null}
-        hint={totals.investments_rub > 0 ? `без НДС ${formatRubShort(totals.investments_rub_net)}` : 'нет процента'}
+        hint={totals.investments_rub > 0
+          ? scaled && scaleInfo?.topPlanInvest != null
+            ? `ступень 1 · до ${formatRubShort(scaleInfo.topPlanInvest)} по ступени ${scaleInfo.count}`
+            : `без НДС ${formatRubShort(totals.investments_rub_net)}`
+          : 'нет процента'}
       />
       <SummaryCard
 		label="Инв. прогноз"
 		value={totals.forecast_investments_rub > 0 ? totals.forecast_investments_rub : null}
-		hint={totals.completed
-			? 'порог периода 100% выполнен'
-			: totals.forecast_investments_rub > 0
-				? 'часть брендов закрыла план'
-				: 'план не выполнен — инвестиций нет'}
-		tone={totals.completed ? 'good' : totals.forecast_investments_rub > 0 ? 'neutral' : 'warn'}
+		hint={scaled && scaleInfo?.reached != null
+			? scaleInfo.reached > 0
+				? `достигнута ступень ${scaleInfo.reached} из ${scaleInfo.count}`
+				: 'первый порог не пройден — инвестиций нет'
+			: totals.completed
+				? 'порог периода 100% выполнен'
+				: totals.forecast_investments_rub > 0
+					? 'часть брендов закрыла план'
+					: 'план не выполнен — инвестиций нет'}
+		tone={scaled && scaleInfo?.reached != null
+			? scaleInfo.reached > 0 ? 'good' : 'warn'
+			: totals.completed ? 'good' : totals.forecast_investments_rub > 0 ? 'neutral' : 'warn'}
       />
       <SummaryCard
         label="Инв. факт"

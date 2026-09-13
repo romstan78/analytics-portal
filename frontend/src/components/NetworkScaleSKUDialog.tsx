@@ -6,7 +6,7 @@
 // считает сервер пересчётом черновика — здесь только ввод и остаток до плана.
 
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   Alert,
   Autocomplete,
@@ -114,8 +114,9 @@ export default function NetworkScaleSKUDialog({
   const setRow = (index: number, patch: Partial<DraftSKU>) =>
     setRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 
-  // Раскладка плана бренда по SKU долями; без долей — поровну. Последний SKU
-  // забирает остаток округления: сумма равна плану.
+  // Раскладка плана бренда по SKU. Доли — исторический микс с сервера (та же
+  // эвристика, что разлагает прогноз бренда); SKU без истории делят остаток
+  // поровну. Последний SKU забирает остаток округления: сумма равна плану.
   const fillByShares = (shares: Map<string, number>) => {
     if (brandPlan == null || rows.length === 0) return;
     const known = rows.filter((row) => (shares.get(row.sku) ?? 0) > 0);
@@ -138,6 +139,11 @@ export default function NetworkScaleSKUDialog({
   };
 
   const fillEqually = () => fillByShares(new Map());
+
+  const mixMutation = useMutation({
+    mutationFn: () => networkAPI.getSkuMix(networkId, year, quarter, brand),
+    onSuccess: (mix) => fillByShares(new Map(mix.data.map((share) => [share.sku, share.share]))),
+  });
 
   const addSku = (sku: string | null) => {
     if (!sku || rows.some((row) => row.sku === sku)) return;
@@ -180,12 +186,24 @@ export default function NetworkScaleSKUDialog({
             />
           )}
           {canEdit && (
+            <Tooltip title="Разложить план бренда по историческому миксу SKU: аналогичный квартал прошлого года, затем последние месяцы">
+              <span>
+                <Button size="small" disabled={brandPlan == null || rows.length === 0 || mixMutation.isPending} onClick={() => mixMutation.mutate()}>
+                  Заполнить по миксу
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          {canEdit && (
             <Button size="small" disabled={brandPlan == null || rows.length === 0} onClick={fillEqually}>
-              Заполнить поровну
+              Поровну
             </Button>
           )}
         </Box>
 
+        {mixMutation.isError && (
+          <Alert severity="error" sx={{ mb: 1 }}>Не удалось загрузить микс SKU — попробуйте ещё раз или заполните поровну.</Alert>
+        )}
         {missingPrice.length > 0 && (
           <Alert severity="warning" sx={{ mb: 1 }}>
             Нет цены контракта: {missingPrice.join(', ')}. План в упаковках без цены не пересчитается

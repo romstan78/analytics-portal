@@ -537,12 +537,20 @@ type NetworkForecastMonth struct {
 	PromoUpliftRub         float64  `json:"promo_uplift_rub"`
 	IsClosed               bool     `json:"is_closed"`
 	IsCurrent              bool     `json:"is_current"`
-	UpdatedAt              string   `json:"updated_at"`
+	// Ступени: какая достигнута прогнозом за квартал, база после крышки и
+	// смешанная ставка квартала (итог правила к EAC), которой считаются
+	// открытые месяцы. Заполняются у строки бренда.
+	ForecastScale           int      `json:"forecast_scale"`
+	ForecastBaseRub         *float64 `json:"forecast_base_rub"`
+	EffectiveInvestmentsPct *float64 `json:"effective_investments_pct"`
+	UpdatedAt               string   `json:"updated_at"`
 }
 
 // NetworkForecastBrandTotals — итог одной строки бренда за выбранный квартал.
 type NetworkForecastBrandTotals struct {
 	BrandAS               string   `json:"brand_as"`
+	ForecastScale         int      `json:"forecast_scale"`
+	ForecastBaseRub       *float64 `json:"forecast_base_rub"`
 	PlanRub               float64  `json:"plan_rub"`
 	FactRub               float64  `json:"fact_rub"`
 	FactUnits             float64  `json:"fact_units"`
@@ -686,6 +694,22 @@ type NetworkOpexResponse struct {
 type NetworkOpexSaveResponse struct {
 	Message string              `json:"message"`
 	Data    NetworkOpexResponse `json:"data"`
+}
+
+// NetworkSKUMixShare — доля SKU в бренде по историческому миксу.
+type NetworkSKUMixShare struct {
+	SKU   string  `json:"sku"`
+	Share float64 `json:"share"` // 0…1, сумма долей по бренду — единица
+}
+
+// NetworkSKUMixResponse — микс SKU бренда за квартал: та же эвристика, что
+// раскладывает прогноз бренда без детализации на SKU, усреднённая по месяцам
+// квартала. Нужен диалогу ступени, чтобы разложить план бренда по SKU.
+type NetworkSKUMixResponse struct {
+	BrandAS string               `json:"brand_as"`
+	Year    int                  `json:"year"`
+	Quarter int                  `json:"quarter"`
+	Data    []NetworkSKUMixShare `json:"data"`
 }
 
 // NetworkContractPrice — цена договора с периодом действия и последней

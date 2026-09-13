@@ -495,3 +495,58 @@ func TestApplyForecastRollupLeavesUntouchedQuarterEmpty(t *testing.T) {
 		t.Errorf("строка = %#v, ожидались пустые факт и прогноз", got[0])
 	}
 }
+
+func TestBuildNetworkForecastFollowsScaleRuleWithCapAndSKU(t *testing.T) {
+	brand := "Альфа"
+	// Две ступени: 600 (10 %) и 650 (12 %), закрытая крышка. Прогноз 700 закрывает
+	// вторую ступень; база — min(700, 650) = 650, к выплате 650 × 12 % = 78.
+	// SKU «A» на второй ступени со своим процентом 20 % и открытой крышкой.
+	response := BuildNetworkForecast(
+		models.Network{}, 2026, 1,
+		[]models.NetworkPlan{{
+			Quarter: 1, BrandAS: &brand, PlanRub: models.PtrFloat(600),
+			Month1Pct: 30, Month2Pct: 30, Month3Pct: 40,
+			InvestmentsPct: models.PtrFloat(10), CapMode: models.CapModeClosed,
+			EntryLevel: "sku",
+			Scales: []models.NetworkPlanScale{{
+				ScaleNo: 2, PlanRub: models.PtrFloat(650), InvestmentsPct: models.PtrFloat(12),
+				SKUs: []models.NetworkPlanScaleSKU{{
+					SKU: "A", PlanRub: models.PtrFloat(100), InvestmentsPct: models.PtrFloat(20), CapMode: models.CapModeOpen,
+				}},
+			}},
+		}}, nil, nil,
+		[]models.NetworkForecastLine{
+			{Year: 2026, Month: 3, BrandAS: brand, SKU: models.PtrString("A"), ForecastRub: models.PtrFloat(200)},
+			{Year: 2026, Month: 3, BrandAS: brand, SKU: models.PtrString("B"), ForecastRub: models.PtrFloat(500)},
+		}, nil, nil,
+		nil, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC),
+	)
+
+	mar := forecastRow(response, brand, 3, nil)
+	if mar == nil || mar.ForecastScale != 2 {
+		t.Fatalf("достигнутая ступень марта = %#v, ожидалась 2", mar)
+	}
+	// SKU A: открытая крышка, 200 × 20 % = 40; остаток бренда: план 550, объём 500,
+	// закрытая → 500 × 12 % = 60. Итого 100 при EAC 700 — ставка 14,29 %.
+	if mar.EACInvestmentsRub == nil || *mar.EACInvestmentsRub != 100 {
+		t.Fatalf("инвестиции марта = %#v, ожидалось 100 по правилу ступеней", mar.EACInvestmentsRub)
+	}
+	if mar.EffectiveInvestmentsPct == nil || *mar.EffectiveInvestmentsPct != 14.29 {
+		t.Fatalf("смешанная ставка = %#v, ожидалось 14,29", mar.EffectiveInvestmentsPct)
+	}
+	if mar.ForecastBaseRub == nil || *mar.ForecastBaseRub != 700 {
+		t.Fatalf("база = %#v, ожидалось 200 + 500 = 700", mar.ForecastBaseRub)
+	}
+	skuA := forecastRow(response, brand, 3, models.PtrString("A"))
+	if skuA == nil || skuA.EACInvestmentsRub == nil || *skuA.EACInvestmentsRub != 40 || skuA.InvestmentsSource != "pct" {
+		t.Fatalf("SKU A со своей строкой = %#v, ожидалось 40", skuA)
+	}
+	skuB := forecastRow(response, brand, 3, models.PtrString("B"))
+	if skuB == nil || skuB.EACInvestmentsRub == nil || *skuB.EACInvestmentsRub != 60 {
+		t.Fatalf("SKU B без своей строки — остаток бренда: %#v, ожидалось 100 − 40 = 60", skuB)
+	}
+	total := response.Brands[0]
+	if total.ForecastScale != 2 || total.EACInvestmentsRub != 100 {
+		t.Fatalf("итог бренда = %#v", total)
+	}
+}

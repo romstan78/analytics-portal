@@ -1068,6 +1068,38 @@ func PreviewNetworkPlan(c *gin.Context) {
 	})
 }
 
+// GetNetworkSKUMix — доли SKU бренда за квартал по историческому миксу:
+// диалог ступени раскладывает ими план бренда по SKU.
+func GetNetworkSKUMix(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	year, ok := planYear(c)
+	if !ok {
+		return
+	}
+	quarter, ok := planQuarter(c)
+	if !ok {
+		return
+	}
+	brand := strings.TrimSpace(c.Query("brand"))
+	if brand == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Не указан бренд"})
+		return
+	}
+	if _, err := repository.GetNetworkByID(id); err != nil {
+		respondNetworkError(c, err, "network_sku_mix_fetch_failed")
+		return
+	}
+	response, err := services.LoadNetworkSKUMix(id, year, quarter, brand)
+	if err != nil {
+		respondNetworkError(c, err, "network_sku_mix_failed")
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
 // ─── Помесячный прогноз ─────────────────────────────────────────────────────
 
 // loadNetworkForecast — сборка рабочего места прогноза. Правило живёт в

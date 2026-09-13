@@ -19,6 +19,8 @@ export type {
   NetworkPlanScaleTotals,
   NetworkPlanScaleInput,
   NetworkPlanScaleSKUInput,
+  NetworkSKUMixShare,
+  NetworkSKUMixResponse,
   Network,
   NetworkPeriod,
   NetworkPlan,
