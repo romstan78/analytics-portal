@@ -47,6 +47,14 @@ func NetworkPeriodsWithDefaults(
 			period.VATIncluded = network.VATIncluded
 			period.VATRate = network.VATRate
 		}
+		// Число ступеней: NULL в базе — «как в профиле»; профиль до миграции
+		// 032 ступеней не знал, и его ноль читается как одна ступень.
+		if period.ScalesCount <= 0 {
+			period.ScalesCount = network.DefaultScalesCount
+		}
+		if period.ScalesCount <= 0 {
+			period.ScalesCount = 1
+		}
 		periods = append(periods, period)
 	}
 	return periods
@@ -90,22 +98,39 @@ func EnrichNetworkPlans(plans []models.NetworkPlan, periods []models.NetworkPeri
 		p := &plans[i]
 		period := byQuarter[p.Quarter]
 
-		if p.InvestmentsPct == nil || p.PlanRub == nil {
+		// Плановые инвестиции каждой ступени; у ступени 1 без SKU-строк это
+		// ровно план × процент — то, что строка показывала всегда. Строка
+		// берёт ступень 1: с исключениями по SKU план бренда — сумма по SKU.
+		enrichPlanScales(p, period)
+
+		if p.PlanRub == nil {
 			p.InvestmentsRub = nil
 			p.InvestmentsNet = nil
 			continue
 		}
-		gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
-		p.InvestmentsRub = &gross
-		p.InvestmentsNet = &net
+		// Строка пула инвестиций не ведёт и в итоги их не несёт, но процент у
+		// неё встречается в данных, и колонка считалась план × процент всегда:
+		// внешние читатели её видят, и менять им числа незачем.
+		if p.BrandAS == nil {
+			p.InvestmentsRub, p.InvestmentsNet = nil, nil
+			if p.InvestmentsPct != nil {
+				gross, net := investmentsFor(*p.PlanRub, *p.InvestmentsPct, period.VATIncluded, period.VATRate)
+				p.InvestmentsRub, p.InvestmentsNet = &gross, &net
+			}
+			continue
+		}
+		p.InvestmentsRub = p.Scales[0].PlanInvestmentsRub
+		p.InvestmentsNet = p.Scales[0].PlanInvestmentsNet
 	}
 	return plans
 }
 
 // ApplyNetworkInvestmentRule считает прогнозные и фактические инвестиции по
-// одному правилу: объём × процент, если объём закрыл план своей области, иначе
-// ноль. Прогнозные меряются прогнозом, фактические — фактом; всё остальное в
-// правиле общее, поэтому и код общий.
+// одному правилу: база × процент достигнутой ступени, если объём закрыл хотя
+// бы первый порог своей области, иначе ноль. База — объём после крышки,
+// сложенный по SKU бренда (см. network_scales.go). Прогнозные меряются
+// прогнозом, фактические — фактом; всё остальное в правиле общее, поэтому и
+// код общий.
 //
 // Ноль и «не считается» — разные вещи: строка без процента остаётся с nil,
 // строка с процентом, не закрывшая план, получает явный ноль. Иначе потребитель
@@ -127,42 +152,110 @@ func ApplyNetworkInvestmentRule(
 		row.FactCompletionPct = nil
 		row.ForecastInvestmentsEarned = false
 		row.FactInvestmentsEarned = false
-		// Строка пула инвестиций не ведёт: процент задаётся бренду.
+		row.ForecastScale, row.FactScale = 0, 0
+		row.ForecastBaseRub, row.FactBaseRub = nil, nil
+
+		period := byQuarter[row.Quarter]
+		forecast := investmentEvaluation(*row, groups, plans, totals, achievedByForecast)
+		fact := investmentEvaluation(*row, groups, plans, totals, achievedByFact)
+		ladder := planScales(*row)
+
+		// Строка пула инвестиций не ведёт: процент задаётся бренду. Но какую
+		// ступень пул закрыл, она знает лучше всех — это и записывается.
 		if row.BrandAS == nil {
+			row.ForecastScale = reachedScale(forecast.thresholds, forecast.achieved)
+			row.FactScale = reachedScale(fact.thresholds, fact.achieved)
+			for k := range ladder {
+				scale := &ladder[k]
+				scale.ForecastRub = models.PtrFloat(forecast.achieved)
+				scale.ForecastReached = scale.ScaleNo <= row.ForecastScale
+				scale.FactRub = models.PtrFloat(fact.achieved)
+				scale.FactReached = scale.ScaleNo <= row.FactScale
+			}
+			row.Scales = ladder
 			continue
 		}
 
-		period := byQuarter[row.Quarter]
+		row.InvestmentScope = forecast.scope
+		row.InvestmentPeriodStartQuarter = forecast.startQuarter
+		row.InvestmentPeriodEndQuarter = forecast.endQuarter
+		// Выполнение меряется к обязательству — первой ступени.
+		row.ForecastCompletionPct = completionPct(forecast.achieved, forecast.firstThreshold())
+		row.FactCompletionPct = completionPct(fact.achieved, fact.firstThreshold())
 
-		forecastPlan, forecastGot, startQuarter, endQuarter, scope :=
-			investmentEvaluation(*row, groups, plans, totals, achievedByForecast)
-		factPlan, factGot, _, _, _ :=
-			investmentEvaluation(*row, groups, plans, totals, achievedByFact)
+		forecastReached := reachedScale(forecast.thresholds, forecast.achieved)
+		factReached := reachedScale(fact.thresholds, fact.achieved)
+		row.ForecastInvestmentsEarned = forecastReached > 0
+		row.FactInvestmentsEarned = factReached > 0
 
-		row.InvestmentScope = scope
-		row.InvestmentPeriodStartQuarter = startQuarter
-		row.InvestmentPeriodEndQuarter = endQuarter
-		row.ForecastCompletionPct = completionPct(forecastGot, forecastPlan)
-		row.FactCompletionPct = completionPct(factGot, factPlan)
-		row.ForecastInvestmentsEarned = forecastPlan > 0 && forecastGot >= forecastPlan
-		row.FactInvestmentsEarned = factPlan > 0 && factGot >= factPlan
+		forecastVolume := paymentEACRub(*row)
+		forecastScale, forecastOut := applyScaleRule(ladder, forecast.ownerCap, period, measure{
+			volumeOfBrand: forecastVolume,
+			volumeOfSKU:   func(s models.NetworkPlanScaleSKU) *float64 { return s.ForecastRub },
+			reached:       forecastReached,
+			ladderLen:     len(forecast.thresholds),
+			write: func(scale *models.NetworkPlanScale, out scaleOutcome, reached bool) {
+				scale.ForecastRub = forecastVolume
+				scale.ForecastBaseRub = models.PtrFloat(out.base)
+				scale.ForecastInvestmentsRub, scale.ForecastInvestmentsNet = outcomeOrNil(out)
+				scale.ForecastReached = reached
+			},
+			writeSKU: func(sku *models.NetworkPlanScaleSKU, base, gross, net float64) {
+				sku.ForecastBaseRub = models.PtrFloat(base)
+				sku.ForecastInvestmentsRub = models.PtrFloat(gross)
+				sku.ForecastInvestmentsNet = models.PtrFloat(net)
+			},
+		})
+		factScale, factOut := applyScaleRule(ladder, fact.ownerCap, period, measure{
+			volumeOfBrand: row.FactRub,
+			volumeOfSKU:   func(s models.NetworkPlanScaleSKU) *float64 { return s.FactRub },
+			reached:       factReached,
+			ladderLen:     len(fact.thresholds),
+			write: func(scale *models.NetworkPlanScale, out scaleOutcome, reached bool) {
+				scale.FactRub = row.FactRub
+				scale.FactBaseRub = models.PtrFloat(out.base)
+				scale.FactInvestmentsRub, scale.FactInvestmentsNet = outcomeOrNil(out)
+				scale.FactReached = reached
+			},
+			writeSKU: func(sku *models.NetworkPlanScaleSKU, base, gross, net float64) {
+				sku.FactBaseRub = models.PtrFloat(base)
+				sku.FactInvestmentsRub = models.PtrFloat(gross)
+				sku.FactInvestmentsNet = models.PtrFloat(net)
+			},
+		})
+		row.Scales = ladder
+		row.ForecastScale, row.FactScale = forecastScale, factScale
 
-		// «Оплата от факта» — договор без порога: процент начисляется с любого
-		// отгруженного рубля. Область при этом всегда собственная строка.
+		// «Оплата от факта» — договор без порога и без ступеней: процент
+		// начисляется с любого отгруженного рубля. Область — собственная строка.
 		if row.PayInvestmentsFromFact {
 			row.InvestmentScope = "fact"
 			row.InvestmentPeriodStartQuarter = row.Quarter
 			row.InvestmentPeriodEndQuarter = row.Quarter
 			row.ForecastInvestmentsEarned = true
 			row.FactInvestmentsEarned = true
+			row.ForecastScale, row.FactScale = 0, 0
+			if !row.ForecastInvestmentsOverridden {
+				row.ForecastInvestmentsRub, row.ForecastInvestmentsNet = investmentsOrZero(
+					true, forecastVolume, row.InvestmentsPct, period,
+				)
+				row.ForecastBaseRub = baseIfKnown(forecastVolume, row.InvestmentsPct)
+			} else if row.ForecastInvestmentsRub != nil {
+				net := NetRub(*row.ForecastInvestmentsRub, period.VATIncluded, period.VATRate)
+				row.ForecastInvestmentsNet = &net
+			}
+			row.FactInvestmentsRub, row.FactInvestmentsNet = investmentsOrZero(
+				true, row.FactRub, row.InvestmentsPct, period,
+			)
+			row.FactBaseRub = baseIfKnown(row.FactRub, row.InvestmentsPct)
+			continue
 		}
 
 		// Прогнозные. Введённое человеком переопределение порог не отменяет:
 		// разовая выплата вне процента — осознанное решение, а не расчёт.
 		if !row.ForecastInvestmentsOverridden {
-			row.ForecastInvestmentsRub, row.ForecastInvestmentsNet = investmentsOrZero(
-				row.ForecastInvestmentsEarned, paymentEACRub(*row), row.InvestmentsPct, period,
-			)
+			row.ForecastInvestmentsRub, row.ForecastInvestmentsNet, row.ForecastBaseRub =
+				scaleInvestmentsOrZero(forecastReached, forecastVolume, row.InvestmentsPct, forecastOut)
 		} else if row.ForecastInvestmentsRub != nil {
 			net := NetRub(*row.ForecastInvestmentsRub, period.VATIncluded, period.VATRate)
 			row.ForecastInvestmentsNet = &net
@@ -170,9 +263,8 @@ func ApplyNetworkInvestmentRule(
 
 		// Фактические. База — только отгруженное: инвестиции по факту
 		// появляются по закрытии периода, а не по ожиданию.
-		row.FactInvestmentsRub, row.FactInvestmentsNet = investmentsOrZero(
-			row.FactInvestmentsEarned, row.FactRub, row.InvestmentsPct, period,
-		)
+		row.FactInvestmentsRub, row.FactInvestmentsNet, row.FactBaseRub =
+			scaleInvestmentsOrZero(factReached, row.FactRub, row.InvestmentsPct, factOut)
 	}
 	return plans
 }
@@ -193,6 +285,39 @@ func investmentsOrZero(
 	}
 	grossValue, netValue := investmentsFor(*volume, *pct, period.VATIncluded, period.VATRate)
 	return &grossValue, &netValue
+}
+
+// scaleInvestmentsOrZero — тот же хвост для ступеней: результат достигнутой
+// ступени, явный ноль при непройденном первом пороге, nil когда считать нечем —
+// нет объёма или процента ни у бренда, ни у одного SKU.
+func scaleInvestmentsOrZero(
+	reached int,
+	volume, brandPct *float64,
+	out scaleOutcome,
+) (gross, net, base *float64) {
+	if volume == nil || (brandPct == nil && !out.pctKnown) {
+		return nil, nil, nil
+	}
+	if reached == 0 {
+		return models.PtrFloat(0), models.PtrFloat(0), models.PtrFloat(0)
+	}
+	return models.PtrFloat(out.gross), models.PtrFloat(out.net), models.PtrFloat(out.base)
+}
+
+// outcomeOrNil — инвестиции ступени в двух базах либо nil, если считать нечем.
+func outcomeOrNil(out scaleOutcome) (gross, net *float64) {
+	if !out.pctKnown {
+		return nil, nil
+	}
+	return models.PtrFloat(out.gross), models.PtrFloat(out.net)
+}
+
+// baseIfKnown — база «от факта»: весь объём, если есть и объём, и процент.
+func baseIfKnown(volume, pct *float64) *float64 {
+	if volume == nil || pct == nil {
+		return nil
+	}
+	return models.PtrFloat(round2(*volume))
 }
 
 // CalculateNetworkTotals считает итоги по кварталам.
@@ -274,6 +399,9 @@ func CalculateNetworkTotals(plans []models.NetworkPlan, _ []models.NetworkPeriod
 		t.ContractPlanRub = round2(pool + t.SeparatePlanRub)
 		t.CompletionPct = completionPct(t.EACRub, t.ContractPlanRub)
 		t.Completed = t.ContractPlanRub > 0 && t.EACRub >= t.ContractPlanRub
+		// План по ступеням: ступень 1 повторяет поля выше, верхние — своя
+		// лестница порогов и остатков.
+		t.Scales = scaleTotalsOf(plans, t.Quarter)
 	}
 	return totals
 }
@@ -321,6 +449,27 @@ func SumYearTotals(totals []NetworkPlanTotals) NetworkPlanTotals {
 		}
 		if t.Undistributed != nil {
 			addOptional(&year.Undistributed, *t.Undistributed)
+		}
+
+		// Ступени года — суммы кварталов поступенно. Здесь, в отличие от
+		// лестницы объединённого периода, ступень есть, если она есть хоть в
+		// одном квартале: это сводка для чтения, а не порог для проверки.
+		for _, scale := range t.Scales {
+			for len(year.Scales) < scale.ScaleNo {
+				year.Scales = append(year.Scales, models.NetworkPlanScaleTotals{ScaleNo: len(year.Scales) + 1})
+			}
+			ys := &year.Scales[scale.ScaleNo-1]
+			ys.GrossBrandsPlan = round2(ys.GrossBrandsPlan + scale.GrossBrandsPlan)
+			ys.SeparatePlanRub = round2(ys.SeparatePlanRub + scale.SeparatePlanRub)
+			ys.ContractPlanRub = round2(ys.ContractPlanRub + scale.ContractPlanRub)
+			ys.InvestmentsRub = round2(ys.InvestmentsRub + scale.InvestmentsRub)
+			ys.InvestmentsRubNet = round2(ys.InvestmentsRubNet + scale.InvestmentsRubNet)
+			if scale.GrossPoolRub != nil {
+				addOptional(&ys.GrossPoolRub, *scale.GrossPoolRub)
+			}
+			if scale.Undistributed != nil {
+				addOptional(&ys.Undistributed, *scale.Undistributed)
+			}
 		}
 	}
 	year.CompletionPct = completionPct(year.EACRub, year.ContractPlanRub)
@@ -409,19 +558,64 @@ func achievedByForecast(plan models.NetworkPlan) *float64 { return paymentEACRub
 // фактические инвестиции появляются по закрытии периода, а не по ожиданию.
 func achievedByFact(plan models.NetworkPlan) *float64 { return plan.FactRub }
 
-// investmentEvaluation возвращает план и достигнутое по области, в которой
-// проверяется порог 100% для конкретной строки. Портфельное объединение
-// действует на все бренды диапазона, брендовое — только на выбранный бренд.
-// Без объединения валовые бренды оцениваются вместе по пулу квартала,
-// отдельные — по собственной строке.
+// scopeEvaluation — область, в которой проверяется порог строки: лестница её
+// порогов, достигнутый объём, диапазон кварталов и крышка владельца порога.
+type scopeEvaluation struct {
+	thresholds   []float64
+	achieved     float64
+	startQuarter int
+	endQuarter   int
+	scope        string
+	ownerCap     capSetting
+}
+
+// firstThreshold — обязательство: порог первой ступени, к нему меряется выполнение.
+func (e scopeEvaluation) firstThreshold() float64 {
+	if len(e.thresholds) == 0 {
+		return 0
+	}
+	return e.thresholds[0]
+}
+
+// poolRowOf — строка пула квартала, владелец порога и крышки валовых брендов.
+func poolRowOf(plans []models.NetworkPlan, quarter int) *models.NetworkPlan {
+	for i := range plans {
+		if plans[i].BrandAS == nil && plans[i].Quarter == quarter {
+			return &plans[i]
+		}
+	}
+	return nil
+}
+
+// ownerCapOf — крышка владельца порога строки: у валового бренда — пула его
+// квартала (без строки пула — открытая), у отдельного бренда — своя.
+func ownerCapOf(plan models.NetworkPlan, plans []models.NetworkPlan) capSetting {
+	if plan.BrandAS != nil && plan.InGross {
+		if pool := poolRowOf(plans, plan.Quarter); pool != nil {
+			return capOf(pool.CapMode, pool.CapPct)
+		}
+		return capOf("", nil)
+	}
+	return capOf(plan.CapMode, plan.CapPct)
+}
+
+// investmentEvaluation возвращает лестницу порогов и достигнутое по области,
+// в которой проверяется выполнение для конкретной строки. Портфельное
+// объединение действует на все бренды диапазона, брендовое — только на
+// выбранный бренд. Без объединения валовые бренды оцениваются вместе по пулу
+// квартала, отдельные — по собственной строке. Пороги объединённого периода —
+// суммы порогов кварталов по ступеням.
 func investmentEvaluation(
 	plan models.NetworkPlan,
 	groups []models.NetworkPeriodGroup,
 	plans []models.NetworkPlan,
 	totals []NetworkPlanTotals,
 	achieved achievedRub,
-) (planRub, eacRub float64, startQuarter, endQuarter int, scope string) {
-	startQuarter, endQuarter = plan.Quarter, plan.Quarter
+) scopeEvaluation {
+	e := scopeEvaluation{
+		startQuarter: plan.Quarter, endQuarter: plan.Quarter,
+		ownerCap: ownerCapOf(plan, plans),
+	}
 	var selected *models.NetworkPeriodGroup
 	for i := range groups {
 		group := &groups[i]
@@ -439,65 +633,67 @@ func investmentEvaluation(
 	}
 
 	if selected != nil {
-		startQuarter, endQuarter = selected.StartQuarter, selected.EndQuarter
+		e.startQuarter, e.endQuarter = selected.StartQuarter, selected.EndQuarter
 		if selected.BrandAS == nil {
-			scope = "portfolio"
-			for quarter := startQuarter; quarter <= endQuarter; quarter++ {
+			e.scope = "portfolio"
+			ladders := make([][]float64, 0, 4)
+			for quarter := e.startQuarter; quarter <= e.endQuarter; quarter++ {
 				if quarter >= 1 && quarter <= len(totals) {
-					planRub = round2(planRub + totals[quarter-1].ContractPlanRub)
+					ladders = append(ladders, scopeThresholdsFromTotals(totals[quarter-1], true))
 				}
 			}
+			e.thresholds = sumLadders(ladders)
 			for _, candidate := range plans {
-				if candidate.BrandAS == nil || candidate.Quarter < startQuarter || candidate.Quarter > endQuarter {
+				if candidate.BrandAS == nil || candidate.Quarter < e.startQuarter || candidate.Quarter > e.endQuarter {
 					continue
 				}
 				if value := achieved(candidate); value != nil {
-					eacRub = round2(eacRub + *value)
+					e.achieved = round2(e.achieved + *value)
 				}
 			}
-			return
+			return e
 		}
 
-		scope = "brand"
+		e.scope = "brand"
+		ladders := make([][]float64, 0, 4)
 		for _, candidate := range plans {
 			if candidate.BrandAS == nil || *candidate.BrandAS != *selected.BrandAS ||
-				candidate.Quarter < startQuarter || candidate.Quarter > endQuarter {
+				candidate.Quarter < e.startQuarter || candidate.Quarter > e.endQuarter {
 				continue
 			}
-			planRub = round2(planRub + models.ValFloat(candidate.PlanRub))
+			ladders = append(ladders, thresholdsOf(candidate))
+			// Достигнутое брендового объединения меряется EAC независимо от
+			// меры — так было до ступеней, и числа этой правкой не меняются.
 			if eac := paymentEACRub(candidate); eac != nil {
-				eacRub = round2(eacRub + *eac)
+				e.achieved = round2(e.achieved + *eac)
 			}
 		}
-		return
+		e.thresholds = sumLadders(ladders)
+		return e
 	}
 
-	if plan.InGross {
-		scope = "gross"
+	if plan.BrandAS == nil || plan.InGross {
+		e.scope = "gross"
 		if plan.Quarter >= 1 && plan.Quarter <= len(totals) {
-			total := totals[plan.Quarter-1]
-			planRub = total.GrossBrandsPlan
-			if total.GrossPoolRub != nil {
-				planRub = *total.GrossPoolRub
-			}
+			e.thresholds = scopeThresholdsFromTotals(totals[plan.Quarter-1], false)
 		}
 		for _, candidate := range plans {
 			if candidate.BrandAS == nil || !candidate.InGross || candidate.Quarter != plan.Quarter {
 				continue
 			}
 			if value := achieved(candidate); value != nil {
-				eacRub = round2(eacRub + *value)
+				e.achieved = round2(e.achieved + *value)
 			}
 		}
-		return
+		return e
 	}
 
-	scope = "brand"
-	planRub = models.ValFloat(plan.PlanRub)
+	e.scope = "brand"
+	e.thresholds = thresholdsOf(plan)
 	if value := achieved(plan); value != nil {
-		eacRub = *value
+		e.achieved = *value
 	}
-	return
+	return e
 }
 
 // BuildNetworkPlanCalculations выполняет расчёты в правильном порядке и
@@ -687,10 +883,16 @@ type NetworkPlanDraft struct {
 	BrandAS        *string
 	InGross        bool
 	PlanRub        *float64
+	PlanUnits      *float64
 	InvestmentsPct *float64
 	Month1Pct      float64
 	Month2Pct      float64
 	Month3Pct      float64
+	// Крышка и ступени. nil-ступени и пустая крышка — клиент, который про них
+	// не знает: сохранённые остаются, как есть. Пустой массив — ступеней нет.
+	CapMode string
+	CapPct  *float64
+	Scales  []models.NetworkPlanScale
 }
 
 // draftKey — ключ строки внутри года: квартал + бренд (пусто = валовый пул).
@@ -702,17 +904,15 @@ func draftKey(quarter int, brand *string) string {
 	return strconv.Itoa(quarter) + "|" + name
 }
 
-// PreviewNetworkPlans пересчитывает несохранённый черновик: накладывает
-// введённые значения на факт из сохранённых строк и считает то же самое,
-// что вернётся после сохранения. В БД ничего не пишется.
+// MergeNetworkPlanDraft накладывает введённые значения черновика на
+// сохранённые строки: факт, прогноз и платёжные признаки берутся из БД, а
+// план, процент, крышка и ступени — из черновика. Объёмы SKU, уже сведённые
+// на сохранённых ступенях, переносятся на ступени черновика по SKU: свод
+// объёмов от номера ступени не зависит.
 //
 // Набор строк задаёт черновик: сохранённая строка, которой в нём нет, в итоги
 // не попадает — иначе таблица показывала бы суммы по скрытым брендам.
-func PreviewNetworkPlans(
-	draft []NetworkPlanDraft,
-	stored []models.NetworkPlan,
-	periods []models.NetworkPeriod,
-) ([]models.NetworkPlan, []NetworkPlanTotals, NetworkPlanTotals) {
+func MergeNetworkPlanDraft(draft []NetworkPlanDraft, stored []models.NetworkPlan) []models.NetworkPlan {
 	factByKey := make(map[string]models.NetworkPlan, len(stored))
 	for _, plan := range stored {
 		factByKey[draftKey(plan.Quarter, plan.BrandAS)] = plan
@@ -725,16 +925,22 @@ func PreviewNetworkPlans(
 			BrandAS:        row.BrandAS,
 			InGross:        row.InGross,
 			PlanRub:        row.PlanRub,
+			PlanUnits:      row.PlanUnits,
 			InvestmentsPct: row.InvestmentsPct,
 			Month1Pct:      row.Month1Pct,
 			Month2Pct:      row.Month2Pct,
 			Month3Pct:      row.Month3Pct,
+			CapMode:        row.CapMode,
+			CapPct:         row.CapPct,
+			Scales:         row.Scales,
 		}
 		if saved, ok := factByKey[draftKey(row.Quarter, row.BrandAS)]; ok {
 			plan.ID = saved.ID
 			plan.NetworkID = saved.NetworkID
 			plan.Year = saved.Year
-			plan.PlanUnits = saved.PlanUnits
+			if plan.PlanUnits == nil {
+				plan.PlanUnits = saved.PlanUnits
+			}
 			plan.FactRub = saved.FactRub
 			plan.ForecastRub = saved.ForecastRub
 			plan.FactInvestmentsRub = saved.FactInvestmentsRub
@@ -744,9 +950,52 @@ func PreviewNetworkPlans(
 			plan.PayInvestmentsFromFact = saved.PayInvestmentsFromFact
 			plan.UpdatedBy = saved.UpdatedBy
 			plan.UpdatedAt = saved.UpdatedAt
+			if plan.CapMode == "" {
+				plan.CapMode, plan.CapPct = saved.CapMode, saved.CapPct
+			}
+			if plan.Scales == nil {
+				plan.Scales = saved.Scales
+			} else {
+				carrySKUVolumes(plan.Scales, saved.Scales)
+			}
 		}
 		plans = append(plans, plan)
 	}
+	return plans
+}
+
+// carrySKUVolumes переносит сведённые объёмы SKU с сохранённых ступеней на
+// ступени черновика. SKU, которого в сохранённых нет, остаётся без объёма до
+// сохранения — его объём считается в остатке бренда.
+func carrySKUVolumes(target, saved []models.NetworkPlanScale) {
+	type volumes struct{ forecast, fact *float64 }
+	known := map[string]volumes{}
+	for _, scale := range saved {
+		for _, sku := range scale.SKUs {
+			if sku.ForecastRub != nil || sku.FactRub != nil {
+				known[sku.SKU] = volumes{forecast: sku.ForecastRub, fact: sku.FactRub}
+			}
+		}
+	}
+	for i := range target {
+		for j := range target[i].SKUs {
+			sku := &target[i].SKUs[j]
+			if v, ok := known[sku.SKU]; ok {
+				sku.ForecastRub, sku.FactRub = v.forecast, v.fact
+			}
+		}
+	}
+}
+
+// PreviewNetworkPlans пересчитывает несохранённый черновик: накладывает
+// введённые значения на факт из сохранённых строк и считает то же самое,
+// что вернётся после сохранения. В БД ничего не пишется.
+func PreviewNetworkPlans(
+	draft []NetworkPlanDraft,
+	stored []models.NetworkPlan,
+	periods []models.NetworkPeriod,
+) ([]models.NetworkPlan, []NetworkPlanTotals, NetworkPlanTotals) {
+	plans := MergeNetworkPlanDraft(draft, stored)
 
 	// Тот же вход в расчёт, что и после сохранения: черновик обязан показывать
 	// ровно те инвестиции, которые получатся, а не приблизительные.

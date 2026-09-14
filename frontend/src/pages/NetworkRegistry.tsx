@@ -49,6 +49,7 @@ import NetworkDetailView from '../components/NetworkDetailView';
 import NetworkForecastTab from '../components/NetworkForecastTab';
 import NetworkAllocationEditor from '../components/NetworkAllocationEditor';
 import NetworkVATEditor from '../components/NetworkVATEditor';
+import NetworkScalesEditor from '../components/NetworkScalesEditor';
 import NetworkInvestmentPaymentModes from '../components/NetworkInvestmentPaymentModes';
 import NetworkOpexTab from '../components/NetworkOpexTab';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
@@ -72,6 +73,7 @@ import {
   parseNumberInput,
   planKey,
 } from '../utils/networkPlan';
+import type { CapMode } from '../utils/networkPlan';
 import { apiErrorMessage, queryFailure } from '../utils/apiError';
 
 const YEARS = [2026, 2027, 2028];
@@ -105,6 +107,23 @@ const FIELD_LABELS: Record<string, string> = {
   kam: 'КАМ',
   is_active: 'Активность',
   has_annual_investment_cumulative: 'Годовой кумулятив инвестиций',
+  default_scales_count: 'Ступеней по умолчанию',
+  default_cap_mode: 'Крышка по умолчанию',
+  scales_count_q1: 'Q1 · ступеней',
+  scales_count_q2: 'Q2 · ступеней',
+  scales_count_q3: 'Q3 · ступеней',
+  scales_count_q4: 'Q4 · ступеней',
+  plan_units: 'План, уп',
+  cap: 'Крышка',
+  scale2: 'Ступень 2',
+  scale3: 'Ступень 3',
+  scale2_plan_rub: 'Ступень 2 · порог',
+  scale3_plan_rub: 'Ступень 3 · порог',
+  scale2_investments_pct: 'Ступень 2 · инвестиции, %',
+  scale3_investments_pct: 'Ступень 3 · инвестиции, %',
+  scale1_sku: 'Ступень 1 · SKU',
+  scale2_sku: 'Ступень 2 · SKU',
+  scale3_sku: 'Ступень 3 · SKU',
 };
 
 const MONTH_DISTRIBUTION_FIELDS = ['month1_pct', 'month2_pct', 'month3_pct'] as const;
@@ -121,6 +140,8 @@ type NetworkProfileDraft = Omit<
 interface NetworkProfilePeriodDraft {
   vatIncluded: boolean;
   vatRate: string;
+  // Число ступеней квартала; отсутствует — квартал следует умолчанию сети.
+  scalesCount?: number;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -413,11 +434,14 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
         month3_pct: parseNumberInput(profile.month3_pct ?? String(network.month3_pct)) ?? network.month3_pct,
         has_annual_investment_cumulative:
           profile.has_annual_investment_cumulative ?? network.has_annual_investment_cumulative,
+        default_scales_count: profileScalesCount,
+        default_cap_mode: profileCapMode,
         year,
-        periods: profilePeriodValues.map(({ quarter, vatIncluded, vatRate }) => ({
+        periods: profilePeriodValues.map(({ quarter, vatIncluded, vatRate, scalesCount }) => ({
           quarter,
           vat_included: vatIncluded,
           vat_rate: parseNumberInput(vatRate) ?? 0,
+          scales_count: scalesCount,
         })),
         updated_at: network.updated_at,
       }),
@@ -508,13 +532,25 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
     profile.month3_pct ?? String(selected.month3_pct),
   ] : ['30', '30', '40'];
   const monthDistributionValid = isMonthDistributionValid(monthDistribution);
+  // Ступени: умолчание сети из черновика профиля, квартал — своё исключение
+  // либо умолчание. Сервер отдаёт квартал уже разрешённым, поэтому исключение
+  // узнаётся по несовпадению с сохранённым умолчанием сети.
+  const savedScalesCount = selected?.default_scales_count || 1;
+  const profileScalesCount = profile.default_scales_count ?? savedScalesCount;
+  const profileCapMode: CapMode = (profile.default_cap_mode ?? selected?.default_cap_mode) === 'pct'
+    ? 'pct'
+    : (profile.default_cap_mode ?? selected?.default_cap_mode) === 'closed' ? 'closed' : 'open';
   const profilePeriodValues = QUARTERS.map((quarter) => {
     const saved = planQuery.data?.periods.find((period) => period.quarter === quarter);
     const draft = profilePeriods[quarter];
+    const savedOverride = saved && saved.scales_count > 0 && saved.scales_count !== savedScalesCount
+      ? saved.scales_count
+      : undefined;
     return {
       quarter,
       vatIncluded: draft?.vatIncluded ?? saved?.vat_included ?? selected?.vat_included ?? true,
       vatRate: draft?.vatRate ?? String(saved?.vat_rate ?? selected?.vat_rate ?? 20),
+      scalesCount: draft?.scalesCount ?? savedOverride ?? profileScalesCount,
     };
   });
   // Та же проверка, что подсвечивает поле в NetworkVATEditor: кнопка сохранения
@@ -936,6 +972,21 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
                     onChange={(quarter, next) => setProfilePeriods((current) => ({
                       ...current,
                       [quarter]: next,
+                    }))}
+                  />
+                  <NetworkScalesEditor
+                    key={`scales-${selectedId}-${year}`}
+                    year={year}
+                    defaultCount={profileScalesCount}
+                    defaultCapMode={profileCapMode}
+                    quarters={profilePeriodValues.map(({ quarter, scalesCount }) => ({ quarter, count: scalesCount }))}
+                    canEdit={canEdit}
+                    ready={profilePeriodsReady}
+                    onDefaultCountChange={(count) => setProfile((current) => ({ ...current, default_scales_count: count }))}
+                    onDefaultCapModeChange={(mode) => setProfile((current) => ({ ...current, default_cap_mode: mode }))}
+                    onQuarterChange={(quarter, count) => setProfilePeriods((current) => ({
+                      ...current,
+                      [quarter]: { ...(current[quarter] ?? profilePeriodValues[quarter - 1]), scalesCount: count },
                     }))}
                   />
                   <NetworkAllocationEditor

@@ -35,9 +35,15 @@ import {
   parseNumberInput,
   planKey,
   round2,
+  scalesInput,
   shiftGrossPool,
+  upperScales,
+  withScale,
+  withSkus,
+  withoutScale,
 } from '../utils/networkPlan';
-import type { DraftCell } from '../utils/networkPlan';
+import type { DraftCell, DraftSKU, DraftScale } from '../utils/networkPlan';
+import { formatNumberInput } from '../utils/networkPlan';
 import {
   draftDiffers,
   draftSavedAtLabel,
@@ -72,7 +78,9 @@ const PREVIEW_DEBOUNCE_MS = 250;
 // Значения вносят массово и сохраняют одной кнопкой, поэтому обрыв сессии или
 // закрытая вкладка стоят дороже, чем в обычной форме. Хранится только
 // введённое: НДС, инвестиции и итоги считает бэкенд.
-const DRAFT_BASE_KEY = 'network_plan_draft_v1';
+// v2: в черновике появились ступени, крышка и пара «рубли / упаковки»;
+// черновики v1 не восстанавливаются — их форма не совпадает с сегодняшней.
+const DRAFT_BASE_KEY = 'network_plan_draft_v2';
 
 interface PlanDraftValues {
   draft: Record<string, DraftCell>;
@@ -143,6 +151,9 @@ export default function NetworkPlanGrid({
   const [dirty, setDirty] = useState(false);
   const [period, setPeriod] = useState<Period>('year');
   const [yearMetric, setYearMetric] = useState<YearMetric>('plan');
+  // Ступень годового разреза: показывается только у сетей с несколькими
+  // ступенями и только для метрик, которые от ступени зависят.
+  const [yearScale, setYearScale] = useState(1);
 
   // Черновик прерванной работы. Читается при рендере — в эффекте с прямым
   // setState это запрещено правилом react-hooks/set-state-in-effect, да и
@@ -215,6 +226,9 @@ export default function NetworkPlanGrid({
           brand_as: brand,
           in_gross: brand !== null && cell.inGross,
           plan_rub: parseNumberInput(cell.planRub),
+          // Пара: вводится метрика режима бренда, вторую считает сервер по
+          // ценам контракта. Пустая уходит как отсутствующая, а не как null.
+          plan_units: parseNumberInput(cell.planUnits) ?? undefined,
           // Прогноз в запросе не участвует: он ведётся помесячно во вкладке
           // «Прогноз», а в эту сетку приходит сводом и только на чтение.
           investments_pct: brand === null ? null : parseNumberInput(cell.investmentsPct),
@@ -222,6 +236,12 @@ export default function NetworkPlanGrid({
           // означают «оставить сохранённый», и бренд не переключается вслепую.
           entry_level: '',
           entry_unit: '',
+          // Крышка — у владельца порога; у валового бренда её нет, но
+          // хранить «open» безвредно. Ступени уходят всегда: черновик — полное
+          // состояние строки, пустой массив означает «ступеней нет».
+          cap_mode: cell.capMode,
+          cap_pct: cell.capMode === 'pct' ? parseNumberInput(cell.capPct) ?? undefined : undefined,
+          scales: scalesInput(cell),
           updated_at: versions.get(planKey(quarter, brand)) ?? '',
         });
       });
@@ -254,9 +274,33 @@ export default function NetworkPlanGrid({
 
   const view = dirty && previewQuery.data ? previewQuery.data : data;
   const totals = view.totals;
+  // Разрешённые ступени по кварталам — из настроек профиля.
+  const quarterScales = Object.fromEntries(QUARTERS.map((quarter) => [
+    quarter,
+    view.periods.find((p) => p.quarter === quarter)?.scales_count ?? data.network.default_scales_count ?? 1,
+  ])) as Record<number, number>;
+  const maxScales = Math.max(...Object.values(quarterScales));
+  const scaleMetric = yearMetric === 'plan' || yearMetric === 'pct' || yearMetric === 'investPlan';
+  const shownYearScale = scaleMetric && maxScales > 1 ? Math.min(yearScale, maxScales) : 1;
   const amounts = useMemo(() => buildAmounts(view.plans), [view.plans]);
   const periodTotals = period === 'year' ? view.year_totals : totals[period - 1];
   const periodLabel = period === 'year' ? `${data.year}` : `Q${period} ${data.year}`;
+  // Ступени для подписей сводки: достигнутая — у владельца порога квартала
+  // (пул, иначе наибольшая среди отдельных брендов); у года не показывается.
+  const summaryScaleInfo = useMemo(() => {
+    const scales = periodTotals.scales ?? [];
+    if (scales.length <= 1) return undefined;
+    const top = scales[scales.length - 1];
+    let reached: number | null = null;
+    if (period !== 'year') {
+      const rows = view.plans.filter((plan) => plan.quarter === period);
+      const pool = rows.find((plan) => plan.brand_as == null);
+      reached = pool
+        ? pool.forecast_scale
+        : rows.reduce((best, plan) => Math.max(best, plan.forecast_scale), 0);
+    }
+    return { count: scales.length, topPlanInvest: top.investments_rub || null, reached };
+  }, [periodTotals, period, view.plans]);
 
   const setCell = (quarter: number, brand: string | null, patch: Partial<DraftCell>) => {
     setDraft((prev) => {
@@ -307,24 +351,59 @@ export default function NetworkPlanGrid({
     setDirty(true);
   };
 
-  // Остаток валового объёма делим поровну между брендами, которые в него входят.
-  const distributeRest = (quarter: number) => {
+  // Остаток валового объёма делим поровну между брендами, которые в него
+  // входят. Ступень 1 — план строки, верхние — план бренда на ступени.
+  const distributeRest = (quarter: number, scaleNo: number) => {
     const total = totals[quarter - 1];
+    const rest = scaleNo === 1
+      ? total.undistributed
+      : total.scales?.find((s) => s.scale_no === scaleNo)?.undistributed ?? null;
     const grossBrands = brands.filter((b) => draft[planKey(quarter, b)]?.inGross);
-    if (!total.undistributed || grossBrands.length === 0) return;
-    const share = round2(total.undistributed / grossBrands.length);
+    if (!rest || grossBrands.length === 0) return;
+    const share = round2(rest / grossBrands.length);
     setDraft((prev) => {
       const next = { ...prev };
       grossBrands.forEach((brand) => {
         const key = planKey(quarter, brand);
         const current = next[key] ?? EMPTY_CELL;
-        const value = parseNumberInput(current.planRub) ?? 0;
-        next[key] = { ...current, planRub: String(round2(value + share)) };
+        if (scaleNo === 1) {
+          const value = parseNumberInput(current.planRub) ?? 0;
+          next[key] = { ...current, planRub: formatNumberInput(String(round2(value + share))) };
+          return;
+        }
+        const scale = current.scales.find((s) => s.scaleNo === scaleNo);
+        const value = parseNumberInput(scale?.planRub ?? '') ?? 0;
+        next[key] = withScale(current, scaleNo, { planRub: formatNumberInput(String(round2(value + share))), planUnits: '' });
       });
       return next;
     });
     setDirty(true);
   };
+
+  // ─── Ступени ────────────────────────────────────────────────────────────
+  const updateCell = (quarter: number, brand: string | null, update: (cell: DraftCell) => DraftCell) => {
+    setDraft((prev) => {
+      const key = planKey(quarter, brand);
+      return { ...prev, [key]: update(prev[key] ?? EMPTY_CELL) };
+    });
+    setDirty(true);
+  };
+
+  const setScale = (quarter: number, brand: string | null, scaleNo: number, patch: Partial<DraftScale>) =>
+    updateCell(quarter, brand, (cell) => withScale(cell, scaleNo, patch));
+
+  // Новая ступень заводится пустой: порог и процент вводит КАМ.
+  const addScale = (quarter: number, brand: string | null) =>
+    updateCell(quarter, brand, (cell) => {
+      const next = (upperScales(cell).at(-1)?.scaleNo ?? 1) + 1;
+      return withScale(cell, next, {});
+    });
+
+  const removeScale = (quarter: number, brand: string | null, scaleNo: number) =>
+    updateCell(quarter, brand, (cell) => withoutScale(cell, scaleNo));
+
+  const setSkus = (quarter: number, brand: string, scaleNo: number, skus: DraftSKU[]) =>
+    updateCell(quarter, brand, (cell) => withSkus(cell, scaleNo, skus));
 
   const handleSave = () => onSave(planRequest);
 
@@ -395,6 +474,20 @@ export default function NetworkPlanGrid({
             ))}
           </ToggleButtonGroup>
         )}
+        {period === 'year' && scaleMetric && maxScales > 1 && (
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            aria-label="Ступень"
+            sx={{ '& .MuiToggleButton-root': { textTransform: 'none', px: 1.5 } }}
+            value={shownYearScale}
+            onChange={(_, value) => value != null && setYearScale(value as number)}
+          >
+            {Array.from({ length: maxScales }, (_, i) => i + 1).map((no) => (
+              <ToggleButton key={no} value={no}>{no === 1 ? 'Ступень 1' : `${no}`}</ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        )}
 
         <Box sx={{ flex: 1 }} />
 
@@ -434,12 +527,14 @@ export default function NetworkPlanGrid({
         />
       )}
 
-      <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} />
+      <NetworkPlanSummary totals={periodTotals} periodLabel={periodLabel} scaleInfo={summaryScaleInfo} />
 
       {period === 'year' ? (
         <>
           <NetworkYearTable
             metric={yearMetric}
+            scale={shownYearScale}
+            quarterScales={quarterScales}
             brands={brands}
             draft={draft}
             amounts={amounts}
@@ -447,6 +542,7 @@ export default function NetworkPlanGrid({
             yearTotals={view.year_totals}
             canEdit={canEdit}
             onCellChange={setCell}
+            onScaleChange={setScale}
             onToggleGross={toggleGross}
             onRemoveBrand={removeBrand}
           />
@@ -459,7 +555,10 @@ export default function NetworkPlanGrid({
         </>
       ) : (
         <NetworkQuarterTable
+          networkId={data.network.id}
+          year={data.year}
           quarter={period}
+          quarterScales={view.periods.find((p) => p.quarter === period)?.scales_count ?? data.network.default_scales_count ?? 1}
           brands={brands}
           draft={draft}
           amounts={amounts}
@@ -467,10 +566,14 @@ export default function NetworkPlanGrid({
           canEdit={canEdit}
           commentedCells={commentedCells}
           onCellChange={(brand, patch) => setCell(period, brand, patch)}
+          onScaleChange={(brand, scaleNo, patch) => setScale(period, brand, scaleNo, patch)}
+          onAddScale={(brand) => addScale(period, brand)}
+          onRemoveScale={(brand, scaleNo) => removeScale(period, brand, scaleNo)}
+          onSkusChange={(brand, scaleNo, skus) => setSkus(period, brand, scaleNo, skus)}
           onToggleGross={(brand, next, allQuarters) => toggleGross(brand, next, allQuarters, period)}
           onRemoveBrand={removeBrand}
           onComment={(brand) => onCommentCell(period, brand)}
-          onDistributeRest={() => distributeRest(period)}
+          onDistributeRest={(scaleNo) => distributeRest(period, scaleNo)}
         />
       )}
 
@@ -487,6 +590,10 @@ export default function NetworkPlanGrid({
         с вычетом НДС по ставке из профиля сети показывается в подсказке ячейки. Факт объёма
         и факт инвестиций загружаются из отгрузок и в форме не редактируются. Объединение
         кварталов меняет только период оценки: исходные суммы каждого квартала остаются на месте.
+        Ступени контракта раскрываются под строкой бренда: достигнутая ступень — наивысшая,
+        чей порог закрыт объёмом области, процент берётся её; крышка владельца порога ограничивает
+        базу к оплате на последней ступени (открытая — весь объём, процентная — план × (1 + %),
+        закрытая — ровно план ступени), а исключения по SKU задаются в диалоге ступени.
         Годовой кумулятив показывается для сетей, где он включён в профиле. Условная часть
         доступна для доплаты после выполнения плана всего портфеля и соответствующего бренда
         или валового объёма; начисление «от факта» учитывается независимо от выполнения.

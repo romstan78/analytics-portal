@@ -222,6 +222,7 @@ func main() {
 		api.GET("/networks/dashboard", handlers.GetNetworkDashboard)
 		api.GET("/networks/:id/plan", handlers.NetworkAccessRequired(), handlers.GetNetworkPlan)
 		api.GET("/networks/:id/forecast", handlers.NetworkAccessRequired(), handlers.GetNetworkForecast)
+		api.GET("/networks/:id/sku-mix", handlers.NetworkAccessRequired(), handlers.GetNetworkSKUMix)
 		api.GET("/networks/:id/prices", handlers.NetworkAccessRequired(), handlers.GetNetworkPrices)
 		api.GET("/networks/:id/opex", handlers.NetworkAccessRequired(), handlers.GetNetworkOpex)
 		api.GET("/networks/:id/comments", handlers.NetworkAccessRequired(), handlers.GetNetworkComments)

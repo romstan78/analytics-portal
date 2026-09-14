@@ -282,6 +282,8 @@ type networkInput struct {
 	HasAnnualInvestmentCumulative *bool                `json:"has_annual_investment_cumulative"`
 	DefaultEntryLevel             *string              `json:"default_entry_level"`
 	DefaultEntryUnit              *string              `json:"default_entry_unit"`
+	DefaultScalesCount            *int                 `json:"default_scales_count"`
+	DefaultCapMode                *string              `json:"default_cap_mode"`
 	UpdatedAt                     string               `json:"updated_at"`
 	VATIncluded                   *bool                `json:"vat_included"`
 	VATRate                       *float64             `json:"vat_rate"`
@@ -299,6 +301,9 @@ type networkProfile struct {
 	// привычка, и сеть должна открываться сразу в ней.
 	DefaultEntryLevel string
 	DefaultEntryUnit  string
+	// Ступени контракта по умолчанию: число порогов и крышка новых строк.
+	DefaultScalesCount int
+	DefaultCapMode     string
 }
 
 // oneOf возвращает значение, если оно есть в списке допустимых.
@@ -360,6 +365,28 @@ func networkProfileSettings(input networkInput, fallback models.Network) (networ
 		return networkProfile{}, errors.New("единица ведения: rub или units")
 	}
 
+	scalesCount := fallback.DefaultScalesCount
+	if scalesCount <= 0 {
+		scalesCount = 1
+	}
+	if input.DefaultScalesCount != nil {
+		scalesCount = *input.DefaultScalesCount
+	}
+	if scalesCount < 1 || scalesCount > 3 {
+		return networkProfile{}, errors.New("число ступеней: от 1 до 3")
+	}
+	capMode := fallback.DefaultCapMode
+	if capMode == "" {
+		capMode = models.CapModeOpen
+	}
+	if input.DefaultCapMode != nil {
+		capMode = strings.TrimSpace(*input.DefaultCapMode)
+	}
+	capMode, capOK := oneOf(capMode, models.CapModeOpen, models.CapModePct, models.CapModeClosed)
+	if !capOK {
+		return networkProfile{}, errors.New("крышка по умолчанию: open, pct или closed")
+	}
+
 	return networkProfile{
 		Month1Pct:                     month1Pct,
 		Month2Pct:                     month2Pct,
@@ -367,6 +394,8 @@ func networkProfileSettings(input networkInput, fallback models.Network) (networ
 		HasAnnualInvestmentCumulative: hasAnnualInvestmentCumulative,
 		DefaultEntryLevel:             entryLevel,
 		DefaultEntryUnit:              entryUnit,
+		DefaultScalesCount:            scalesCount,
+		DefaultCapMode:                capMode,
 	}, nil
 }
 
@@ -398,6 +427,9 @@ type networkPeriodInput struct {
 	Quarter     int     `json:"quarter"`
 	VATIncluded bool    `json:"vat_included"`
 	VATRate     float64 `json:"vat_rate"`
+	// Число ступеней квартала. Отсутствует — клиент про ступени не знает,
+	// сохранённое значение квартала остаётся (сетка планов шлёт только НДС).
+	ScalesCount *int `json:"scales_count,omitempty"`
 }
 
 func networkPeriodsFromInput(
@@ -418,6 +450,12 @@ func networkPeriodsFromInput(
 		}
 		periods[requested.Quarter-1].VATIncluded = requested.VATIncluded
 		periods[requested.Quarter-1].VATRate = requested.VATRate
+		if requested.ScalesCount != nil {
+			if *requested.ScalesCount < 1 || *requested.ScalesCount > 3 {
+				return nil, errors.New("число ступеней квартала: от 1 до 3")
+			}
+			periods[requested.Quarter-1].ScalesCount = *requested.ScalesCount
+		}
 	}
 	return periods, nil
 }
@@ -471,6 +509,7 @@ func CreateNetwork(c *gin.Context) {
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
 		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
+		profile.DefaultScalesCount, profile.DefaultCapMode,
 	)
 	if err != nil {
 		respondNetworkError(c, err, "network_create_failed")
@@ -579,6 +618,7 @@ func UpdateNetwork(c *gin.Context) {
 		profile.Month1Pct, profile.Month2Pct, profile.Month3Pct,
 		profile.HasAnnualInvestmentCumulative,
 		profile.DefaultEntryLevel, profile.DefaultEntryUnit,
+		profile.DefaultScalesCount, profile.DefaultCapMode,
 		input.Year, profilePeriods,
 		input.UpdatedAt,
 	); err != nil {
@@ -625,6 +665,16 @@ func UpdateNetwork(c *gin.Context) {
 			"new": []string{profile.DefaultEntryLevel, profile.DefaultEntryUnit},
 		}
 	}
+	if current.DefaultScalesCount != profile.DefaultScalesCount {
+		changes["default_scales_count"] = map[string]interface{}{
+			"old": current.DefaultScalesCount, "new": profile.DefaultScalesCount,
+		}
+	}
+	if current.DefaultCapMode != profile.DefaultCapMode {
+		changes["default_cap_mode"] = map[string]interface{}{
+			"old": current.DefaultCapMode, "new": profile.DefaultCapMode,
+		}
+	}
 	if input.Periods != nil {
 		previousWithDefaults := networkPeriodsWithDefaults(current, input.Year, previousProfilePeriods)
 		storedByQuarter := make(map[int]models.NetworkPeriod, len(previousWithDefaults))
@@ -641,6 +691,11 @@ func UpdateNetwork(c *gin.Context) {
 			if old.VATRate != period.VATRate {
 				changes[fmt.Sprintf("vat_rate_q%d", period.Quarter)] = map[string]interface{}{
 					"old": old.VATRate, "new": period.VATRate,
+				}
+			}
+			if old.ScalesCount != period.ScalesCount {
+				changes[fmt.Sprintf("scales_count_q%d", period.Quarter)] = map[string]interface{}{
+					"old": old.ScalesCount, "new": period.ScalesCount,
 				}
 			}
 		}
@@ -673,6 +728,35 @@ func rebuildInvestmentColumns(networkID, year int) {
 	}
 }
 
+// planRollupInputs — помесячный слой, из которого сводятся факт, EAC и объёмы
+// SKU для квартальной сетки.
+type planRollupInputs struct {
+	facts     []models.NetworkMonthlyFact
+	forecasts []models.NetworkForecastLine
+	promos    []models.NetworkPromoIndicator
+	prices    []models.NetworkContractPrice
+}
+
+func loadPlanRollupInputs(network models.Network, year int) (planRollupInputs, error) {
+	var in planRollupInputs
+	var err error
+	// Прошлый год нужен системной рекомендации: открытый месяц без введённого
+	// прогноза оценивается по своему месяцу год назад.
+	if in.facts, err = repository.GetNetworkMonthlyFacts(network.ID, year-1, year); err != nil {
+		return in, err
+	}
+	if in.forecasts, err = repository.GetNetworkForecastLines(network.ID, year, repository.AllQuarters); err != nil {
+		return in, err
+	}
+	if in.promos, err = repository.GetNetworkPromoIndicators(network.Name, year, repository.AllQuarters); err != nil {
+		return in, err
+	}
+	if in.prices, err = repository.GetNetworkContractPrices(network.ID, year); err != nil {
+		return in, err
+	}
+	return in, nil
+}
+
 // planForecastRollup подставляет в строки плана факт и EAC из помесячного слоя.
 // Три входа во вкладку «План и факт» — чтение, пересчёт черновика и ответ на
 // сохранение — обязаны показывать одни и те же числа, поэтому свод у них общий.
@@ -683,27 +767,46 @@ func planForecastRollup(
 	periods []models.NetworkPeriod,
 	groups []models.NetworkPeriodGroup,
 ) ([]models.NetworkPlan, error) {
-	// Прошлый год нужен системной рекомендации: открытый месяц без введённого
-	// прогноза оценивается по своему месяцу год назад.
-	facts, err := repository.GetNetworkMonthlyFacts(network.ID, year-1, year)
-	if err != nil {
-		return nil, err
-	}
-	forecasts, err := repository.GetNetworkForecastLines(network.ID, year, repository.AllQuarters)
-	if err != nil {
-		return nil, err
-	}
-	promos, err := repository.GetNetworkPromoIndicators(network.Name, year, repository.AllQuarters)
-	if err != nil {
-		return nil, err
-	}
-	prices, err := repository.GetNetworkContractPrices(network.ID, year)
+	in, err := loadPlanRollupInputs(network, year)
 	if err != nil {
 		return nil, err
 	}
 	return services.ApplyForecastRollup(
-		network, year, plans, periods, facts, forecasts, promos, prices, groups, time.Now(),
+		network, year, plans, periods, in.facts, in.forecasts, in.promos, in.prices, groups, time.Now(),
 	), nil
+}
+
+// rebuildPlanPairsYear закрепляет пару «рубли / упаковки» плана после
+// сохранения плана или правки цен. Ошибка не отменяет ответ: введённое уже
+// сохранено, а пара — денормализация, которую починит ближайший пересчёт.
+func rebuildPlanPairsYear(networkID, year int) {
+	if _, err := services.RebuildNetworkPlanPairsYear(networkID, year); err != nil {
+		config.Logger.Error("network_plan_pair_rebuild_failed",
+			"network_id", networkID, "year", year, "error", err.Error())
+	}
+}
+
+// draftScales переводит ступени запроса в строки расчёта черновика.
+// nil остаётся nil: это клиент, который про ступени не знает.
+func draftScales(input []repository.NetworkPlanScaleInput) []models.NetworkPlanScale {
+	if input == nil {
+		return nil
+	}
+	scales := make([]models.NetworkPlanScale, 0, len(input))
+	for _, scale := range input {
+		skus := make([]models.NetworkPlanScaleSKU, 0, len(scale.SKUs))
+		for _, sku := range scale.SKUs {
+			skus = append(skus, models.NetworkPlanScaleSKU{
+				SKU: strings.TrimSpace(sku.SKU), PlanRub: sku.PlanRub, PlanUnits: sku.PlanUnits,
+				InvestmentsPct: sku.InvestmentsPct, CapMode: sku.CapMode, CapPct: sku.CapPct,
+			})
+		}
+		scales = append(scales, models.NetworkPlanScale{
+			ScaleNo: scale.ScaleNo, PlanRub: scale.PlanRub, PlanUnits: scale.PlanUnits,
+			InvestmentsPct: scale.InvestmentsPct, SKUs: skus, UpdatedAt: scale.UpdatedAt,
+		})
+	}
+	return scales
 }
 
 func GetNetworkPlan(c *gin.Context) {
@@ -809,6 +912,9 @@ func SaveNetworkPlan(c *gin.Context) {
 	if diff != "" {
 		_ = repository.InsertEntityAuditLog("network_plan", id, username, "UPDATE", diff)
 	}
+	// Пара «рубли / упаковки» закрепляется до чтения назад: правило считает
+	// в рублях, а план мог прийти в упаковках.
+	rebuildPlanPairsYear(id, input.Year)
 
 	updatedPeriods, err := repository.GetNetworkPeriods(id, input.Year)
 	if err != nil {
@@ -900,10 +1006,14 @@ func PreviewNetworkPlan(c *gin.Context) {
 			BrandAS:        p.BrandAS,
 			InGross:        p.InGross,
 			PlanRub:        p.PlanRub,
+			PlanUnits:      p.PlanUnits,
 			InvestmentsPct: p.InvestmentsPct,
 			Month1Pct:      network.Month1Pct,
 			Month2Pct:      network.Month2Pct,
 			Month3Pct:      network.Month3Pct,
+			CapMode:        p.CapMode,
+			CapPct:         p.CapPct,
+			Scales:         draftScales(p.Scales),
 		})
 		if p.BrandAS != nil {
 			allowedBrands[strings.TrimSpace(*p.BrandAS)] = true
@@ -924,19 +1034,26 @@ func PreviewNetworkPlan(c *gin.Context) {
 	}
 
 	// Факт и прогноз в черновик не входят: они считаются из помесячного слоя,
-	// поэтому берутся из сохранённых строк, а не из тела запроса.
+	// поэтому берутся из сохранённых строк, а не из тела запроса. Свод идёт по
+	// уже слитой сетке: объёмы SKU нужны на ступенях черновика, а не сохранённых.
 	stored, err := repository.GetNetworkPlans(id, input.Year)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_preview_failed")
 		return
 	}
-	stored, err = planForecastRollup(network, input.Year, stored, periods, periodGroups)
+	plans := services.MergeNetworkPlanDraft(draft, stored)
+	rollup, err := loadPlanRollupInputs(network, input.Year)
 	if err != nil {
 		respondNetworkError(c, err, "network_plan_rollup_failed")
 		return
 	}
-
-	plans, _, _ := services.PreviewNetworkPlans(draft, stored, periods)
+	// Пара в памяти: план, введённый в упаковках, обязан показать рубли и
+	// инвестиции до сохранения — ровно те, что получатся после.
+	plans = services.CompleteNetworkPlanPairs(network, input.Year, plans, rollup.prices, rollup.facts)
+	plans = services.ApplyForecastRollup(
+		network, input.Year, plans, periods,
+		rollup.facts, rollup.forecasts, rollup.promos, rollup.prices, periodGroups, time.Now(),
+	)
 	plans, totals := services.BuildNetworkPlanCalculations(plans, periods, periodGroups)
 	yearTotals := services.SumYearTotals(totals)
 	c.JSON(http.StatusOK, models.NetworkPlanPreviewResponse{
@@ -949,6 +1066,38 @@ func PreviewNetworkPlan(c *gin.Context) {
 		PeriodGroupTotals:          services.CalculateNetworkPeriodGroupTotals(periodGroups, plans, totals),
 		AnnualInvestmentCumulative: services.CalculateNetworkAnnualInvestmentCumulativeForNetwork(network, plans, periods, totals),
 	})
+}
+
+// GetNetworkSKUMix — доли SKU бренда за квартал по историческому миксу:
+// диалог ступени раскладывает ими план бренда по SKU.
+func GetNetworkSKUMix(c *gin.Context) {
+	id, ok := networkIDParam(c)
+	if !ok {
+		return
+	}
+	year, ok := planYear(c)
+	if !ok {
+		return
+	}
+	quarter, ok := planQuarter(c)
+	if !ok {
+		return
+	}
+	brand := strings.TrimSpace(c.Query("brand"))
+	if brand == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Не указан бренд"})
+		return
+	}
+	if _, err := repository.GetNetworkByID(id); err != nil {
+		respondNetworkError(c, err, "network_sku_mix_fetch_failed")
+		return
+	}
+	response, err := services.LoadNetworkSKUMix(id, year, quarter, brand)
+	if err != nil {
+		respondNetworkError(c, err, "network_sku_mix_failed")
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // ─── Помесячный прогноз ─────────────────────────────────────────────────────
@@ -1177,6 +1326,10 @@ func SaveNetworkPrices(c *gin.Context) {
 		return
 	}
 	rebuildForecastPairsYear(id, input.Year)
+	// План в упаковках считается по тем же ценам: пара плана и зеркало
+	// инвестиций (рублёвые пороги могли сдвинуться) идут следом.
+	rebuildPlanPairsYear(id, input.Year)
+	rebuildInvestmentColumns(id, input.Year)
 	skuOptions, err := repository.GetNetworkPriceSKUOptions()
 	if err != nil {
 		respondNetworkError(c, err, "network_price_sku_options_failed")

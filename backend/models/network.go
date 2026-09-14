@@ -16,10 +16,15 @@ type Network struct {
 	// Режим ведения для брендов, которых в плане ещё нет: уровень ввода
 	// (brand | sku) и единица (rub | units). У каждого КАМа своя привычка,
 	// поэтому сеть открывается сразу в ней, а бренд может её переопределить.
-	DefaultEntryLevel string  `json:"default_entry_level"`
-	DefaultEntryUnit  string  `json:"default_entry_unit"`
-	CreatedAt         *string `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
+	DefaultEntryLevel string `json:"default_entry_level"`
+	DefaultEntryUnit  string `json:"default_entry_unit"`
+	// Ступени контракта по умолчанию: сколько порогов у плана (1–3) и какая
+	// крышка перевыполнения ставится новым строкам. Квартал может отличаться
+	// (NetworkPeriod.ScalesCount), бренд — иметь меньше ступеней, чем сеть.
+	DefaultScalesCount int     `json:"default_scales_count"`
+	DefaultCapMode     string  `json:"default_cap_mode"` // open | pct | closed
+	CreatedAt          *string `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 // NetworkPeriod сохраняется для совместимости с существующими данными и API.
@@ -33,7 +38,92 @@ type NetworkPeriod struct {
 	Quarter     int     `json:"quarter"`
 	VATIncluded bool    `json:"vat_included"`
 	VATRate     float64 `json:"vat_rate"`
-	UpdatedAt   string  `json:"updated_at"`
+	// Число ступеней в квартале. В базе NULL означает «как в профиле сети»;
+	// наружу отдаётся уже разрешённое значение (NetworkPeriodsWithDefaults).
+	ScalesCount int    `json:"scales_count"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// ─── Ступени контракта ──────────────────────────────────────────────────────
+//
+// Ступень — порог объёма и процент инвестиций за него. Достигнутая ступень —
+// наивысшая, чей порог закрыт объёмом области (пула, бренда, объединённого
+// периода); процент берётся её. Ступень 1 — сегодняшний план строки: её порог
+// и процент дублируют plan_rub и investments_pct, источник — строка плана.
+//
+// Крышка перевыполнения задаётся владельцу порога (NetworkPlan.CapMode) и
+// ограничивает базу, на которую начисляется процент:
+//   open   — весь объём;
+//   pct    — на последней ступени не больше план × (1 + CapPct/100);
+//   closed — не больше плана достигнутой ступени (min(объём, план)), коридоры
+//            не оплачиваются.
+// Между ступенями коридор оплачивается полностью: объём, дошедший до следующего
+// порога, уже считается по следующей ступени.
+
+// Режимы крышки. Значения совпадают с CHECK-ограничением миграции 032.
+const (
+	CapModeOpen   = "open"
+	CapModePct    = "pct"
+	CapModeClosed = "closed"
+)
+
+// NetworkPlanScaleSKU — SKU бренда на ступени. Строки заводятся только там,
+// где раскладка по SKU меняет результат: крышка не «открытая» или процент
+// SKU отличается от бренда. Пустой процент и пустая крышка — «как у бренда».
+//
+// Расчётные поля считаются «как если бы эта ступень была достигнутой»:
+// какая достигнута на самом деле, говорит строка плана (ForecastScale, FactScale).
+type NetworkPlanScaleSKU struct {
+	ID             int64    `json:"id"`
+	SKU            string   `json:"sku"`
+	PlanRub        *float64 `json:"plan_rub"`   // план SKU на ступени — пара с PlanUnits
+	PlanUnits      *float64 `json:"plan_units"` // по цене контракта (см. entry_unit бренда)
+	InvestmentsPct *float64 `json:"investments_pct"`
+	CapMode        string   `json:"cap_mode"` // "" — как у владельца порога
+	CapPct         *float64 `json:"cap_pct"`
+
+	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
+	PlanInvestmentsNet     *float64 `json:"plan_investments_rub_net"`
+	ForecastRub            *float64 `json:"forecast_rub"` // EAC SKU за квартал
+	ForecastBaseRub        *float64 `json:"forecast_base_rub"`
+	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
+	ForecastInvestmentsNet *float64 `json:"forecast_investments_rub_net"`
+	FactRub                *float64 `json:"fact_rub"`
+	FactBaseRub            *float64 `json:"fact_base_rub"`
+	FactInvestmentsRub     *float64 `json:"fact_investments_rub"`
+	FactInvestmentsNet     *float64 `json:"fact_investments_rub_net"`
+	UpdatedAt              string   `json:"updated_at"`
+}
+
+// NetworkPlanScale — ступень строки плана. PlanRub — порог ступени у пула и
+// отдельного бренда; у валового бренда — его план на этой ступени, введённый
+// руками (порог валового контракта меряется по пулу).
+type NetworkPlanScale struct {
+	ID             int64    `json:"id"`
+	ScaleNo        int      `json:"scale_no"` // 1–3
+	PlanRub        *float64 `json:"plan_rub"`
+	PlanUnits      *float64 `json:"plan_units"`
+	InvestmentsPct *float64 `json:"investments_pct"` // у пула не ведётся
+	// Процент, по которому ступень считается: свой либо унаследованный от
+	// ступени ниже, если свой не задан. Расчётное поле, не хранится.
+	EffectiveInvestmentsPct *float64 `json:"effective_investments_pct"`
+
+	PlanInvestmentsRub     *float64 `json:"plan_investments_rub"`
+	PlanInvestmentsNet     *float64 `json:"plan_investments_rub_net"`
+	ForecastRub            *float64 `json:"forecast_rub"` // EAC области или бренда
+	ForecastBaseRub        *float64 `json:"forecast_base_rub"`
+	ForecastInvestmentsRub *float64 `json:"forecast_investments_rub"`
+	ForecastInvestmentsNet *float64 `json:"forecast_investments_rub_net"`
+	ForecastReached        bool     `json:"forecast_reached"`
+	FactRub                *float64 `json:"fact_rub"`
+	FactBaseRub            *float64 `json:"fact_base_rub"`
+	FactInvestmentsRub     *float64 `json:"fact_investments_rub"`
+	FactInvestmentsNet     *float64 `json:"fact_investments_rub_net"`
+	FactReached            bool     `json:"fact_reached"`
+
+	SKUs      []NetworkPlanScaleSKU `json:"skus"`
+	UpdatedBy *string               `json:"updated_by"`
+	UpdatedAt string                `json:"updated_at"`
 }
 
 // NetworkPlan — строка плана: бренд на квартал.
@@ -56,15 +146,33 @@ type NetworkPlan struct {
 	EntryUnit  string `json:"entry_unit"`
 	// Для совместимости распределение остаётся в строке ответа, но его единый
 	// источник — профиль Network, а не отдельный план бренда или квартала.
-	Month1Pct   float64  `json:"month1_pct"`
-	Month2Pct   float64  `json:"month2_pct"`
-	Month3Pct   float64  `json:"month3_pct"`
-	FactRub     *float64 `json:"fact_rub"` // факт отгрузок, заполняется загрузкой
-	ForecastRub *float64 `json:"forecast_rub"`
+	Month1Pct      float64  `json:"month1_pct"`
+	Month2Pct      float64  `json:"month2_pct"`
+	Month3Pct      float64  `json:"month3_pct"`
+	FactRub        *float64 `json:"fact_rub"` // факт отгрузок, заполняется загрузкой
+	ForecastRub    *float64 `json:"forecast_rub"`
 	InvestmentsPct *float64 `json:"investments_pct"`
 	// Оплата от факта — безусловный режим для конкретных бренда и квартала:
 	// порога выполнения нет, сумма считается процентом от ТО.
 	PayInvestmentsFromFact bool `json:"pay_investments_from_fact"`
+
+	// ─── Ступени и крышка ───────────────────────────────────────────────
+	//
+	// Крышка перевыполнения — свойство владельца порога: у валового контракта
+	// это строка пула, у отдельного бренда — его строка. У валового бренда
+	// крышки нет — он берёт её у пула; SKU может переопределить.
+	CapMode string   `json:"cap_mode"` // open | pct | closed; "" читается как open
+	CapPct  *float64 `json:"cap_pct"`
+	// Ступени строки. Ступень 1 дублирует plan_rub / investments_pct — источник
+	// ступени 1 всегда строка плана, здесь она ради целостной лестницы.
+	Scales []NetworkPlanScale `json:"scales"`
+	// Итог правила: какая ступень достигнута (0 — ни одна) и база, на которую
+	// начислен процент после крышки. Без базы ноль от закрытой крышки
+	// неотличим от невыполнения.
+	ForecastScale   int      `json:"forecast_scale"`
+	FactScale       int      `json:"fact_scale"`
+	ForecastBaseRub *float64 `json:"forecast_base_rub"`
+	FactBaseRub     *float64 `json:"fact_base_rub"`
 
 	// ─── Инвестиции: три показателя, каждый в двух базах ────────────────
 	//
@@ -147,6 +255,24 @@ type NetworkPlanTotals struct {
 	EACRub                    float64  `json:"eac_rub"`
 	CompletionPct             *float64 `json:"completion_pct"`
 	Completed                 bool     `json:"completed"`
+
+	// План квартала по ступеням. Ступень 1 повторяет поля выше; верхние
+	// ступени появляются, когда хоть одна строка квартала их завела.
+	Scales []NetworkPlanScaleTotals `json:"scales"`
+}
+
+// NetworkPlanScaleTotals — план квартала на одной ступени: порог пула, планы
+// брендов и остаток к распределению. Остаток считается по каждой ступени —
+// валовые бренды распределяют порог каждой из них.
+type NetworkPlanScaleTotals struct {
+	ScaleNo           int      `json:"scale_no"`
+	GrossPoolRub      *float64 `json:"gross_pool_rub"`
+	GrossBrandsPlan   float64  `json:"gross_brands_plan"`
+	SeparatePlanRub   float64  `json:"separate_plan_rub"`
+	ContractPlanRub   float64  `json:"contract_plan_rub"`
+	Undistributed     *float64 `json:"undistributed"`
+	InvestmentsRub    float64  `json:"investments_rub"` // плановые инвестиции ступени
+	InvestmentsRubNet float64  `json:"investments_rub_net"`
 }
 
 // NetworkPeriodGroup — правило совместного зачёта смежных кварталов.
@@ -182,9 +308,9 @@ type NetworkPeriodGroupTotals struct {
 	ForecastInvestmentsRubNet float64  `json:"forecast_investments_rub_net"`
 	FactInvestmentsRub        float64  `json:"fact_investments_rub"`
 	FactInvestmentsRubNet     float64  `json:"fact_investments_rub_net"`
-	EACRub        float64  `json:"eac_rub"`
-	CompletionPct *float64 `json:"completion_pct"`
-	Completed     bool     `json:"completed"`
+	EACRub                    float64  `json:"eac_rub"`
+	CompletionPct             *float64 `json:"completion_pct"`
+	Completed                 bool     `json:"completed"`
 }
 
 // NetworkAnnualInvestmentRow — одна область годового кумулятива: общий
@@ -411,12 +537,20 @@ type NetworkForecastMonth struct {
 	PromoUpliftRub         float64  `json:"promo_uplift_rub"`
 	IsClosed               bool     `json:"is_closed"`
 	IsCurrent              bool     `json:"is_current"`
-	UpdatedAt              string   `json:"updated_at"`
+	// Ступени: какая достигнута прогнозом за квартал, база после крышки и
+	// смешанная ставка квартала (итог правила к EAC), которой считаются
+	// открытые месяцы. Заполняются у строки бренда.
+	ForecastScale           int      `json:"forecast_scale"`
+	ForecastBaseRub         *float64 `json:"forecast_base_rub"`
+	EffectiveInvestmentsPct *float64 `json:"effective_investments_pct"`
+	UpdatedAt               string   `json:"updated_at"`
 }
 
 // NetworkForecastBrandTotals — итог одной строки бренда за выбранный квартал.
 type NetworkForecastBrandTotals struct {
 	BrandAS               string   `json:"brand_as"`
+	ForecastScale         int      `json:"forecast_scale"`
+	ForecastBaseRub       *float64 `json:"forecast_base_rub"`
 	PlanRub               float64  `json:"plan_rub"`
 	FactRub               float64  `json:"fact_rub"`
 	FactUnits             float64  `json:"fact_units"`
@@ -560,6 +694,22 @@ type NetworkOpexResponse struct {
 type NetworkOpexSaveResponse struct {
 	Message string              `json:"message"`
 	Data    NetworkOpexResponse `json:"data"`
+}
+
+// NetworkSKUMixShare — доля SKU в бренде по историческому миксу.
+type NetworkSKUMixShare struct {
+	SKU   string  `json:"sku"`
+	Share float64 `json:"share"` // 0…1, сумма долей по бренду — единица
+}
+
+// NetworkSKUMixResponse — микс SKU бренда за квартал: та же эвристика, что
+// раскладывает прогноз бренда без детализации на SKU, усреднённая по месяцам
+// квартала. Нужен диалогу ступени, чтобы разложить план бренда по SKU.
+type NetworkSKUMixResponse struct {
+	BrandAS string               `json:"brand_as"`
+	Year    int                  `json:"year"`
+	Quarter int                  `json:"quarter"`
+	Data    []NetworkSKUMixShare `json:"data"`
 }
 
 // NetworkContractPrice — цена договора с периодом действия и последней
