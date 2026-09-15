@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import { promoAPI } from '../api/promo';
 import { formatRubShort } from '../utils/networkPlan';
+import { promoStatusColor } from '../utils/promoStatus';
 
 const MONTH_LABELS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
@@ -32,22 +33,6 @@ const units = (value: number | null): string =>
 const pct = (value: number | null): string =>
   value == null ? '—' : `${value.toFixed(1)}%`;
 
-// Цвет статуса промо. Берётся собственный статус строки, а не ступени
-// согласования: в списке промо они приходят текстом свободной формы, и
-// разбирать его здесь значило бы гадать.
-function statusColor(status: string | null): 'success' | 'warning' | 'info' | 'default' {
-  switch ((status ?? '').toLowerCase()) {
-    case 'проведено':
-    case 'финализировано':
-      return 'success';
-    case 'в процессе согласования':
-      return 'warning';
-    case 'в процессе':
-      return 'info';
-    default:
-      return 'default';
-  }
-}
 
 export default function NetworkPromoDetail({ networkName, brand, year, months }: Props) {
   const query = useQuery({
@@ -121,7 +106,7 @@ export default function NetworkPromoDetail({ networkName, brand, year, months }:
                   <Chip
                     size="small"
                     variant="outlined"
-                    color={statusColor(row.status)}
+                    color={promoStatusColor(row.status)}
                     label={row.status || '—'}
                     sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
                   />

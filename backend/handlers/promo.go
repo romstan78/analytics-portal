@@ -659,6 +659,9 @@ func applyJSONToRow(r *models.PromoRowDB, input map[string]interface{}) {
 // respondExistingPromo отдаёт запись, созданную прошлой попыткой с тем же
 // ключом идемпотентности. Ответ повторяет обычный ответ на создание: для
 // клиента повтор ничем не отличается от первого удачного сохранения.
+// Текст один и для создания, и для правки: фронт показывает его как есть.
+const promoFactLockedMessage = "Факт можно вносить только после финализации промо (оба согласования получены)"
+
 func respondExistingPromo(c *gin.Context, promoID int) {
 	row, err := repository.FetchExistingRow(promoID)
 	if err != nil {
@@ -758,8 +761,17 @@ func SavePromo(c *gin.Context) {
 				}
 			}
 
-			// Пересчитываем вычисляемые поля
+			// Факт вносится только после финализации: статус берём из базы,
+			// клиент его не задаёт. Иначе КАМ закрывал бы промо, минуя
+			// согласование.
+			oldDTO := services.DBRowToDTO(&oldRow)
 			recalcDTO := services.DBRowToDTO(row)
+			if services.PromoFactChanged(&oldDTO, &recalcDTO) && !services.PromoFactEditable(oldRow.Status) {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": promoFactLockedMessage})
+				return
+			}
+
+			// Пересчитываем вычисляемые поля
 			calcCtx := services.EnrichFromRepo(&recalcDTO)
 			calc := services.CalculateFields(&recalcDTO, calcCtx)
 			services.MergeCalculatedIntoDBRow(row, calc)
@@ -825,6 +837,12 @@ func SavePromo(c *gin.Context) {
 	}
 
 	dto := services.MapToDTO(input)
+	if services.PromoFactProvided(&dto) {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": promoFactLockedMessage})
+		return
+	}
+	// Новое промо всегда начинает с согласования, что бы ни прислал клиент.
+	dto.Status = services.PromoStatusInApproval
 	calcCtx := services.EnrichFromRepo(&dto)
 	calc := services.CalculateFields(&dto, calcCtx)
 	row := services.DTOToDBRow(dto, calc)
