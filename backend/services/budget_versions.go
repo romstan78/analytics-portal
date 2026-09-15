@@ -67,11 +67,7 @@ func budgetRebuild(r *models.BudgetResponse, f BudgetFilter) {
 		budgetExtraTotals(b)
 	}
 	r.Total = budgetBrand("Итого", 0, total, f)
-	for _, b := range r.Brands {
-		r.Total.Networks = append(r.Total.Networks, b.Networks...)
-	}
-	budgetExtraTotals(&r.Total)
-	r.Total.Networks = []models.BudgetBrand{}
+	budgetPortfolioExtraTotals(r)
 }
 func budgetApplyLines(r *models.BudgetResponse, lines []repository.BudgetStoredLine, f BudgetFilter) {
 	for _, l := range lines {

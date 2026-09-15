@@ -181,6 +181,9 @@ func renderBudgetExcel(f BudgetFilter, code, compare, delta, who string, r *mode
 		}
 	}
 	for i := range r.Brands {
+		if r.Brands[i].Brand == "Нераспределённый остаток пула" {
+			continue
+		}
 		writeBrand(&r.Brands[i], 0, false)
 		expanded := false
 		for _, brand := range f.ExpandedBrands {

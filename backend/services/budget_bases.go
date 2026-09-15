@@ -40,6 +40,21 @@ func budgetExtraTotals(b *models.BudgetBrand) {
 		}
 	}
 }
+
+// The undistributed contract pool has no SKU quantities and cannot be valued at
+// OLAP prices. It is not a missing price for a real brand and must not invalidate
+// the portfolio's OLAP totals. Keep missing values for real brands unchanged.
+func budgetPortfolioExtraTotals(r *models.BudgetResponse) {
+	r.Total.Networks = []models.BudgetBrand{}
+	for _, b := range r.Brands {
+		if b.Brand != "Нераспределённый остаток пула" {
+			r.Total.Networks = append(r.Total.Networks, b.Networks...)
+		}
+	}
+	budgetExtraTotals(&r.Total)
+	r.Total.Networks = []models.BudgetBrand{}
+}
+
 func budgetPresentation(r *models.BudgetResponse, f BudgetFilter) {
 	apply := func(b *models.BudgetBrand) {
 		if f.Base == "reg-olap" {
@@ -241,10 +256,5 @@ func addBudgetBases(r *models.BudgetResponse, data repository.NetworkDashboardDa
 	for i := range r.Brands {
 		budgetExtraTotals(&r.Brands[i])
 	}
-	r.Total.Networks = []models.BudgetBrand{}
-	for _, b := range r.Brands {
-		r.Total.Networks = append(r.Total.Networks, b.Networks...)
-	}
-	budgetExtraTotals(&r.Total)
-	r.Total.Networks = []models.BudgetBrand{}
+	budgetPortfolioExtraTotals(r)
 }

@@ -201,3 +201,46 @@ func TestBudgetAnnualSupplementUsesRegistryPayments(t *testing.T) {
 		t.Fatalf("expected Q4 remaining 20 and annual 50, got %v / %v", *r.Total.GtnContract.Q[3].A, *r.Total.GtnContract.Year.A)
 	}
 }
+
+func TestBudgetOlapPortfolioIgnoresUnpricedPoolInLiveAndSnapshot(t *testing.T) {
+	f := BudgetFilter{Year: 2026, Base: "reg-olap"}
+	makeResponse := func(turnover, investment float64) *models.BudgetResponse {
+		var amounts [4]budgetAmounts
+		for q := range amounts {
+			amounts[q] = budgetAmounts{to: 100, gtn: investment}
+		}
+		n := budgetBrand("Сеть", 1, amounts, f)
+		for q := range n.OlapTo.Q {
+			n.OlapTo.Q[q].A = models.PtrFloat(turnover)
+		}
+		brand := budgetBrand("Бренд", 0, [4]budgetAmounts{}, f)
+		brand.Networks = []models.BudgetBrand{n}
+		pool := budgetBrand("Нераспределённый остаток пула", 0, [4]budgetAmounts{}, f)
+		pool.Networks = []models.BudgetBrand{budgetBrand("Сеть", 1, [4]budgetAmounts{{to: 10}, {to: -5}, {to: 15}, {to: 20}}, f)}
+		r := &models.BudgetResponse{Brands: []models.BudgetBrand{brand, pool}}
+		budgetRebuild(r, f)
+		return r
+	}
+	a, b := makeResponse(200, 20), makeResponse(160, 24)
+	clone := &models.BudgetResponse{Brands: []models.BudgetBrand{}}
+	budgetApplyLines(clone, budgetSnapshot(b, b), f)
+	budgetPresentation(a, f)
+	budgetPresentation(clone, f)
+	budgetCompare(a, clone, "abs")
+	for q := 0; q < 4; q++ {
+		if valueOrZero(a.Total.To.Q[q].Delta) != 40 || valueOrZero(a.Total.Pct.Q[q].Delta) != -5 {
+			t.Fatalf("Q%d: missing or wrong portfolio delta: TO=%+v pct=%+v", q+1, a.Total.To.Q[q], a.Total.Pct.Q[q])
+		}
+	}
+	if valueOrZero(a.Total.To.Year.Delta) != 160 || valueOrZero(a.Total.Pct.Year.Delta) != -5 {
+		t.Fatal("wrong annual delta")
+	}
+	// A missing price for an actual brand must still make the total unavailable.
+	missing := makeResponse(200, 20)
+	missing.Brands[0].Networks[0].OlapTo.Q[0].A = nil
+	budgetRebuild(missing, f)
+	budgetPresentation(missing, f)
+	if missing.Total.To.Q[0].A != nil || missing.Total.Pct.Q[0].A != nil || missing.Total.To.Year.A != nil {
+		t.Fatal("real missing OLAP price was silently ignored")
+	}
+}
