@@ -2,10 +2,10 @@ package main
 
 import "testing"
 
-// Список ролей обязан совпадать с CK8_Users_role в базе: значение, прошедшее
+// Список ролей обязан совпадать с CK33_Users_role в базе: значение, прошедшее
 // проверку здесь, но отвергнутое ограничением, падало бы уже на вставке.
 func TestAllowedBootstrapRoles(t *testing.T) {
-	for _, role := range []string{"admin", "agreement1", "agreement2", "kam"} {
+	for _, role := range []string{"admin", "analyst", "agreement1", "agreement2", "kam"} {
 		if !allowedBootstrapRole(role) {
 			t.Fatalf("роль %q должна приниматься", role)
 		}

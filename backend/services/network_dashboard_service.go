@@ -431,10 +431,11 @@ type networkSKUTotals struct {
 }
 
 type networkSlice struct {
-	quarterTotals map[int]models.NetworkPlanTotals
-	quarterCells  map[int]dashboardCells
-	quarterUnits  map[int]unitTotals
-	brandValues   map[string]*networkDashboardValues
+	calculatedPlans []models.NetworkPlan
+	quarterTotals   map[int]models.NetworkPlanTotals
+	quarterCells    map[int]dashboardCells
+	quarterUnits    map[int]unitTotals
+	brandValues     map[string]*networkDashboardValues
 
 	// Разрез «бренд × квартал» — основа разбора одной сети. Наружу отдаётся
 	// только для неё, но считается всегда: это тот же обход строк плана.
@@ -793,6 +794,7 @@ func buildNetworkSlice(
 		monthInvest:                map[int]monthInvestments{},
 		monthCells:                 monthCells,
 		annualInvestmentCumulative: annualInvestmentCumulative,
+		calculatedPlans:            enriched,
 	}
 	for _, total := range totals {
 		if !quarters[total.Quarter] {

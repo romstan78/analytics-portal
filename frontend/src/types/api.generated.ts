@@ -4,6 +4,113 @@
 // Пересобрать: make types (из корня проекта).
 // CI проверяет, что файл совпадает с исходниками: make types-check.
 
+export interface BudgetCell {
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  mark: string;
+  editable: boolean;
+  edited: BudgetEdit | null;
+}
+
+export interface BudgetEdit {
+  base: number;
+  value: number;
+  who: string;
+  when: string;
+}
+
+export interface BudgetSources {
+  to: string[];
+  investments: string[];
+}
+
+export interface BudgetVersion {
+  id: number;
+  year: number;
+  code: string;
+  name: string;
+  status: string;
+  frozenAt: string;
+  createdBy: string;
+  updatedAt: string;
+  sources: BudgetSources;
+}
+
+export interface BudgetPromo {
+  id: number;
+  networkId: number;
+  network: string;
+  brand: string;
+  quarter: number;
+  month: number;
+  type: string;
+  status: string;
+  mechanics: string;
+  planRub: number;
+  factRub: number;
+  budgetRub: number;
+  budgetNet: number;
+  included: boolean;
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  change: string;
+}
+
+export interface BudgetPromoResponse {
+  data: BudgetPromo[];
+  total: number;
+  sum: number;
+  top10Pct: number | null;
+  updatedAt: string;
+}
+
+export interface BudgetLine {
+  q: BudgetCell[];
+  year: BudgetCell;
+}
+
+export interface BudgetBrand {
+  vatFactors: number[];
+  olapTo: BudgetLine;
+  sales: BudgetLine;
+  salesSS: BudgetLine;
+  salesSSWO: BudgetLine;
+  salesPURE: BudgetLine;
+  salesOMNI: BudgetLine;
+  salesMP: BudgetLine;
+  brand: string;
+  networkId: number;
+  to: BudgetLine;
+  plan: BudgetLine;
+  fact: BudgetLine;
+  gtnPlan: BudgetLine;
+  gtnContract: BudgetLine;
+  opexContract: BudgetLine;
+  gtnPromo: BudgetLine;
+  opexPromo: BudgetLine;
+  investments: BudgetLine;
+  pct: BudgetLine;
+  networks: BudgetBrand[];
+}
+
+export interface BudgetResponse {
+  typeMembers: Record<string, number[]>;
+  year: number;
+  version: string;
+  brands: BudgetBrand[];
+  total: BudgetBrand;
+  quarterStates: string[];
+  networkTypes: string[];
+  forecastCoveragePct: number | null;
+  versionInfo: BudgetVersion;
+  compare: string;
+  compareStates: string[];
+  canEdit: boolean;
+  editReason: string;
+}
+
 export interface SalesRow {
   id: number;
   year: number;

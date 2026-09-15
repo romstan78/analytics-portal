@@ -219,6 +219,17 @@ func main() {
 		api.GET("/networks/brands", handlers.GetNetworkBrands)
 		api.GET("/networks/kams", handlers.GetNetworkKAMs)
 		// Витрина реестра: собственная область видимости внутри обработчика.
+		api.GET("/budget", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudget)
+		api.GET("/budget/export", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.ExportBudget)
+		api.GET("/budget/versions", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudgetVersions)
+		api.POST("/budget/versions", middleware.RoleRequired("admin", "analyst"), handlers.CreateBudgetVersion)
+		api.PATCH("/budget/versions/:id/sources", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetSources)
+		api.POST("/budget/versions/:id/freeze", middleware.RoleRequired("admin", "analyst"), handlers.FreezeBudget)
+		api.PUT("/budget/versions/:id/cells", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetCell)
+		api.DELETE("/budget/versions/:id/cells", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetCell)
+		api.GET("/budget/promos", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudgetPromos)
+		api.PUT("/budget/versions/:id/promos", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetPromos)
+
 		api.GET("/networks/dashboard", handlers.GetNetworkDashboard)
 		api.GET("/networks/:id/plan", handlers.NetworkAccessRequired(), handlers.GetNetworkPlan)
 		api.GET("/networks/:id/forecast", handlers.NetworkAccessRequired(), handlers.GetNetworkForecast)

@@ -32,6 +32,15 @@ type entry struct {
 // Структура, на которую ссылается поле, обязана быть здесь же: генератор
 // откажется собирать файл со ссылкой на неописанный тип.
 var exported = []entry{
+	{models.BudgetCell{}, ""},
+ {models.BudgetEdit{}, ""},
+ {models.BudgetSources{}, ""},
+ {models.BudgetVersion{}, ""},
+ {models.BudgetPromo{}, ""},
+ {models.BudgetPromoResponse{}, ""},
+	{models.BudgetLine{}, ""},
+	{models.BudgetBrand{}, ""},
+	{models.BudgetResponse{}, ""},
 	// ─── Интернет-продажи ───────────────────────────────────────────────
 	{models.Row{}, "SalesRow"},
 	{models.DrilldownRow{}, ""},

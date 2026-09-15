@@ -13,6 +13,7 @@ const Login = lazy(() => import('./pages/Login'));
 const Home = lazy(() => import('./pages/Home'));
 const InternetSales = lazy(() => import('./pages/InternetSales'));
 const PromoAnalysis = lazy(() => import('./pages/PromoAnalysis'));
+const Budget = lazy(() => import('./pages/Budget'));
 const NetworkRegistry = lazy(() => import('./pages/NetworkRegistry'));
 const AdminDictionaries = lazy(() => import('./pages/AdminDictionaries'));
 
@@ -147,6 +148,7 @@ export default function App() {
               <Route path="/internet-sales" element={<InternetSales />} />
               <Route path="/promo-analysis" element={<PromoAnalysis role={auth.role} />} />
               <Route path="/sales-analysis" element={<PlaceholderPage title="Анализ продаж" description="Динамика продаж по периодам" />} />
+              <Route path="/budget" element={['admin', 'analyst', 'agreement1', 'agreement2'].includes(auth.role ?? '') ? <Budget role={auth.role} /> : <Navigate to="/" replace />} />
               <Route path="/network-registry" element={<NetworkRegistry role={auth.role} />} />
               <Route path="/admin/dictionaries" element={auth.role === 'admin' ? <AdminDictionaries /> : <Navigate to="/" replace />} />
               <Route path="/turnover" element={<PlaceholderPage title="Оборачиваемость" description="Анализ оборотов запасов" />} />

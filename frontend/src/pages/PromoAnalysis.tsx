@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   Button, Stack, Box, Typography, CircularProgress, Tabs, Tab, 
   Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -142,6 +142,8 @@ interface DashboardFilterSnapshot {
 
 export default function PromoAnalysis({ role }: PromoAnalysisProps) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedPromo = searchParams.get('promo');
   const queryClient = useQueryClient();
   // Доступ к согласованию спрашивается у сервера: у роли kam он зависит от
   // закрепления за чужими КАМами, и по одной роли его не определить.
@@ -284,6 +286,18 @@ export default function PromoAnalysis({ role }: PromoAnalysisProps) {
       setDraftOffer(null);
     }
   }, [formHandleRowClick]);
+
+  // Budget links open the existing read-only card through its scoped API.
+  useEffect(() => {
+    if (!linkedPromo || !/^\d+$/.test(linkedPromo)) return;
+    let cancelled = false;
+    void promoAPI.getById(Number(linkedPromo)).then(row => {
+      if (!cancelled) openPromoCard(row, true);
+    }).catch((error: unknown) => {
+      if (!cancelled) setSnackbar({ open: true, message: error instanceof Error ? error.message : 'Не удалось открыть промо', severity: 'error' });
+    });
+    return () => { cancelled = true; };
+  }, [linkedPromo, openPromoCard]);
 
   const handleDraftRestore = useCallback(() => {
     if (!draftOffer) return;
