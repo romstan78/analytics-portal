@@ -1337,6 +1337,25 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	if results == nil {
 		results = []models.ApprovalRow{}
 	}
+
+	// Число комментариев считаем здесь, одним запросом на страницу: иначе
+	// страница из 50 карточек делает 50 запросов /comments/:id и упирается
+	// в лимит частоты.
+	ids := make([]int, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+	}
+	dbCounts, err := CountPromoComments(ids)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count promo comments: %w", err)
+	}
+	for i := range results {
+		legacy := 0
+		if results[i].Comments != nil {
+			legacy = len(parseLegacyComments(results[i].ID, *results[i].Comments))
+		}
+		results[i].CommentsCount = MergedCommentsCount(legacy, dbCounts[results[i].ID])
+	}
 	return results, total, nil
 }
 
@@ -1761,10 +1780,16 @@ func FetchPromoCommentsFallback(promoID int) []models.CommentRow {
 	).Scan(&raw); err != nil || !raw.Valid || raw.String == "" {
 		return []models.CommentRow{}
 	}
+	return parseLegacyComments(promoID, raw.String)
+}
 
-	// Формат: [DD.MM.YYYY роль|автор]: текст
-	re := regexp.MustCompile(`^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$`)
-	lines := strings.Split(raw.String, "\n")
+// Формат строки текстового поля comments: [DD.MM.YYYY роль|автор]: текст
+var legacyCommentLine = regexp.MustCompile(`^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$`)
+
+// parseLegacyComments разбирает текстовое поле comments на записи.
+func parseLegacyComments(promoID int, raw string) []models.CommentRow {
+	re := legacyCommentLine
+	lines := strings.Split(raw, "\n")
 	result := make([]models.CommentRow, 0, len(lines))
 
 	for _, line := range lines {
@@ -1793,6 +1818,46 @@ func FetchPromoCommentsFallback(promoID int) []models.CommentRow {
 		}
 	}
 	return result
+}
+
+// CountPromoComments возвращает число записей tbl_PromoComments по каждому промо
+// из списка. Промо без записей в карте отсутствуют.
+func CountPromoComments(promoIDs []int) (map[int]int, error) {
+	counts := make(map[int]int, len(promoIDs))
+	if len(promoIDs) == 0 {
+		return counts, nil
+	}
+	placeholders := strings.Repeat(",?", len(promoIDs))[1:]
+	args := make([]interface{}, len(promoIDs))
+	for i, id := range promoIDs {
+		args[i] = id
+	}
+	rows, err := config.DB.Query(
+		"SELECT promo_id, COUNT(*) FROM dbo.tbl_PromoComments WHERE promo_id IN ("+placeholders+") GROUP BY promo_id",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		counts[id] = n
+	}
+	return counts, rows.Err()
+}
+
+// MergedCommentsCount — сколько записей отдаёт GET /api/promo/comments/:id:
+// текстовое поле хранит всю историю, таблица — только новые записи, поэтому
+// итог равен большему из двух (см. GetPromoCommentsHandler).
+func MergedCommentsCount(legacy, db int) int {
+	if legacy > db {
+		return legacy
+	}
+	return db
 }
 
 // InsertComment добавляет комментарий в tbl_PromoComments.

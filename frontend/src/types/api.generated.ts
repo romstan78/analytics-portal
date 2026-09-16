@@ -1278,6 +1278,7 @@ export interface ApprovalRow {
   status: string | null;
   historical_count: number;
   avg_historical_roi: number | null;
+  comments_count: number;
   updated_at: string;
 }
 

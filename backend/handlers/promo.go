@@ -456,7 +456,9 @@ func GetPromoCommentsHandler(c *gin.Context) {
 	}
 
 	// Склеиваем историю: legacyComments содержит ВСЮ историю из текстового поля,
-	// dbComments содержит только новые записи из таблицы.
+	// dbComments содержит только новые записи из таблицы. Итоговое число
+	// записей — repository.MergedCommentsCount, его же отдаёт comments_count
+	// в списке согласования.
 	diff := len(legacyComments) - len(dbComments)
 	if diff > 0 {
 		combined := append(legacyComments[:diff], dbComments...)

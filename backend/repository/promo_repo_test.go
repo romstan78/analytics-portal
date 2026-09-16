@@ -406,3 +406,28 @@ func TestNullIfEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLegacyCommentsCountsStructuredLinesOnly(t *testing.T) {
+	raw := "[10.09.2026 КАМ|demo_user_01]: первый\nпродолжение первого\n\n[11.09.2026 согласование1|demo]: второй"
+	got := parseLegacyComments(7, raw)
+	if len(got) != 2 {
+		t.Fatalf("parsed %d comments, want 2", len(got))
+	}
+	if got[0].CommentText != "первый\nпродолжение первого" {
+		t.Fatalf("unstructured line not glued to previous comment: %q", got[0].CommentText)
+	}
+	if len(parseLegacyComments(7, "")) != 0 {
+		t.Fatal("empty text must give no comments")
+	}
+}
+
+func TestMergedCommentsCountMatchesCommentsHandler(t *testing.T) {
+	// Текстовое поле хранит всю историю, таблица — только новые записи:
+	// итог равен большему, как в GetPromoCommentsHandler.
+	cases := []struct{ legacy, db, want int }{{0, 0, 0}, {3, 0, 3}, {0, 2, 2}, {5, 2, 5}, {2, 4, 4}}
+	for _, c := range cases {
+		if got := MergedCommentsCount(c.legacy, c.db); got != c.want {
+			t.Errorf("MergedCommentsCount(%d, %d) = %d, want %d", c.legacy, c.db, got, c.want)
+		}
+	}
+}
