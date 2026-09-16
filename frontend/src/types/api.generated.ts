@@ -105,6 +105,7 @@ export interface BudgetResponse {
   networkTypes: string[];
   forecastCoveragePct: number | null;
   versionInfo: BudgetVersion;
+  compareInfo: BudgetVersion;
   compare: string;
   compareStates: string[];
   canEdit: boolean;

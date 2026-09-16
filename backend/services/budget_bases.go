@@ -57,23 +57,36 @@ func budgetPortfolioExtraTotals(r *models.BudgetResponse) {
 
 func budgetPresentation(r *models.BudgetResponse, f BudgetFilter) {
 	apply := func(b *models.BudgetBrand) {
+		registryBase := &b.To
 		if f.Base == "reg-olap" {
-			b.To = b.OlapTo
-		}
-		base := &b.To
-		if l, ok := budgetExtraLines(b)[f.Base]; ok && f.Base != "olap" {
-			b.Sales = *l
-			base = &b.Sales
+			registryBase = &b.OlapTo
 		}
 		for q := 0; q < 4; q++ {
+			if salesLine := budgetOLAPSourceLine(f.ToSources[q]); salesLine != "" {
+				b.To.Q[q] = budgetExtraLines(b)[salesLine].Q[q]
+			} else {
+				b.To.Q[q] = registryBase.Q[q]
+			}
 			b.Pct.Q[q].A = nil
-			if base.Q[q].A != nil && *base.Q[q].A != 0 {
-				b.Pct.Q[q].A = models.PtrFloat(round2(valueOrZero(b.Investments.Q[q].A) / *base.Q[q].A * 100))
+			if b.To.Q[q].A != nil && *b.To.Q[q].A != 0 {
+				b.Pct.Q[q].A = models.PtrFloat(round2(valueOrZero(b.Investments.Q[q].A) / *b.To.Q[q].A * 100))
 			}
 		}
+		b.To.Year.A = nil
+		incomplete := false
+		for q := 0; q < 4; q++ {
+			if b.To.Q[q].A == nil {
+				incomplete = true
+				continue
+			}
+			addPtrValue(&b.To.Year.A, b.To.Q[q].A)
+		}
+		if incomplete {
+			b.To.Year.A = nil
+		}
 		b.Pct.Year.A = nil
-		if base.Year.A != nil && *base.Year.A != 0 {
-			b.Pct.Year.A = models.PtrFloat(round2(valueOrZero(b.Investments.Year.A) / *base.Year.A * 100))
+		if b.To.Year.A != nil && *b.To.Year.A != 0 {
+			b.Pct.Year.A = models.PtrFloat(round2(valueOrZero(b.Investments.Year.A) / *b.To.Year.A * 100))
 		}
 	}
 	for i := range r.Brands {

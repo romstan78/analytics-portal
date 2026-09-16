@@ -98,6 +98,7 @@ type BudgetResponse struct {
 	NetworkTypes        []string         `json:"networkTypes"`
 	ForecastCoveragePct *float64         `json:"forecastCoveragePct"`
 	VersionInfo         BudgetVersion    `json:"versionInfo"`
+	CompareInfo         BudgetVersion    `json:"compareInfo"`
 	Compare             string           `json:"compare"`
 	CompareStates       []string         `json:"compareStates"`
 	CanEdit             bool             `json:"canEdit"`

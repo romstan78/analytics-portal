@@ -160,15 +160,42 @@ func ValidBudgetSources(s models.BudgetSources) bool {
 	if len(s.To) != 4 || len(s.Investments) != 4 {
 		return false
 	}
-	for _, list := range [][]string{s.To, s.Investments} {
-		for _, v := range list {
-			if v != "plan" && v != "fact" && v != "forecast" {
-				return false
-			}
+	for _, v := range s.To {
+		if !validBudgetTurnoverSource(v) {
+			return false
+		}
+	}
+	for _, v := range s.Investments {
+		if v != "plan" && v != "fact" && v != "forecast" {
+			return false
 		}
 	}
 	return true
 }
+
+func validBudgetTurnoverSource(v string) bool {
+	return v == "plan" || v == "fact" || v == "forecast" || budgetOLAPSourceLine(v) != ""
+}
+
+func budgetOLAPSourceLine(v string) string {
+	switch v {
+	case "olap-ss":
+		return "ss"
+	case "olap-sswo":
+		return "sswo"
+	case "olap-pure":
+		return "pure"
+	case "olap-omni":
+		return "omni"
+	case "olap-mp":
+		return "mp"
+	default:
+		return ""
+	}
+}
+
+// BudgetOLAPSource reports whether a turnover source is an actual OLAP channel.
+func BudgetOLAPSource(v string) bool { return budgetOLAPSourceLine(v) != "" }
 func budgetLoad(f BudgetFilter, code string) (*models.BudgetResponse, []models.BudgetPromo, error) {
 	if code == "PY" {
 		f.Year--
@@ -238,6 +265,7 @@ func BudgetView(f BudgetFilter, code, compare, delta string) (*models.BudgetResp
 		}
 		budgetCompare(r, other, delta)
 		r.Compare = compare
+		r.CompareInfo = other.VersionInfo
 		r.CompareStates = other.QuarterStates
 	}
 	return r, nil

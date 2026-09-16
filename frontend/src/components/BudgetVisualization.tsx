@@ -1,75 +1,25 @@
 import { Box, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
-import type { BudgetResponse } from '../types/budget';
+import type { BudgetBrand, BudgetCell, BudgetResponse } from '../types/budget';
 import { budgetFormat } from '../utils/budget';
 
-interface Props {
-  data: BudgetResponse;
-  investmentMode: 'investments' | 'pct';
-  onInvestmentMode: (value: 'investments' | 'pct') => void;
-  deltaMetric: 'to' | 'pct';
-  onDeltaMetric: (value: 'to' | 'pct') => void;
-}
+interface Props { data: BudgetResponse; turnoverDelta: 'abs' | 'pct'; onTurnoverDelta: (value: 'abs' | 'pct') => void; investmentDelta: 'abs' | 'pct'; onInvestmentDelta: (value: 'abs' | 'pct') => void; }
+const versionLabel = (code: string, year: number) => code === 'LIVE' ? 'Текущее' : code === 'PY' ? `Факт ’${String(year).slice(-2)}` : `${code}’${String(year).slice(-2)}`;
+const ratioDelta = (cell: BudgetCell) => cell.a == null || cell.b == null || cell.b === 0 ? null : (cell.a / cell.b - 1) * 100;
+const sourceLabel = (source: string) => ({ plan: 'План реестра', forecast: 'Прогноз реестра', fact: 'Факт реестра', 'olap-ss': 'Факт OLAP · SS', 'olap-sswo': 'Факт OLAP · SS wo Ecom', 'olap-pure': 'Факт OLAP · PURE', 'olap-omni': 'Факт OLAP · OMNI', 'olap-mp': 'Факт OLAP · MP' }[source] ?? source);
 
-export default function BudgetVisualization({ data, investmentMode, onInvestmentMode, deltaMetric, onDeltaMetric }: Props) {
+export default function BudgetVisualization({ data, turnoverDelta, onTurnoverDelta, investmentDelta, onInvestmentDelta }: Props) {
   const brands = data.brands.filter(b => b.brand !== 'Нераспределённый остаток пула');
-  const matrix = (metric: 'to' | 'investments' | 'pct', side: 'a' | 'b' | 'delta') => {
-    const isDelta = side === 'delta';
-    const percentage = metric === 'pct';
-    const title = metric === 'to' ? 'ТО' : 'Инвестиции';
-    const version = side === 'a' ? data.version : data.compare;
-    const label = isDelta ? `Δ ${title} · ${data.version} − ${data.compare || '…'}` : `${title} · ${version || 'Бюджет для сравнения'}`;
-    const unit = percentage ? isDelta ? 'п.п.' : '% от ТО' : 'млн ₽';
-    return <Paper variant="outlined" sx={{ minWidth: 0, overflow: 'hidden', borderRadius: 2 }}>
-      <Box sx={{ px: 1.25, py: .75, bgcolor: side === 'a' ? '#eef2ff' : '#f8fafc' }}>
-        <Typography component="h3" variant="subtitle2" sx={{ fontWeight: 600 }}>{label}</Typography>
-        <Typography variant="caption" color="text.secondary">{isDelta ? 'Изменение выбранного бюджета' : side === 'a' ? 'Выбранный бюджет' : 'Бюджет для сравнения'} · {unit}</Typography>
-      </Box>
-      {!version ? <Typography color="text.secondary" sx={{ p: 1.5, fontSize: 12 }}>Выберите бюджет в поле «Сравнить с».</Typography> :
-        <TableContainer sx={{ maxHeight: 390 }}>
-          <Table size="small" stickyHeader aria-label={label} sx={{ tableLayout: 'fixed', fontVariantNumeric: 'tabular-nums', '& th, & td': { px: .6, py: .45, fontSize: 11.5, lineHeight: 1.35 } }}>
-            <TableHead><TableRow>
-              <TableCell sx={{ width: '31%' }}>Бренд</TableCell>
-              {['Q1', 'Q2', 'Q3', 'Q4', 'Год'].map(q => <TableCell key={q} align="right" sx={{ fontWeight: 600 }}>{q}</TableCell>)}
-            </TableRow></TableHead>
-            <TableBody>
-              {[...brands, data.total].map((brand, index) => {
-                const total = index === brands.length;
-                return <TableRow key={total ? 'total' : brand.brand} sx={{ bgcolor: total ? '#f8fafc' : undefined }}>
-                  <TableCell component="th" scope="row" title={brand.brand} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: total ? 700 : 400 }}>{total ? 'Итого' : brand.brand}</TableCell>
-                  {[...brand[metric].q, brand[metric].year].map((cell, q) => {
-                    const value = cell[side];
-                    const good = value != null && (percentage ? value < 0 : value > 0);
-                    const formatted = budgetFormat(value, percentage).replace(' %', '');
-                    return <TableCell key={q} align="right" sx={{ whiteSpace: 'nowrap', fontWeight: total || q === 4 ? 700 : 400, bgcolor: q === 4 ? '#f8fafc' : undefined, color: isDelta && value ? good ? 'success.main' : 'error.main' : 'text.primary' }}>{isDelta && value != null && value > 0 ? '+' : ''}{formatted}</TableCell>;
-                  })}
-                </TableRow>;
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>}
-    </Paper>;
+  const current = versionLabel(data.version, data.versionInfo.year || data.year);
+  const compared = data.compare ? versionLabel(data.compare, data.compareInfo.year || (data.compare === 'PY' ? data.year - 1 : data.year)) : '';
+  const lineOf = (brand: BudgetBrand, metric: 'to' | 'investments' | 'pct') => metric === 'to' ? brand.to : metric === 'investments' ? brand.investments : brand.pct;
+  const panel = (metric: 'to' | 'investments' | 'pct', deltaMode: 'abs' | 'pct' = 'abs') => {
+    const percentage = metric === 'pct'; const title = metric === 'to' ? 'Товарооборот' : metric === 'investments' ? 'Инвестиции' : 'Инвестиции от ТО'; const deltaUnit = percentage ? 'п.п.' : deltaMode === 'pct' ? '%' : 'млн ₽';
+    const deltaOf = (cell: BudgetCell) => percentage ? cell.delta : deltaMode === 'pct' ? ratioDelta(cell) : cell.delta;
+    return <Paper variant="outlined" sx={{ minWidth: 0, overflow: 'hidden', borderRadius: 2 }}><Box sx={{ px: 1.25, py: .75, bgcolor: '#f8fafc', borderBottom: 1, borderColor: 'divider' }}><Typography component="h3" variant="subtitle2" sx={{ fontWeight: 600 }}>{title}</Typography><Typography variant="caption" color="text.secondary">{current} · {compared || 'выберите базу'} · Δ {deltaUnit}</Typography></Box>{!data.compare ? <Typography color="text.secondary" sx={{ p: 1.5, fontSize: 12 }}>Выберите версию для сравнения.</Typography> : <TableContainer sx={{ maxHeight: 500 }}><Table size="small" stickyHeader aria-label={`${title}: сравнение версий`} sx={{ tableLayout: 'fixed', fontVariantNumeric: 'tabular-nums', '& th, & td': { px: .55, py: .5, fontSize: 11.5, lineHeight: 1.3 } }}><TableHead><TableRow><TableCell sx={{ width: '28%' }}>Бренд</TableCell>{['Q1', 'Q2', 'Q3', 'Q4', 'Год'].map(q => <TableCell key={q} align="right" sx={{ fontWeight: 600 }}>{q}</TableCell>)}</TableRow></TableHead><TableBody>{[...brands, data.total].map((brand, index) => { const total = index === brands.length; const line = lineOf(brand, metric); return <TableRow key={total ? 'total' : brand.brand} sx={{ bgcolor: total ? '#f8fafc' : undefined }}><TableCell component="th" scope="row" title={brand.brand} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: total ? 700 : 400 }}>{total ? 'Итого' : brand.brand}</TableCell>{[...line.q, line.year].map((cell, q) => { const delta = deltaOf(cell); return <TableCell key={q} align="right" sx={{ whiteSpace: 'nowrap', fontWeight: total || q === 4 ? 700 : 400, bgcolor: q === 4 ? '#f8fafc' : undefined }}><Box>{budgetFormat(cell.a, percentage)}</Box><Typography component="div" variant="caption" color="text.secondary" sx={{ fontSize: 10.5 }}>{budgetFormat(cell.b, percentage)}</Typography><Typography component="div" variant="caption" sx={{ fontSize: 10.5, color: delta == null || delta === 0 ? 'text.secondary' : percentage ? delta < 0 ? 'success.main' : 'error.main' : delta > 0 ? 'success.main' : 'error.main' }}>{delta != null && delta > 0 ? '+' : ''}{budgetFormat(delta, percentage || deltaMode === 'pct')}{percentage ? ' п.п.' : ''}</Typography></TableCell>; })}</TableRow>; })}</TableBody></Table></TableContainer>}</Paper>;
   };
-
-  return <Box sx={{ overflowX: 'auto' }}><Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(3, minmax(380px, 1fr))' }, gap: 1.5, alignItems: 'start' }}>
-    <Box sx={{ display: 'grid', gap: 1.5, minWidth: 0 }}>
-      <Box sx={{ height: 34, display: 'flex', alignItems: 'center' }}><Typography variant="subtitle2">Товарооборот · млн ₽</Typography></Box>
-      {matrix('to', 'b')}
-      {matrix('to', 'a')}
-    </Box>
-    <Box sx={{ display: 'grid', gap: 1.5, minWidth: 0 }}>
-      <ToggleButtonGroup exclusive size="small" value={investmentMode} onChange={(_, value) => { if (value) onInvestmentMode(value); }} aria-label="Отображение инвестиций" sx={{ height: 34 }}>
-        <ToggleButton value="investments">Инвестиции · млн ₽</ToggleButton>
-        <ToggleButton value="pct">% от ТО</ToggleButton>
-      </ToggleButtonGroup>
-      {matrix(investmentMode, 'b')}
-      {matrix(investmentMode, 'a')}
-    </Box>
-    <Box sx={{ display: 'grid', gap: 1.5, minWidth: 0 }}>
-      <ToggleButtonGroup exclusive size="small" value={deltaMetric} onChange={(_, value) => { if (value) onDeltaMetric(value); }} aria-label="Показатель изменения" sx={{ height: 34 }}>
-        <ToggleButton value="to">Δ ТО · млн ₽</ToggleButton>
-        <ToggleButton value="pct">Δ инвестиций · п.п.</ToggleButton>
-      </ToggleButtonGroup>
-      {matrix(deltaMetric, 'delta')}
-    </Box>
-  </Box></Box>;
+  const sourceCard = (title: string, sources: string[], muted = false) => <Paper variant="outlined" sx={{ p: 1.25, bgcolor: muted ? 'action.hover' : 'background.paper' }}><Typography variant="subtitle2">{title}</Typography><Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: .75, mt: .75 }}>{sources.map((source, q) => <Box key={q} sx={{ minWidth: 0 }}><Typography variant="caption" color="text.secondary">Q{q + 1}</Typography><Typography variant="caption" component="div" sx={{ lineHeight: 1.25 }}>{sourceLabel(source)}</Typography></Box>)}</Box></Paper>;
+  return <Box sx={{ display: 'grid', gap: 1.5 }}>
+    {data.compare && <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>{sourceCard(current, data.versionInfo.sources.to)}{sourceCard(compared, data.compareInfo.sources.to, true)}</Box>}
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(3, minmax(280px, 1fr))' }, gap: 1.5, alignItems: 'start' }}><Box sx={{ display: 'grid', gap: 1 }}><ToggleButtonGroup exclusive size="small" value={turnoverDelta} onChange={(_, value) => { if (value) onTurnoverDelta(value); }} aria-label="Формат дельты товарооборота"><ToggleButton value="abs">Δ ТО · млн ₽</ToggleButton><ToggleButton value="pct">Δ ТО · %</ToggleButton></ToggleButtonGroup>{panel('to', turnoverDelta)}</Box><Box sx={{ display: 'grid', gap: 1 }}><ToggleButtonGroup exclusive size="small" value={investmentDelta} onChange={(_, value) => { if (value) onInvestmentDelta(value); }} aria-label="Формат дельты инвестиций"><ToggleButton value="abs">Δ инвестиций · млн ₽</ToggleButton><ToggleButton value="pct">Δ инвестиций · %</ToggleButton></ToggleButtonGroup>{panel('investments', investmentDelta)}</Box><Box sx={{ display: 'grid', gap: 1 }}><Box sx={{ height: 32, display: 'flex', alignItems: 'center' }}><Typography variant="subtitle2">Δ доли инвестиций · п.п.</Typography></Box>{panel('pct')}</Box></Box>
+  </Box>;
 }

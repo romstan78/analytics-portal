@@ -36,8 +36,12 @@ func budgetFilter(c *gin.Context) (services.BudgetFilter, bool) {
 			return f, false
 		}
 		for i, part := range parts {
-			if part != "plan" && part != "fact" && part != "forecast" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Источник: план, факт или прогноз"})
+			valid := part == "plan" || part == "fact" || part == "forecast"
+			if key == "to_sources" {
+				valid = valid || services.BudgetOLAPSource(part)
+			}
+			if !valid {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректный источник по кварталу"})
 				return f, false
 			}
 			target[i] = part

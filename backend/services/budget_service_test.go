@@ -134,9 +134,9 @@ func TestBudgetSnapshotPreservesComparisonAndExtras(t *testing.T) {
 	if *clone.Total.To.Q[0].A != 100 || *clone.Total.SalesSS.Q[0].A != 80 || *clone.Total.OlapTo.Q[0].A != 150 {
 		t.Fatal("snapshot lost financial bases")
 	}
-	budgetPresentation(clone, BudgetFilter{Base: "ss"})
-	if *clone.Total.Pct.Q[0].A != 25 || clone.Total.Pct.Q[3].A != nil {
-		t.Fatal("sales denominator or future null is incorrect")
+	budgetPresentation(clone, BudgetFilter{ToSources: [4]string{"olap-ss"}})
+	if *clone.Total.To.Q[0].A != 80 || *clone.Total.Pct.Q[0].A != 25 || clone.Total.Pct.Q[3].A != nil {
+		t.Fatal("selected sales base or future null is incorrect")
 	}
 	compare := &models.BudgetResponse{Brands: []models.BudgetBrand{}, Total: budgetBrand("Итого", 0, [4]budgetAmounts{{to: 80, gtn: 10}}, f)}
 	budgetCompare(r, compare, "abs")
@@ -147,6 +147,46 @@ func TestBudgetSnapshotPreservesComparisonAndExtras(t *testing.T) {
 	budgetApplyLines(filtered, lines, BudgetFilter{NetworkTypes: []string{"missing"}})
 	if len(filtered.Brands) != 0 {
 		t.Fatal("stored edits widened network filter")
+	}
+}
+
+func TestBudgetCompareUsesSelectedBaseForTurnoverAndPercentDelta(t *testing.T) {
+	makeResponse := func(base string, turnover, investments float64) *models.BudgetResponse {
+		f := BudgetFilter{Base: base}
+		network := budgetBrand("Сеть", 1, [4]budgetAmounts{{to: turnover, gtn: investments}}, f)
+		if base == "reg-olap" {
+			network.OlapTo.Q[0].A = models.PtrFloat(turnover)
+		}
+		if line, ok := budgetExtraLines(&network)[base]; ok && base != "olap" {
+			line.Q[0].A = models.PtrFloat(turnover)
+		}
+		brand := budgetBrand("Бренд", 0, [4]budgetAmounts{}, f)
+		brand.Networks = []models.BudgetBrand{network}
+		r := &models.BudgetResponse{Brands: []models.BudgetBrand{brand}}
+		budgetRebuild(r, f)
+		budgetPresentation(r, f)
+		return r
+	}
+	for _, base := range []string{"reg-contract", "reg-olap", "ss", "sswo", "pure", "omni", "mp"} {
+		a, b := makeResponse(base, 80, 20), makeResponse(base, 60, 12)
+		budgetCompare(a, b, "abs")
+		if valueOrZero(a.Total.To.Q[0].Delta) != 20 || valueOrZero(a.Total.Pct.Q[0].Delta) != 5 {
+			t.Fatalf("%s: turnover / percent delta = %+v / %+v, want 20 / 5", base, a.Total.To.Q[0].Delta, a.Total.Pct.Q[0].Delta)
+		}
+	}
+}
+
+func TestBudgetPresentationUsesOLAPTurnoverSourcePerQuarter(t *testing.T) {
+	f := BudgetFilter{ToSources: [4]string{"olap-ss", "forecast", "forecast", "forecast"}}
+	network := budgetBrand("Сеть", 1, [4]budgetAmounts{{to: 100, gtn: 20}, {to: 120, gtn: 24}, {to: 140, gtn: 28}, {to: 160, gtn: 32}}, f)
+	network.SalesSS.Q[0].A = models.PtrFloat(80)
+	brand := budgetBrand("Бренд", 0, [4]budgetAmounts{}, f)
+	brand.Networks = []models.BudgetBrand{network}
+	r := &models.BudgetResponse{Brands: []models.BudgetBrand{brand}}
+	budgetRebuild(r, f)
+	budgetPresentation(r, f)
+	if valueOrZero(r.Total.To.Q[0].A) != 80 || valueOrZero(r.Total.To.Q[1].A) != 120 || valueOrZero(r.Total.Pct.Q[0].A) != 25 {
+		t.Fatalf("mixed OLAP / registry sources were not preserved: %+v", r.Total)
 	}
 }
 func TestBudgetOlapAndSalesClosedMonthRules(t *testing.T) {

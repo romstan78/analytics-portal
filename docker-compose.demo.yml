@@ -12,7 +12,7 @@ x-demo-backend-environment: &demo-backend-environment
   DB_TRUST_SERVER_CERT: "true"
   APP_ENV: development
   JWT_SECRET: ${JWT_SECRET:?Укажите JWT_SECRET в .env}
-  CORS_ORIGINS: http://localhost:${DEMO_FRONTEND_PORT:-5174}
+  CORS_ORIGINS: http://localhost:${DEMO_FRONTEND_PORT:-5174},http://127.0.0.1:${DEMO_FRONTEND_PORT:-5174}
   TRUSTED_PROXIES: ""
   PORT: "8080"
 
