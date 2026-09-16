@@ -113,6 +113,7 @@ func main() {
 	// Файлы фоновых выгрузок от прошлого запуска: карта заданий после
 	// перезапуска пуста, и убрать их по ней уже невозможно.
 	handlers.CleanupSalesExportDir()
+	handlers.CleanupReportExportDir()
 	// Фиктивный хеш пароля — до первого запроса, иначе первый вход по
 	// несуществующему логину выдал бы себя временем ответа.
 	handlers.WarmUpPasswordHashing()
@@ -233,6 +234,11 @@ func main() {
 		api.PUT("/budget/versions/:id/promos", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetPromos)
 
 		api.GET("/networks/dashboard", handlers.GetNetworkDashboard)
+		// Отчёты PDF/PPTX по витрине: область та же, что у витрины
+		api.GET("/reports/blocks", handlers.GetReportBlocks)
+		api.POST("/reports", handlers.CreateReport)
+		api.GET("/reports/:id", handlers.GetReportJob)
+		api.GET("/reports/:id/download", handlers.DownloadReport)
 		api.GET("/networks/:id/plan", handlers.NetworkAccessRequired(), handlers.GetNetworkPlan)
 		api.GET("/networks/:id/forecast", handlers.NetworkAccessRequired(), handlers.GetNetworkForecast)
 		api.GET("/networks/:id/sku-mix", handlers.NetworkAccessRequired(), handlers.GetNetworkSKUMix)

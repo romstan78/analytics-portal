@@ -3,6 +3,7 @@ module backend
 go 1.25.7
 
 require (
+	codeberg.org/go-pdf/fpdf v0.11.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/gin-contrib/cors v1.7.7

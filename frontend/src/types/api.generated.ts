@@ -1007,6 +1007,42 @@ export interface NetworkDashboardResponse {
   annualInvestmentCumulative?: NetworkAnnualInvestmentCumulative;
 }
 
+export interface ReportBlock {
+  code: string;
+  title: string;
+  description: string;
+  fixed: boolean;
+  hasTable: boolean;
+  kamScopeOnly: boolean;
+}
+
+export interface ReportRequest {
+  title: string;
+  year: number;
+  quarters: number[];
+  kams: string[];
+  networkIds: number[];
+  unit: string;
+  blocks: string[];
+  formats: string[];
+  tableLimit: number;
+}
+
+export interface ReportJobStatus {
+  id: string;
+  status: string;
+  format: string;
+  title: string;
+  fileName: string;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface ReportCreateResponse {
+  jobs: ReportJobStatus[];
+}
+
 export interface NetworkPlanScaleSKUInput {
   sku: string;
   plan_rub: number | null;
