@@ -139,8 +139,10 @@ func main() {
 		}
 	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     corsOrigins,
-		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowOrigins: corsOrigins,
+		// PUT нужен бюджету (правка ячейки, состав промо): без него браузер
+		// отклоняет preflight, и запрос до сервера не доходит («Load failed»).
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	}))
