@@ -112,6 +112,11 @@ type ReportJob struct {
 	CompletedAt time.Time `json:"completedAt,omitempty"`
 	// SnapshotJSON — снимок запроса и данных; наружу не отдаётся.
 	SnapshotJSON string `json:"-"`
+	// PrintTokenHash — SHA-256 одноразового токена, по которому страница
+	// печати получает снимок без сессии; сам токен живёт только в URL,
+	// который открывает Chromium. Обнуляется при выдаче.
+	PrintTokenHash      string    `json:"-"`
+	PrintTokenExpiresAt time.Time `json:"-"`
 }
 
 // ReportJobStatus — ответ статуса задания. Время строками: контракт
@@ -130,6 +135,129 @@ type ReportJobStatus struct {
 // ReportCreateResponse — ответ POST /api/reports: по заданию на формат.
 type ReportCreateResponse struct {
 	Jobs []ReportJobStatus `json:"jobs"`
+}
+
+// ─── Печатная модель ────────────────────────────────────────────────────────
+//
+// Страница печати (/print/report/:id) получает не сырой снимок, а готовые
+// страницы: подписи, шкалы, оценки ячеек и примечания собраны в reports/pages.go
+// один раз для PDF, PPTX и HTML. Фронтенд их только раскладывает и рисует
+// графики по числам; вторая копия правил «какая шкала и какая колонка» на
+// фронте разошлась бы с первой. Числа в ячейках и карточках уже
+// отформатированы; графикам нужны исходные величины, они идут отдельно.
+
+// Оценка величины цветом — те же четыре тона, что у векторного рендера.
+const (
+	ReportToneNeutral = "neutral"
+	ReportToneGood    = "good"
+	ReportToneWarn    = "warn"
+	ReportToneBad     = "bad"
+)
+
+// ReportPrint — ответ GET /api/reports/:id/print.
+type ReportPrint struct {
+	Title        string   `json:"title"`
+	Owner        string   `json:"owner"`
+	CreatedAt    string   `json:"createdAt"`
+	FilterLabels []string `json:"filterLabels"`
+	// Unit — единица объёма запроса (rub | units): подсказка для осей графиков.
+	Unit  string            `json:"unit"`
+	Pages []ReportPrintPage `json:"pages"`
+}
+
+// ReportPrintPage — один блок отчёта: страница PDF, слайд PPTX.
+type ReportPrintPage struct {
+	Block    string `json:"block"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	// Lines — абзацы текста: титул, методика.
+	Lines []string          `json:"lines,omitempty"`
+	Cards []ReportPrintCard `json:"cards,omitempty"`
+	Chart *ReportPrintChart `json:"chart,omitempty"`
+	Table *ReportPrintTable `json:"table,omitempty"`
+	Notes []string          `json:"notes,omitempty"`
+}
+
+// ReportPrintCard — плитка показателя: подпись, число в шкале, отклонение с
+// оценкой, пояснение и ряд для спарклайна.
+type ReportPrintCard struct {
+	Label     string    `json:"label"`
+	Value     string    `json:"value"`
+	Delta     string    `json:"delta,omitempty"`
+	DeltaTone string    `json:"deltaTone"`
+	Sub       string    `json:"sub,omitempty"`
+	Spark     []float64 `json:"spark,omitempty"`
+}
+
+// ReportPrintScale — шкала осей графика: делитель, подпись, знаки после
+// запятой. Повторяет reports.scale, чтобы оси подписывались как таблицы.
+type ReportPrintScale struct {
+	Div    float64 `json:"div"`
+	Label  string  `json:"label"`
+	Digits int     `json:"digits"`
+}
+
+// ReportPrintChart — спецификация графика; заполнен ровно один из рядов.
+type ReportPrintChart struct {
+	Title    string              `json:"title"`
+	Subtitle string              `json:"subtitle,omitempty"`
+	Scale    ReportPrintScale    `json:"scale"`
+	Bullet   []ReportPrintBullet `json:"bullet,omitempty"`
+	Months   []ReportPrintMonth  `json:"months,omitempty"`
+	Steps    []ReportPrintStep   `json:"steps,omitempty"`
+}
+
+// ReportPrintBullet — строка bullet-графика: план полосой, факт внутри, EAC
+// риской. PctLabel и Tone — подпись выполнения и её оценка, уже готовые.
+type ReportPrintBullet struct {
+	Label    string  `json:"label"`
+	Sub      string  `json:"sub,omitempty"`
+	Plan     float64 `json:"plan"`
+	Fact     float64 `json:"fact"`
+	EAC      float64 `json:"eac"`
+	PctLabel string  `json:"pctLabel"`
+	Tone     string  `json:"tone"`
+}
+
+// ReportPrintMonth — точка месячной динамики.
+type ReportPrintMonth struct {
+	Label  string   `json:"label"`
+	Plan   float64  `json:"plan"`
+	Fact   float64  `json:"fact"`
+	EAC    float64  `json:"eac"`
+	Prev   *float64 `json:"prev"`
+	Closed bool     `json:"closed"`
+}
+
+// ReportPrintStep — ступень водопада; Total — опорный столбец от нуля.
+type ReportPrintStep struct {
+	Label string  `json:"label"`
+	Value float64 `json:"value"`
+	Total bool    `json:"total"`
+}
+
+// ReportPrintTable — таблица с готовыми ячейками.
+type ReportPrintTable struct {
+	Columns []ReportPrintColumn `json:"columns"`
+	Rows    [][]ReportPrintCell `json:"rows"`
+	// Total — итоговая строка: жирная, с линией сверху.
+	Total []ReportPrintCell `json:"total,omitempty"`
+}
+
+// ReportPrintColumn — колонка: Weight — доля ширины, Right — числовая.
+type ReportPrintColumn struct {
+	Title  string  `json:"title"`
+	Weight float64 `json:"weight"`
+	Right  bool    `json:"right"`
+}
+
+// ReportPrintCell — ячейка: текст, оценка цветом, доля полосы (nil — без
+// полосы), жирность.
+type ReportPrintCell struct {
+	Text string   `json:"text"`
+	Tone string   `json:"tone"`
+	Bar  *float64 `json:"bar"`
+	Bold bool     `json:"bold"`
 }
 
 // StatusView переводит задание в ответ API.

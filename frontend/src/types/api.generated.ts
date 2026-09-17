@@ -1043,6 +1043,94 @@ export interface ReportCreateResponse {
   jobs: ReportJobStatus[];
 }
 
+export interface ReportPrintScale {
+  div: number;
+  label: string;
+  digits: number;
+}
+
+export interface ReportPrintBullet {
+  label: string;
+  sub?: string;
+  plan: number;
+  fact: number;
+  eac: number;
+  pctLabel: string;
+  tone: string;
+}
+
+export interface ReportPrintMonth {
+  label: string;
+  plan: number;
+  fact: number;
+  eac: number;
+  prev: number | null;
+  closed: boolean;
+}
+
+export interface ReportPrintStep {
+  label: string;
+  value: number;
+  total: boolean;
+}
+
+export interface ReportPrintChart {
+  title: string;
+  subtitle?: string;
+  scale: ReportPrintScale;
+  bullet?: ReportPrintBullet[];
+  months?: ReportPrintMonth[];
+  steps?: ReportPrintStep[];
+}
+
+export interface ReportPrintCard {
+  label: string;
+  value: string;
+  delta?: string;
+  deltaTone: string;
+  sub?: string;
+  spark?: number[];
+}
+
+export interface ReportPrintColumn {
+  title: string;
+  weight: number;
+  right: boolean;
+}
+
+export interface ReportPrintCell {
+  text: string;
+  tone: string;
+  bar: number | null;
+  bold: boolean;
+}
+
+export interface ReportPrintTable {
+  columns: ReportPrintColumn[];
+  rows: ReportPrintCell[][];
+  total?: ReportPrintCell[];
+}
+
+export interface ReportPrintPage {
+  block: string;
+  title: string;
+  subtitle?: string;
+  lines?: string[];
+  cards?: ReportPrintCard[];
+  chart?: ReportPrintChart;
+  table?: ReportPrintTable;
+  notes?: string[];
+}
+
+export interface ReportPrint {
+  title: string;
+  owner: string;
+  createdAt: string;
+  filterLabels: string[];
+  unit: string;
+  pages: ReportPrintPage[];
+}
+
 export interface NetworkPlanScaleSKUInput {
   sku: string;
   plan_rub: number | null;

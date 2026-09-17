@@ -155,6 +155,9 @@ func main() {
 	r.POST("/api/auth/login", loginLimiter.RateLimitMiddleware(), handlers.Login)
 	r.POST("/api/auth/refresh", handlers.RefreshToken)
 	r.POST("/api/auth/logout", handlers.Logout)
+	// Страница печати отчёта: её открывает headless Chromium без сессии,
+	// доступ — по одноразовому токену задания (handlers/reports.go).
+	r.GET("/api/reports/:id/print", handlers.GetReportPrint)
 
 	// ─── Защищённые роуты (требуется JWT) ────────────────────────────────
 	api := r.Group("/api")

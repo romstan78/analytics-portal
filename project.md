@@ -286,3 +286,42 @@ frontend/           backend/
   ячейке (PDF) и цвет оценки (оба формата); в PPTX — нативные таблицы.
 - Шрифт DejaVu → Inter; титул с тремя карточками; макет страницы с акцентной
   плашкой и подзаголовком-шкалой.
+
+### Рендер отчёта через HTML и headless Chromium (17.09.2026)
+
+План — `REPORT_RENDER_HTML_PLAN.md` (вариант C2: печатный маршрут фронтенда).
+
+- Спайк на демо: `chromedp/headless-shell` (146 МБ) печатает витрину «Итоги» за
+  < 4 с, PDF со всеми тенями, скруглениями, SVG Recharts и встроенным Inter.
+- Печатная модель `models.ReportPrint` (`reports/print.go`): страницы из
+  `BuildPages` в JSON — подписи, шкалы, оценки, готовые строки чисел; графикам
+  — исходные величины. Правила блоков остались в одном месте, фронтенд их не
+  повторяет. Типы зарегистрированы в `cmd/tsgen`.
+- Frontend: маршрут `/print/report/:id?token=` до проверки сессии (`App.tsx`),
+  `pages/PrintReport.tsx` с флагом `window.__reportReady`/`__reportError`,
+  `components/report/*` на `KpiCard`, `ChartPaper`, Recharts с явными размерами
+  (динамика, bullet с собственной фигурой, водопад), простая `<table>` с повтором
+  шапки; `print.css` (`@page` A4 альбомный, колонтитул и счётчик страниц полями
+  листа, Inter self-hosted в `public/fonts`). `KpiCard` получил `badge`.
+- Backend: миграция `036` (`print_token_hash`, `print_token_expires_at`),
+  одноразовый токен печати (SHA-256 в БД, атомарное погашение `UPDATE … OUTPUT`),
+  публичный `GET /api/reports/:id/print`, пакет `reports/chrome` (chromedp по
+  `CHROME_WS_URL`, ожидание флага, `printToPDF` с `preferCSSPageSize`, снимки
+  `[data-slide-image]` в 2×), `RenderPPTXWithImages` (картинка + нативные
+  заголовок, примечания, таблицы), `REPORT_RENDERER=chrome|vector`.
+  `chromedp v0.14.2` — последняя версия под Go 1.25 (v0.15+ требует 1.26).
+- Инфраструктура: `frontend/nginx.conf` проксирует `/api/reports/*/print` на
+  `backend:8080` (адрес переменной с резолвером Docker — nginx поднимается и без
+  backend); `docker-compose.demo.yml` — сервис `chromium` и переменные backend.
+  Основной и production compose не тронуты.
+- Проверено на демо (57 сетей, все 12 блоков): PDF 19 страниц и PPTX 20 слайдов
+  готовы за 2,4–4,5 с; остановленный Chromium даёт `failed` с текстом для
+  пользователя; `make test` проходит (в него добавлены `./reports/...`).
+- Этап 4 (17.09.2026): PDF и PPTX приняты в Acrobat/PowerPoint. Векторный
+  рендер удалён (`reports/pdf.go`, `canvas.go`, встроенные шрифты, `fpdf` из
+  `go.mod`, флаг `REPORT_RENDERER`); типы страничной модели — `reports/spec.go`,
+  `RenderPPTX(snapshot, images)` — единственный писатель PPTX, блок без снимка
+  получает только текст и таблицу. Без `CHROME_WS_URL` задание падает с
+  `failed` и текстом в логе. Сервис `chromium` добавлен и в основной
+  `docker-compose.yml`; `docker-compose.production.yml` по договорённости не
+  тронут — без сервиса `chromium` и переменных отчёты там работать не будут.

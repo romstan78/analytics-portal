@@ -178,26 +178,9 @@ func TestBuildPagesUnitsSwitchVolumes(t *testing.T) {
 	}
 }
 
-func TestRenderPDF(t *testing.T) {
-	for _, unit := range []string{models.ReportUnitRub, models.ReportUnitUnits} {
-		data, err := RenderPDF(sampleSnapshot(unit))
-		if err != nil {
-			t.Fatalf("RenderPDF(%s): %v", unit, err)
-		}
-		if !bytes.HasPrefix(data, []byte("%PDF-")) {
-			t.Fatalf("not a PDF")
-		}
-		// Страниц не меньше блоков: длинные таблицы добавляют свои.
-		if n := bytes.Count(data, []byte("/Type /Page\n")) + bytes.Count(data, []byte("/Type /Page/")); n < 12 {
-			t.Errorf("pages = %d, want >= 12", n)
-		}
-		writeSample(t, "report-"+unit+".pdf", data)
-	}
-}
-
 func TestRenderPPTX(t *testing.T) {
 	s := sampleSnapshot(models.ReportUnitRub)
-	data, err := RenderPPTX(s)
+	data, err := RenderPPTX(s, nil)
 	if err != nil {
 		t.Fatalf("RenderPPTX: %v", err)
 	}
@@ -233,11 +216,10 @@ func TestRenderPPTX(t *testing.T) {
 			}
 		}
 	}
-	// 12 блоков; длинные таблицы (топ сетей на 20 строк, топ брендов, «сеть ×
-	// квартал» на 40) уходят на отдельные слайды, короткие делят слайд с
-	// графиком и карточками.
-	if slides != 17 {
-		t.Errorf("slides = %d, want 17", slides)
+	// 12 блоков без снимков: слайд на блок, а таблицы длиннее слайда (топ
+	// сетей на 20 строк, «сеть × квартал» на 40) продолжаются на следующих.
+	if slides != 14 {
+		t.Errorf("slides = %d, want 14", slides)
 	}
 	if strings.Count(presentation, "<p:sldId ") != slides {
 		t.Errorf("sldIdLst has %d entries for %d slides", strings.Count(presentation, "<p:sldId "), slides)

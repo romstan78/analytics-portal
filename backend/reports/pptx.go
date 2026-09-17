@@ -17,10 +17,10 @@ import (
 // ─── PPTX ───────────────────────────────────────────────────────────────────
 //
 // Зрелой Go-библиотеки для PPTX нет, а формат — это zip с XML. Писатель
-// копирует шаблон и добавляет к нему слайды. Карточки и графики — те же
-// примитивы холста, что и в PDF, только фигурами слайда: прямоугольники,
-// соединительные линии, путь custGeom для ломаных, текстовые поля.
-// Таблицы — нативные, чтобы их можно было править в PowerPoint.
+// копирует шаблон и добавляет к нему слайды. Графическая часть блока
+// (плитки и график) — снимок секции печатной страницы, снятый Chromium;
+// заголовок, примечания и таблицы — нативные, чтобы их можно было править в
+// PowerPoint. Блок без снимка получает только текст и таблицу.
 //
 // Правятся три служебных файла — [Content_Types].xml, presentation.xml и его
 // rels; остальное из шаблона идёт как есть, поэтому корпоративный шаблон
@@ -39,9 +39,26 @@ type pptxTemplateInfo struct {
 type pptxSlide struct {
 	shapes []string
 	nextID int
+	// images — растровые части слайда (снимки секций страницы печати);
+	// становятся media-частями пакета и связями слайда.
+	images []pptxImage
 }
 
-// pptxCanvas — холст, пишущий фигуры в текущий слайд.
+type pptxImage struct {
+	relID string
+	data  []byte
+}
+
+// SlideImage — снимок графической части секции печатной страницы для
+// слайда: Index — номер блока в запросе, размер в пикселях с учётом 2×.
+type SlideImage struct {
+	Index         int
+	PNG           []byte
+	Width, Height int
+}
+
+// pptxCanvas — фигуры текущего слайда: прямоугольники, линии, текст,
+// картинки и нативные таблицы в миллиметрах слайда.
 type pptxCanvas struct{ sl *pptxSlide }
 
 func (s *pptxSlide) id() int {
@@ -89,32 +106,29 @@ func (c pptxCanvas) Line(x1, y1, x2, y2 float64, col rgb, w float64) {
 		id, id, flip, emu(math.Min(x1, x2)), emu(math.Min(y1, y2)), emu(math.Abs(x2-x1)), emu(math.Abs(y2-y1)), lineXML(&col, w)))
 }
 
-func (c pptxCanvas) Polyline(pts [][2]float64, col rgb, w float64) {
-	if len(pts) < 2 {
-		return
+// Picture вставляет снимок в рамку b: масштаб по ширине, при нехватке высоты —
+// по высоте с центровкой; возвращает занятую высоту.
+func (c pptxCanvas) Picture(b box, img SlideImage) float64 {
+	if img.Width <= 0 || img.Height <= 0 || len(img.PNG) == 0 {
+		return 0
 	}
-	minX, minY, maxX, maxY := pts[0][0], pts[0][1], pts[0][0], pts[0][1]
-	for _, p := range pts {
-		minX, maxX = math.Min(minX, p[0]), math.Max(maxX, p[0])
-		minY, maxY = math.Min(minY, p[1]), math.Max(maxY, p[1])
+	w := b.W
+	h := w * float64(img.Height) / float64(img.Width)
+	x := b.X
+	if b.H > 0 && h > b.H {
+		h = b.H
+		w = h * float64(img.Width) / float64(img.Height)
+		x = b.X + (b.W-w)/2
 	}
-	bw, bh := math.Max(maxX-minX, 0.1), math.Max(maxY-minY, 0.1)
-	var path strings.Builder
-	for i, p := range pts {
-		tag := "lnTo"
-		if i == 0 {
-			tag = "moveTo"
-		}
-		fmt.Fprintf(&path, `<a:%s><a:pt x="%d" y="%d"/></a:%s>`, tag, emu(p[0]-minX), emu(p[1]-minY), tag)
-	}
+	relID := fmt.Sprintf("rId%d", len(c.sl.images)+2) // rId1 — макет слайда
+	c.sl.images = append(c.sl.images, pptxImage{relID: relID, data: img.PNG})
 	id := c.sl.id()
 	c.sl.shapes = append(c.sl.shapes, fmt.Sprintf(
-		`<p:sp><p:nvSpPr><p:cNvPr id="%d" name="Path %d"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`+
-			`<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`+
-			`<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/>`+
-			`<a:pathLst><a:path w="%d" h="%d" fill="none">%s</a:path></a:pathLst></a:custGeom><a:noFill/>%s</p:spPr>`+
-			`<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>`,
-		id, id, emu(minX), emu(minY), emu(bw), emu(bh), emu(bw), emu(bh), path.String(), lineXML(&col, w)))
+		`<p:pic><p:nvPicPr><p:cNvPr id="%d" name="Picture %d"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>`+
+			`<p:blipFill><a:blip r:embed="%s"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`+
+			`<p:spPr><a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`,
+		id, id, relID, emu(x), emu(b.Y), emu(w), emu(h)))
+	return h
 }
 
 func xmlEscape(s string) string {
@@ -243,8 +257,10 @@ type pptxWriter struct {
 	slides []*pptxSlide
 }
 
-// RenderPPTX собирает PPTX по снимку.
-func RenderPPTX(s *models.ReportSnapshot) ([]byte, error) {
+// RenderPPTX собирает PPTX: графическая часть блока — снимок секции
+// печатной страницы (Chromium), заголовок, примечания и таблицы — нативные
+// и правятся в PowerPoint. Блок без снимка получает только текст и таблицу.
+func RenderPPTX(s *models.ReportSnapshot, images []SlideImage) ([]byte, error) {
 	pages, err := BuildPages(s)
 	if err != nil {
 		return nil, err
@@ -253,9 +269,17 @@ func RenderPPTX(s *models.ReportSnapshot) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	byIndex := make(map[int]SlideImage, len(images))
+	for _, img := range images {
+		byIndex[img.Index] = img
+	}
 	w := &pptxWriter{info: info}
-	for _, p := range pages {
-		w.page(p)
+	for i, p := range pages {
+		if img, ok := byIndex[i]; ok {
+			w.page(p, &img)
+		} else {
+			w.page(p, nil)
+		}
 	}
 	return w.write(pptxTemplate)
 }
@@ -274,7 +298,7 @@ func (w *pptxWriter) slideHeader(title, subtitle string) (pptxCanvas, float64) {
 	c := pptxCanvas{sl}
 	W := w.info.width
 	contentW := W - 2*slideMargin
-	c.Rect(box{slideMargin, 8, 9, 1.3}, ptr(colorFact), nil, 0)
+	c.Rect(box{slideMargin, 8, 9, 1.3}, ptr(colorAccent), nil, 0)
 	c.Text(box{slideMargin, 10, contentW * 0.7, 10}, title, textStyle{Size: 18, Bold: true, Color: colorInk, Align: "L"})
 	if subtitle != "" {
 		c.Text(box{slideMargin + contentW*0.7, 10, contentW * 0.3, 10}, subtitle, textStyle{Size: 9, Color: colorMuted, Align: "R"})
@@ -283,18 +307,22 @@ func (w *pptxWriter) slideHeader(title, subtitle string) (pptxCanvas, float64) {
 	return c, 25
 }
 
-func (w *pptxWriter) page(p page) {
+// page раскладывает блок по слайдам. img — снимок графической части блока
+// (плитки и график) с печатной страницы; без него остаются текст и таблица.
+func (w *pptxWriter) page(p page, img *SlideImage) {
 	W, H := w.info.width, w.info.height
 	contentW := W - 2*slideMargin
 	if p.Block == models.ReportBlockCover {
 		sl := w.newSlide()
 		c := pptxCanvas{sl}
-		c.Rect(box{0, 0, W, 5}, ptr(colorFact), nil, 0)
+		c.Rect(box{0, 0, W, 5}, ptr(colorAccent), nil, 0)
 		c.Text(box{slideMargin, H * 0.16, contentW, 6}, "РЕЕСТР СЕТЕЙ · ОТЧЁТ", textStyle{Size: 9, Bold: true, Color: colorMuted, Align: "L"})
 		sl.shapes = append(sl.shapes, c.textBox(box{slideMargin, H*0.16 + 7, contentW, 22}, []string{p.Title}, textStyle{Size: 30, Bold: true, Color: colorInk, Align: "L"}, "t", true))
 		c.Text(box{slideMargin, H*0.16 + 30, contentW, 8}, p.Subtitle, textStyle{Size: 13, Color: colorMuted, Align: "L"})
 		y := H*0.16 + 44
-		y += drawCards(c, slideMargin, y, contentW, p.Cards) + 8
+		if img != nil {
+			y += c.Picture(box{slideMargin, y, contentW, H - y - 30}, *img) + 8
+		}
 		sl.shapes = append(sl.shapes, c.textBox(box{slideMargin, y, contentW, H - y - 10}, p.Lines, textStyle{Size: 9.5, Color: colorMuted, Align: "L"}, "t", true))
 		return
 	}
@@ -317,9 +345,6 @@ func (w *pptxWriter) page(p page) {
 		notes(c)
 		return
 	}
-	if len(p.Cards) > 0 {
-		y += drawCards(c, slideMargin, y, contentW, p.Cards) + 5
-	}
 	tableRows := 0
 	if p.Table != nil {
 		tableRows = len(p.Table.Rows)
@@ -331,34 +356,32 @@ func (w *pptxWriter) page(p page) {
 		}
 		return h
 	}
-	remaining := bottom - y
-	switch {
-	case p.Chart != nil && tableRows > 0 && tableRows <= 8 && tableH(tableRows) <= remaining:
-		// График слева, короткая таблица справа.
-		chartW := contentW * 0.56
-		drawChart(c, box{slideMargin, y, chartW, math.Min(p.Chart.preferredHeight()+10, remaining)}, p.Chart)
-		c.nativeTable(box{slideMargin + chartW + 6, y + 2, contentW - chartW - 6, 0}, p.Table, p.Table.Rows, p.Table.Total)
-		notes(c)
-		return
-	case p.Chart != nil:
-		drawChart(c, box{slideMargin, y, contentW, math.Min(p.Chart.preferredHeight()+12, remaining)}, p.Chart)
-		notes(c)
-		if tableRows == 0 {
-			return
+	if img != nil {
+		// Снимок во всю ширину; короткой таблице оставляется место под ним,
+		// длинная уходит на следующие слайды.
+		reserve := 0.0
+		if tableRows > 0 && tableRows <= 8 {
+			reserve = tableH(tableRows) + 4
 		}
-		c, y = w.slideHeader(p.Title, p.Subtitle)
-	case tableRows == 0:
+		y += c.Picture(box{slideMargin, y, contentW, bottom - y - reserve}, *img) + 4
+	}
+	if tableRows == 0 {
 		notes(c)
 		return
 	}
-	// Таблица во всю ширину, порциями по слайдам.
-	perSlide := maxTableRowsPerSlide
-	if len(p.Cards) > 0 {
-		perSlide = int((bottom - y - 6) / 6)
+	if tableH(tableRows) <= bottom-y {
+		c.nativeTable(box{slideMargin, y, contentW, 0}, p.Table, p.Table.Rows, p.Table.Total)
+		notes(c)
+		return
 	}
-	chunks := splitRows(p.Table.Rows, perSlide)
+	// Таблица порциями по слайдам. Слайд со снимком остаётся ему, таблица
+	// начинается со следующего; без снимка первая порция идёт на текущий.
+	chunks := splitRows(p.Table.Rows, maxTableRowsPerSlide)
+	if img != nil {
+		notes(c)
+	}
 	for i, rows := range chunks {
-		if i > 0 {
+		if i > 0 || img != nil {
 			c, y = w.slideHeader(continuationTitle(p.Title, i+1, len(chunks)), p.Subtitle)
 		} else if len(chunks) > 1 {
 			// Первый слайд уже создан: заменяем заголовок нумерацией.
@@ -507,6 +530,9 @@ func (w *pptxWriter) write(tpl []byte) ([]byte, error) {
 		text := string(data)
 		switch f.Name {
 		case "[Content_Types].xml":
+			if w.hasImages() && !strings.Contains(text, `Extension="png"`) {
+				text = strings.Replace(text, `<Default `, `<Default Extension="png" ContentType="image/png"/><Default `, 1)
+			}
 			text = strings.Replace(text, `</Types>`, overrides.String()+`</Types>`, 1)
 		case "ppt/_rels/presentation.xml.rels":
 			text = strings.Replace(text, `</Relationships>`, rels.String()+`</Relationships>`, 1)
@@ -524,10 +550,21 @@ func (w *pptxWriter) write(tpl []byte) ([]byte, error) {
 		}
 	}
 
+	mediaN := 0
 	for i, sl := range w.slides {
 		n := i + 1
+		var imageRels strings.Builder
+		for _, img := range sl.images {
+			mediaN++
+			name := fmt.Sprintf("image%d.png", mediaN)
+			if err := add("ppt/media/"+name, img.data); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(&imageRels, `<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/%s"/>`, img.relID, name)
+		}
 		relsXML := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
 			fmt.Sprintf(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="%s"/>`, w.info.layoutTarget) +
+			imageRels.String() +
 			`</Relationships>`
 		if err := add(fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", n), []byte(relsXML)); err != nil {
 			return nil, err
@@ -540,6 +577,15 @@ func (w *pptxWriter) write(tpl []byte) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+func (w *pptxWriter) hasImages() bool {
+	for _, sl := range w.slides {
+		if len(sl.images) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func slideXML(shapes []string) string {

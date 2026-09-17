@@ -8,33 +8,25 @@ import (
 
 // ─── Дизайн-токены ──────────────────────────────────────────────────────────
 //
-// Одна палитра и одна шкала на оба формата: смысл цвета закреплён за
-// величиной, а не за графиком. План — нейтральный серый (обязательство, фон),
-// факт — синий (то, что есть), EAC — янтарный (ожидание), прошлый год —
-// бледный. Оценки — зелёный/жёлтый/красный.
+// Цвета нативной части слайдов PPTX — заголовков, таблиц, оценок. Графики и
+// плитки приходят снимками со страницы печати и берут палитру витрины
+// (frontend/src/utils/networkDashboard.ts); акцент слайда — тот же индиго
+// темы, оценки — зелёный/жёлтый/красный, как в таблицах витрины.
 
 type rgb struct{ R, G, B uint8 }
 
 func (c rgb) hex() string { return fmt.Sprintf("%02X%02X%02X", c.R, c.G, c.B) }
 
 var (
-	colorInk      = rgb{0x1F, 0x29, 0x37} // основной текст
-	colorMuted    = rgb{0x6B, 0x72, 0x80} // подписи, сноски
-	colorLine     = rgb{0xE5, 0xE7, 0xEB} // линейки таблиц, сетка
-	colorZebra    = rgb{0xF6, 0xF7, 0xF9} // чётные строки, фон карточек
-	colorCardLine = rgb{0xE2, 0xE6, 0xEB}
-	colorWhite    = rgb{0xFF, 0xFF, 0xFF}
+	colorInk   = rgb{0x0F, 0x17, 0x2A} // основной текст
+	colorMuted = rgb{0x64, 0x74, 0x8B} // подписи, сноски
+	colorLine  = rgb{0xE2, 0xE8, 0xF0} // линейки таблиц
+	colorZebra = rgb{0xF8, 0xFA, 0xFC} // чётные строки
+	colorAccent  = rgb{0x63, 0x66, 0xF1} // акцент слайда — primary темы
 
-	colorPlan  = rgb{0xCB, 0xD2, 0xDB} // серая полоса обязательства
-	colorFact  = rgb{0x25, 0x63, 0xEB} // синий
-	colorEAC   = rgb{0xF5, 0x9E, 0x0B} // янтарный
-	colorEACBg = rgb{0xFD, 0xE6, 0x8A} // прогнозная часть столбца
-	colorPrev  = rgb{0x9C, 0xA3, 0xAF} // линия прошлого года
-	colorBar   = rgb{0xDB, 0xEA, 0xFE} // data bar в таблице
-
-	colorGood = rgb{0x15, 0x80, 0x3D}
+	colorGood = rgb{0x14, 0x91, 0x74}
 	colorWarn = rgb{0xB4, 0x53, 0x09}
-	colorBad  = rgb{0xB9, 0x1C, 0x1C}
+	colorBad  = rgb{0xD1, 0x5D, 0x50}
 )
 
 // tone — оценка величины для цвета текста и бейджей.

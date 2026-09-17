@@ -319,7 +319,7 @@ func planFactEACPage(s *models.ReportSnapshot) page {
 		toned(sc.signed(pick(unit, sm.GapRub, sm.GapUnits)), deltaTone(pick(unit, sm.GapRub, sm.GapUnits)))}
 	return page{
 		Block: models.ReportBlockPlanFactEAC, Title: "План, факт и EAC по кварталам", Subtitle: sc.label,
-		Chart: &chartSpec{Title: "Выполнение обязательства по кварталам", Subtitle: "ширина полосы — план, синим — факт, риска — ожидаемый итог · " + sc.label, Scale: sc, Bullet: bullets},
+		Chart: &chartSpec{Title: "Выполнение обязательства по кварталам", Subtitle: "полоса — план, внутри — факт, риска — ожидаемый итог · " + sc.label, Scale: sc, Bullet: bullets},
 		Table: &table{
 			Columns: []column{{"Квартал", 0.8, false}, {"План, " + sc.label, 1.3, true}, {"Факт, " + sc.label, 1.3, true},
 				{"EAC, " + sc.label, 1.3, true}, {"Факт / план", 1, true}, {"EAC / план", 1.2, true}, {"Разрыв, " + sc.label, 1.3, true}},

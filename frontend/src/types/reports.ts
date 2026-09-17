@@ -10,7 +10,21 @@ export type {
   ReportRequest,
   ReportJobStatus,
   ReportCreateResponse,
+  ReportPrint,
+  ReportPrintPage,
+  ReportPrintCard,
+  ReportPrintChart,
+  ReportPrintScale,
+  ReportPrintBullet,
+  ReportPrintMonth,
+  ReportPrintStep,
+  ReportPrintTable,
+  ReportPrintColumn,
+  ReportPrintCell,
 } from './api.generated';
+
+// Оценка величины цветом в печатной модели (models.ReportTone*).
+export type ReportTone = 'neutral' | 'good' | 'warn' | 'bad';
 
 export type ReportFormat = 'pdf' | 'pptx';
 export type ReportUnit = 'rub' | 'units';

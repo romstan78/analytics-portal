@@ -57,8 +57,10 @@ export function Sparkline({ values, color, scale = 'zero' }: {
   );
 }
 
+// badge — готовая подпись в углу вместо процента прироста: печатный отчёт
+// приносит отклонение уже текстом и с цветом оценки.
 export function KpiCard({
-  label, primary, secondary, hint, accent, trend, trendScale, growth,
+  label, primary, secondary, hint, accent, trend, trendScale, growth, badge,
 }: {
   label: string;
   primary: string;
@@ -68,6 +70,7 @@ export function KpiCard({
   trend?: number[];
   trendScale?: 'zero' | 'range';
   growth?: number | null;
+  badge?: { text: string; color: string };
 }) {
   return (
     <Paper
@@ -85,6 +88,11 @@ export function KpiCard({
             sx={{ fontWeight: 750, color: growth >= 0 ? POLARITY_POSITIVE : POLARITY_NEGATIVE }}
           >
             {growthLabel(growth)}
+          </Typography>
+        )}
+        {growth == null && badge && (
+          <Typography variant="caption" sx={{ fontWeight: 750, color: badge.color, textAlign: 'right' }}>
+            {badge.text}
           </Typography>
         )}
       </Stack>

@@ -39,6 +39,20 @@ func (s *memoryReportJobs) ForUser(id, owner string) (models.ReportJob, bool) {
 	return job, true
 }
 
+func (s *memoryReportJobs) ConsumePrintToken(id, tokenHash string, now time.Time) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[id]
+	if !ok || job.PrintTokenHash == "" || job.PrintTokenHash != tokenHash ||
+		(job.Status != models.ReportJobQueued && job.Status != models.ReportJobRunning) ||
+		!job.PrintTokenExpiresAt.After(now) {
+		return "", false
+	}
+	job.PrintTokenHash = ""
+	s.jobs[id] = job
+	return job.SnapshotJSON, true
+}
+
 func (s *memoryReportJobs) ActiveCount(owner string) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,7 +107,7 @@ func (s *memoryReportJobs) LiveFilePaths() (map[string]struct{}, bool) {
 }
 
 // useTestReportJobs подменяет реестр, каталог выгрузок и рендер на время теста.
-func useTestReportJobs(t *testing.T, render func(string, *models.ReportSnapshot) ([]byte, error)) *memoryReportJobs {
+func useTestReportJobs(t *testing.T, render func(string, *models.ReportSnapshot, string) ([]byte, error)) *memoryReportJobs {
 	t.Helper()
 	withTestLogger(t)
 	store := newMemoryReportJobs()
@@ -109,12 +123,12 @@ func queuedReportJob(store *memoryReportJobs, id string) {
 }
 
 func TestRunReportJobWritesFileAndMarksReady(t *testing.T) {
-	store := useTestReportJobs(t, func(format string, _ *models.ReportSnapshot) ([]byte, error) {
+	store := useTestReportJobs(t, func(format string, _ *models.ReportSnapshot, _ string) ([]byte, error) {
 		return []byte("%PDF-" + format), nil
 	})
 	queuedReportJob(store, "job-ok")
 
-	runReportJob("job-ok", "pdf", &models.ReportSnapshot{})
+	runReportJob("job-ok", "pdf", &models.ReportSnapshot{}, "")
 
 	job, _ := store.ForUser("job-ok", "roman")
 	if job.Status != models.ReportJobReady || job.FilePath == "" {
@@ -130,12 +144,12 @@ func TestRunReportJobWritesFileAndMarksReady(t *testing.T) {
 }
 
 func TestRunReportJobMarksFailedOnRenderError(t *testing.T) {
-	store := useTestReportJobs(t, func(string, *models.ReportSnapshot) ([]byte, error) {
+	store := useTestReportJobs(t, func(string, *models.ReportSnapshot, string) ([]byte, error) {
 		return nil, errors.New("boom")
 	})
 	queuedReportJob(store, "job-err")
 
-	runReportJob("job-err", "pptx", &models.ReportSnapshot{})
+	runReportJob("job-err", "pptx", &models.ReportSnapshot{}, "")
 
 	job, _ := store.ForUser("job-err", "roman")
 	if job.Status != models.ReportJobFailed || job.Error != reportFailedMessage {
@@ -149,12 +163,12 @@ func TestRunReportJobMarksFailedOnRenderError(t *testing.T) {
 
 // Паника рендера не должна ронять процесс и оставлять задание «running».
 func TestRunReportJobRecoversFromPanic(t *testing.T) {
-	store := useTestReportJobs(t, func(string, *models.ReportSnapshot) ([]byte, error) {
+	store := useTestReportJobs(t, func(string, *models.ReportSnapshot, string) ([]byte, error) {
 		panic("renderer exploded")
 	})
 	queuedReportJob(store, "job-panic")
 
-	runReportJob("job-panic", "pdf", &models.ReportSnapshot{})
+	runReportJob("job-panic", "pdf", &models.ReportSnapshot{}, "")
 
 	job, _ := store.ForUser("job-panic", "roman")
 	if job.Status != models.ReportJobFailed {

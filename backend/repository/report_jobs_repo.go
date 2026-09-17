@@ -45,15 +45,47 @@ func scanReportJob(scan func(dest ...any) error) (models.ReportJob, error) {
 	return job, nil
 }
 
-// InsertReportJob заводит задание в состоянии queued вместе со снимком.
+// InsertReportJob заводит задание в состоянии queued вместе со снимком и
+// хэшем токена печати.
 func InsertReportJob(job models.ReportJob) error {
+	var expires any
+	if !job.PrintTokenExpiresAt.IsZero() {
+		expires = job.PrintTokenExpiresAt.UTC()
+	}
 	_, err := config.DB.Exec(
 		`INSERT INTO dbo.tbl_ReportJobs
-		     (id, owner_name, status, format, title, file_name, snapshot_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		     (id, owner_name, status, format, title, file_name, snapshot_json, created_at,
+		      print_token_hash, print_token_expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.ID, job.Owner, job.Status, job.Format, job.Title, job.FileName, job.SnapshotJSON, job.CreatedAt.UTC(),
+		sql.NullString{String: job.PrintTokenHash, Valid: job.PrintTokenHash != ""}, expires,
 	)
 	return err
+}
+
+// ConsumeReportPrintToken выдаёт снимок задания по хэшу токена печати и тут же
+// гасит токен: одна выдача на задание. Условия — задание ещё готовится и срок
+// токена не вышел; иначе снимка нет, и различать причины наружу незачем.
+// Обнуление и чтение — одним оператором, чтобы два параллельных запроса с
+// одним токеном не получили снимок оба.
+func ConsumeReportPrintToken(id, tokenHash string, now time.Time) (string, bool, error) {
+	var snapshot string
+	err := config.DB.QueryRow(
+		`UPDATE dbo.tbl_ReportJobs
+		    SET print_token_hash = NULL
+		 OUTPUT inserted.snapshot_json
+		  WHERE id = ? AND print_token_hash = ?
+		    AND status IN ('queued', 'running')
+		    AND print_token_expires_at > ?`,
+		id, tokenHash, now.UTC(),
+	).Scan(&snapshot)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return snapshot, true, nil
 }
 
 // GetReportJob читает задание своего владельца; чужое не находится.

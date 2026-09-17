@@ -2,7 +2,7 @@
 // Общие хелперы (авторизация, разбор ответа) берём из ./promo.
 
 import { fetchWithAuth, parseJSONResponse } from './promo';
-import type { ReportBlock, ReportCreateResponse, ReportJobStatus, ReportRequest } from '../types/reports';
+import type { ReportBlock, ReportCreateResponse, ReportJobStatus, ReportPrint, ReportRequest } from '../types/reports';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -35,5 +35,18 @@ export const reportAPI = {
       throw new Error(payload.error || 'Не удалось скачать отчёт');
     }
     return response.blob();
+  },
+
+  // Печатная модель для страницы /print/report/:id. Страницу открывает
+  // headless Chromium без сессии пользователя, поэтому здесь не fetchWithAuth,
+  // а одноразовый токен задания; путь относительный: nginx фронтенда
+  // проксирует его на backend, и Chromium в контейнере не нуждается в
+  // публичном адресе API.
+  getPrint: async (id: string, token: string): Promise<ReportPrint> => {
+    const response = await fetch(
+      `/api/reports/${encodeURIComponent(id)}/print?token=${encodeURIComponent(token)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    return parseJSONResponse<ReportPrint>(response, 'Не удалось загрузить данные отчёта');
   },
 };

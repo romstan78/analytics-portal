@@ -16,6 +16,12 @@ const PromoAnalysis = lazy(() => import('./pages/PromoAnalysis'));
 const Budget = lazy(() => import('./pages/Budget'));
 const NetworkRegistry = lazy(() => import('./pages/NetworkRegistry'));
 const AdminDictionaries = lazy(() => import('./pages/AdminDictionaries'));
+const PrintReport = lazy(() => import('./pages/PrintReport'));
+
+// Печатная страница отчёта живёт вне сессии: её открывает headless Chromium
+// по одноразовому токену задания (pages/PrintReport.tsx). Проверять здесь
+// auth.token нельзя — у Chromium его нет, и он увидел бы форму входа.
+const PRINT_ROUTE = /^\/print\/report\/[^/]+$/;
 
 function PageLoader() {
   return (
@@ -108,6 +114,21 @@ export default function App() {
     window.addEventListener('auth:logout', onForceLogout);
     return () => window.removeEventListener('auth:logout', onForceLogout);
   }, [queryClient]);
+
+  if (PRINT_ROUTE.test(location.pathname)) {
+    return (
+      <ThemeProvider theme={modernTheme}>
+        <CssBaseline />
+        <ErrorBoundary>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/print/report/:id" element={<PrintReport />} />
+            </Routes>
+          </Suspense>
+        </ErrorBoundary>
+      </ThemeProvider>
+    );
+  }
 
   if (!auth.token) {
     return (

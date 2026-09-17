@@ -1,0 +1,154 @@
+/* Печатная страница отчёта (/print/report/:id).
+ *
+ * Страницу открывает headless Chromium и печатает через printToPDF, а для
+ * PPTX снимает секции [data-slide] как картинки. Поэтому здесь два режима:
+ * экранный — секции стоят одна под другой с фиксированной шириной листа,
+ * чтобы снимок секции совпадал с её видом в PDF, — и печатный, где каждая
+ * секция занимает свою страницу A4 альбомной ориентации.
+ *
+ * Inter подключён с собственного сервера: Chromium в контейнере без
+ * интернета с Google Fonts ничего не получит и ушёл бы в Helvetica.
+ * Статические начертания 400 и 600 — те же файлы, что у векторного рендера.
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/fonts/Inter-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('/fonts/Inter-SemiBold.ttf') format('truetype');
+}
+
+/* Лист A4 альбомный минус поля — ширина секции и на экране, и в печати. */
+:root {
+  --report-page-width: 273mm;
+  --report-page-height: 186mm;
+}
+
+@page {
+  size: A4 landscape;
+  margin: 12mm;
+
+  /* Колонтитул — полями листа: счётчик страниц есть только здесь, а
+   * position: fixed Chromium при печати кладёт поверх содержимого.
+   * Тексты слева и по центру задаёт ReportDocument (они из данных).
+   * Chromium печатает margin boxes начиная с 131-й версии. */
+  @bottom-left {
+    font: 9px 'Inter', 'Helvetica', 'Arial', sans-serif;
+    color: #64748b;
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+
+  @bottom-center {
+    font: 9px 'Inter', 'Helvetica', 'Arial', sans-serif;
+    color: #64748b;
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+
+  @bottom-right {
+    content: counter(page) ' / ' counter(pages);
+    font: 9px 'Inter', 'Helvetica', 'Arial', sans-serif;
+    color: #64748b;
+    vertical-align: top;
+    padding-top: 4mm;
+  }
+}
+
+.report-root {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  background: #fff;
+  color: #0f172a;
+  width: var(--report-page-width);
+  margin: 0 auto;
+}
+
+.report-section {
+  width: var(--report-page-width);
+  min-height: var(--report-page-height);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  break-after: page;
+  page-break-after: always;
+}
+
+.report-section:last-of-type {
+  break-after: auto;
+  page-break-after: auto;
+}
+
+/* Плитки и графики не рвутся между страницами; таблица рвётся по строкам
+ * с повтором шапки. */
+.report-keep {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.report-table thead {
+  display: table-header-group;
+}
+
+.report-table tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* Колонтитул на экране — под последней секцией; в печати его заменяют
+ * поля листа (@page выше). */
+.report-footer {
+  font-size: 9px;
+  color: #64748b;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 6px;
+  border-top: 1px solid #e2e8f0;
+}
+
+@media screen {
+  body {
+    background: #e9edf2;
+  }
+
+  .report-root {
+    padding: 12mm;
+    width: calc(var(--report-page-width) + 24mm);
+  }
+
+  .report-section {
+    margin-bottom: 12mm;
+  }
+}
+
+@media print {
+  html, body, #root {
+    background: #fff;
+    height: auto;
+  }
+
+  .report-footer {
+    display: none;
+  }
+
+  /* Скруглённая карточка таблицы режет повтор шапки на следующем листе. */
+  .report-table-paper {
+    overflow: visible;
+  }
+
+  /* Анимации и переходы MUI в печати не нужны: снимок делается сразу. */
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
