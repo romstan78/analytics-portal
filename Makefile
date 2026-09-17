@@ -97,7 +97,7 @@ types-check:
 	@echo "Типы фронтенда совпадают с Go-структурами"
 
 test: types-check
-	cd backend && go vet ./... && go test ./config ./middleware ./handlers ./repository ./services ./cmd/bootstrap_user
+	cd backend && go vet ./... && go test ./config ./middleware ./handlers ./repository ./services ./reports/... ./cmd/bootstrap_user
 	cd frontend && npm run lint && npm run test:unit && npm run build
 	cd sync_script && python3 -m unittest -v test_import_promo.py test_dedupe_promo.py test_import_network_facts.py test_create_demo_promo_db.py test_create_demo_ecom_sales.py test_create_demo_network_registry.py
 

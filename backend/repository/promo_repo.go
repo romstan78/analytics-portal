@@ -922,10 +922,32 @@ func FetchExistingRow(id int) (*models.PromoRowDB, error) {
 	return &r, nil
 }
 
+// promoStatusCaseSQL — единственное место, где статус промо выводится из
+// согласований и факта (services.PromoStatus*). Статус не откатывается: раз
+// финализированное или проведённое промо остаётся таким и без записей
+// согласования в новых колонках — у истории до перехода их нет. Единственный
+// путь назад — «Отклонено», когда отклонены оба согласования. Применяется
+// отдельным UPDATE после записи: в SET одного оператора SQL Server видит
+// прежние значения колонок.
+const promoStatusCaseSQL = `CASE
+	WHEN agreement1_status = 'rejected' AND agreement2_status = 'rejected' THEN N'Отклонено'
+	WHEN (agreement1_status = 'approved' AND agreement2_status = 'approved' OR status IN (N'Финализировано', N'Проведено'))
+	     AND actual_promo_sales_units IS NOT NULL AND actual_investments IS NOT NULL THEN N'Проведено'
+	WHEN status = N'Проведено' THEN N'Проведено'
+	WHEN agreement1_status = 'approved' AND agreement2_status = 'approved' OR status = N'Финализировано' THEN N'Финализировано'
+	ELSE N'В процессе согласования' END`
+
+// recalcPromoStatusTx пересчитывает статус одной карточки по promoStatusCaseSQL.
+func recalcPromoStatusTx(tx *sql.Tx, id int64) error {
+	_, err := tx.Exec(`UPDATE dbo.tbl_PromoActivities SET status = `+promoStatusCaseSQL+` WHERE id = ?`, id)
+	return err
+}
+
 // UpdatePromo возвращает rowsAffected (0 = конфликт версий).
 // Если updatedAt пустой — обновляем без проверки версии (нет optimistic locking).
+// Статус клиентом не задаётся — он пересчитывается после записи.
 func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) {
-	query := `UPDATE dbo.tbl_PromoActivities SET 
+	query := `UPDATE dbo.tbl_PromoActivities SET
 		network_name = ?, kam = ?, brand = ?, brand_as = ?, sku = ?,
 		year = ?, month = ?, quarter = ?, mechanics = ?, gtn_opex = ?,
 		baseline_units = ?, baseline_rub = ?,
@@ -937,7 +959,7 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		id_directum = ?, ds_number = ?, discount_amount = ?,
 		conditions = ?, comments = ?, ecom_segment = ?,
 		total_pharmacies = ?, promo_pharmacies = ?,
-		status = ?, date = ?,
+		date = ?,
 		key_region = ?, top20_segment = ?, olap_price = ?,
 		plan_promo_cip_olap = ?, fact_promo_cip_olap = ?,
 		plan_promo_uplift_cip_olap = ?, fact_promo_uplift_cip_olap = ?,
@@ -971,7 +993,7 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		r.IDDirectum, r.DSNumber, r.DiscountAmount,
 		r.Conditions, r.Comments, r.EcomSegment,
 		r.TotalPharmacies, r.PromoPharmacies,
-		r.Status, r.Date,
+		r.Date,
 		r.KeyRegion, r.Top20Segment, r.OlapPrice,
 		r.PlanPromoCipOlap, r.FactPromoCipOlap,
 		r.PlanPromoUpliftCipOlap, r.FactPromoUpliftCipOlap,
@@ -999,8 +1021,10 @@ func UpdatePromo(id int, r *models.PromoRowDB, updatedAt string) (int64, error) 
 		if execErr != nil {
 			return execErr
 		}
-		affected, execErr = result.RowsAffected()
-		return execErr
+		if affected, execErr = result.RowsAffected(); execErr != nil || affected == 0 {
+			return execErr
+		}
+		return recalcPromoStatusTx(tx, int64(id))
 	})
 	return affected, err
 }
@@ -1108,6 +1132,9 @@ func InsertPromoWithKey(r *models.PromoRowDB, idempotencyKey, username string) (
 			r.TurnoverPerPoint, r.TurnoverPerPointPromo,
 		).Scan(&newID); scanErr != nil {
 			return scanErr
+		}
+		if recalcErr := recalcPromoStatusTx(tx, newID); recalcErr != nil {
+			return recalcErr
 		}
 		if idempotencyKey == "" {
 			return nil
@@ -1310,6 +1337,25 @@ func GetApprovals(params ApprovalParams) ([]models.ApprovalRow, int, error) {
 	if results == nil {
 		results = []models.ApprovalRow{}
 	}
+
+	// Число комментариев считаем здесь, одним запросом на страницу: иначе
+	// страница из 50 карточек делает 50 запросов /comments/:id и упирается
+	// в лимит частоты.
+	ids := make([]int, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+	}
+	dbCounts, err := CountPromoComments(ids)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count promo comments: %w", err)
+	}
+	for i := range results {
+		legacy := 0
+		if results[i].Comments != nil {
+			legacy = len(parseLegacyComments(results[i].ID, *results[i].Comments))
+		}
+		results[i].CommentsCount = MergedCommentsCount(legacy, dbCounts[results[i].ID])
+	}
 	return results, total, nil
 }
 
@@ -1436,6 +1482,9 @@ func applyApprovalUpdate(
 	}
 	if affected != 1 {
 		return 0, &ApprovalConflictError{IDs: []int{item.ID}}
+	}
+	if err := recalcPromoStatusTx(tx, int64(item.ID)); err != nil {
+		return 0, err
 	}
 	if comment != "" {
 		if err := insertCommentTx(tx, item.ID, username, fmt.Sprintf("согласование%d", agreementNum), comment); err != nil {
@@ -1731,10 +1780,16 @@ func FetchPromoCommentsFallback(promoID int) []models.CommentRow {
 	).Scan(&raw); err != nil || !raw.Valid || raw.String == "" {
 		return []models.CommentRow{}
 	}
+	return parseLegacyComments(promoID, raw.String)
+}
 
-	// Формат: [DD.MM.YYYY роль|автор]: текст
-	re := regexp.MustCompile(`^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$`)
-	lines := strings.Split(raw.String, "\n")
+// Формат строки текстового поля comments: [DD.MM.YYYY роль|автор]: текст
+var legacyCommentLine = regexp.MustCompile(`^\[(\d{2}\.\d{2}\.\d{4})\s+([^|]+)\|([^\]]+)\]:\s*(.*)$`)
+
+// parseLegacyComments разбирает текстовое поле comments на записи.
+func parseLegacyComments(promoID int, raw string) []models.CommentRow {
+	re := legacyCommentLine
+	lines := strings.Split(raw, "\n")
 	result := make([]models.CommentRow, 0, len(lines))
 
 	for _, line := range lines {
@@ -1763,6 +1818,46 @@ func FetchPromoCommentsFallback(promoID int) []models.CommentRow {
 		}
 	}
 	return result
+}
+
+// CountPromoComments возвращает число записей tbl_PromoComments по каждому промо
+// из списка. Промо без записей в карте отсутствуют.
+func CountPromoComments(promoIDs []int) (map[int]int, error) {
+	counts := make(map[int]int, len(promoIDs))
+	if len(promoIDs) == 0 {
+		return counts, nil
+	}
+	placeholders := strings.Repeat(",?", len(promoIDs))[1:]
+	args := make([]interface{}, len(promoIDs))
+	for i, id := range promoIDs {
+		args[i] = id
+	}
+	rows, err := config.DB.Query(
+		"SELECT promo_id, COUNT(*) FROM dbo.tbl_PromoComments WHERE promo_id IN ("+placeholders+") GROUP BY promo_id",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		counts[id] = n
+	}
+	return counts, rows.Err()
+}
+
+// MergedCommentsCount — сколько записей отдаёт GET /api/promo/comments/:id:
+// текстовое поле хранит всю историю, таблица — только новые записи, поэтому
+// итог равен большему из двух (см. GetPromoCommentsHandler).
+func MergedCommentsCount(legacy, db int) int {
+	if legacy > db {
+		return legacy
+	}
+	return db
 }
 
 // InsertComment добавляет комментарий в tbl_PromoComments.

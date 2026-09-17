@@ -15,10 +15,10 @@ import (
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{3,100}$`)
 
-// bootstrapRoles повторяет CK8_Users_role. Роль kam появилась вместе с реестром
+// bootstrapRoles повторяет CK33_Users_role. Роль kam появилась вместе с реестром
 // сетей: без неё завести КАМа было нечем, хотя все операции реестра требуют
 // именно её (main.go, RoleRequired("admin", "kam")).
-var bootstrapRoles = []string{"admin", "agreement1", "agreement2", "kam"}
+var bootstrapRoles = []string{"admin", "analyst", "agreement1", "agreement2", "kam"}
 
 func allowedBootstrapRole(role string) bool {
 	for _, allowed := range bootstrapRoles {

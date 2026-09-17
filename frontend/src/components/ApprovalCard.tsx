@@ -83,6 +83,11 @@ const ApprovalCard = memo(function ApprovalCard({
     return ALL_FIELDS_FLAT.filter(f => visibleFields.includes(f.id) && !HEADER_FIELDS.has(f.id));
   }, [visibleFields]);
 
+  const [historyAnchor, setHistoryAnchor] = useState<HTMLElement | null>(null);
+
+  // Историю запрашиваем только при открытии popover: страница из 50 карточек
+  // иначе делала 50 запросов разом и упиралась в лимит частоты (429).
+  // Число для кнопки приходит вместе со списком (comments_count).
   const { data: comments = [], isLoading: commentsLoading } = useQuery<CommentRow[]>({
     queryKey: ['comments', id],
     queryFn: async () => {
@@ -90,10 +95,8 @@ const ApprovalCard = memo(function ApprovalCard({
       const list = (res as { data?: CommentRow[] })?.data;
       return Array.isArray(list) ? list : [];
     },
-    enabled: !!id,
+    enabled: Boolean(historyAnchor),
   });
-
-  const [historyAnchor, setHistoryAnchor] = useState<HTMLElement | null>(null);
 
   const leftBorderColor = item.plan_roi != null
     ? (Number(item.plan_roi) >= 0 ? '#16a34a' : '#dc2626')
@@ -191,13 +194,11 @@ const ApprovalCard = memo(function ApprovalCard({
           )}
 
           {/* Кнопка просмотра истории (только если есть комментарии) */}
-          {commentsLoading ? (
-            <CircularProgress size={14} sx={{ mb: 1 }} />
-          ) : comments.length > 0 && (
+          {item.comments_count > 0 && (
             <Button size="small"
               onClick={(e) => setHistoryAnchor(e.currentTarget)}
               sx={{ color: '#6366f1', textTransform: 'none', p: 0, mb: 1, justifyContent: 'flex-start', fontSize: '0.75rem' }}>
-              📝 История ({comments.length})
+              📝 История ({item.comments_count})
             </Button>
           )}
 
@@ -235,6 +236,7 @@ const ApprovalCard = memo(function ApprovalCard({
       >
         <Box sx={{ p: 2, maxWidth: 420, maxHeight: 360, overflowY: 'auto' }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1 }}>📝 История переписки</Typography>
+          {commentsLoading && <CircularProgress size={16} />}
           {comments.map((msg) => {
             const style = ROLE_COLORS[msg.role] || ROLE_COLORS['КАМ'];
             const icon = ROLE_ICONS[msg.role] || '💬';

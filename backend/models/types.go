@@ -268,5 +268,9 @@ type ApprovalRow struct {
 	Status                *string  `json:"status"`
 	HistoricalCount       int      `json:"historical_count"`
 	AvgHistoricalROI      *float64 `json:"avg_historical_roi"`
-	UpdatedAt             string   `json:"updated_at"`
+	// CommentsCount — сколько записей вернёт GET /api/promo/comments/:id.
+	// Считается на сервере, чтобы страница карточек не запрашивала
+	// историю каждого промо по отдельности.
+	CommentsCount int    `json:"comments_count"`
+	UpdatedAt     string `json:"updated_at"`
 }

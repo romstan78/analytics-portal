@@ -1,0 +1,594 @@
+<title>Экран «Бюджет»</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  :root{
+    --ground:#F2F5F3; --paper:#ffffff; --ink:#0f172a; --muted:#64748b; --faint:#94a3b8;
+    --line:#e2e8f0; --line-soft:#f1f5f9; --head:#f1f5f9;
+    --accent:#6366f1; --accent-dark:#4f46e5; --accent-soft:#eef2ff; --accent-line:#c7d2fe;
+    --cur-soft:#f5f3ff; --fut-soft:#eef2ff; --bud-soft:#f8fafc;
+    --good:#15803d; --good-soft:#ecfdf5; --bad:#b91c1c; --bad-soft:#fef2f2; --warn:#b45309; --warn-soft:#fffbeb;
+    --edit:#fffbeb; --edit-line:#f59e0b;
+    --shadow:0 1px 3px 0 rgba(15,23,42,.08),0 1px 2px -1px rgba(15,23,42,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:"Inter","Helvetica Neue",Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1560px;margin:0 auto;padding:28px 24px 64px}
+  h1{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px;text-wrap:balance}
+  h2{font-size:18px;font-weight:600;letter-spacing:-.01em;margin:0}
+  h3{font-size:14px;font-weight:600;margin:0}
+  p{margin:0}
+  .lede{color:var(--muted);max-width:76ch}
+  .lede b{color:var(--ink);font-weight:600}
+  .section-title{margin:36px 0 12px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .section-title h2{font-size:16px}
+  .section-title span{color:var(--muted);font-size:13px}
+
+  .screen{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+  .screen-head{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .crumbs{color:var(--muted);font-size:12px;margin-bottom:2px}
+  .crumbs b{color:var(--ink);font-weight:600}
+  .who{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px 4px 4px}
+  .who i{font-style:normal;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent-dark);display:grid;place-items:center;font-size:11px;font-weight:700}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .btn{appearance:none;font:inherit;font-weight:600;font-size:13px;border-radius:10px;padding:7px 14px;cursor:pointer;border:1px solid #cbd5e1;background:var(--paper);color:var(--ink);text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 6px -1px rgba(99,102,241,.2)}
+  .btn.ghost{border-color:transparent;color:var(--accent-dark)}
+  .btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+
+  .versions{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end;padding:12px 20px;border-bottom:1px solid var(--line);background:#fafbfc}
+  .filters{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end;padding:12px 20px;border-bottom:1px solid var(--line)}
+  .f{display:flex;flex-direction:column;gap:4px}
+  .f label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;font-weight:600}
+  select{appearance:none;font:inherit;font-size:13px;border:1px solid #cbd5e1;background:var(--paper) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%2364748b' stroke-width='1.5'/></svg>") no-repeat right 10px center;border-radius:8px;padding:6px 28px 6px 10px;min-height:34px;color:var(--ink);cursor:pointer}
+  .vstate{font-size:12px;color:var(--muted);padding-bottom:8px}
+  .vstate b{color:var(--ink);font-weight:600}
+  .seg{display:inline-flex;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;background:var(--paper)}
+  .seg button{appearance:none;border:0;background:transparent;font:inherit;font-size:13px;font-weight:500;color:var(--muted);padding:7px 11px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:0}
+  .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent-dark);font-weight:600}
+  .seg.sm button{padding:4px 9px;font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{appearance:none;font:inherit;font-size:12px;font-weight:500;border:1px solid #cbd5e1;background:var(--paper);color:var(--muted);border-radius:999px;padding:5px 10px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+  .chip[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent-dark);font-weight:600}
+  .chip small{color:var(--faint);font-weight:500}
+  .chip[aria-pressed="true"] small{color:var(--accent)}
+  button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .hint{font-size:12px;color:var(--muted);padding:8px 20px 0}
+  .hint b{color:var(--ink);font-weight:600}
+
+  .body{display:grid;grid-template-columns:minmax(0,1fr)}
+  .body.with-drawer{grid-template-columns:minmax(0,1fr) 760px}
+  @media (max-width:1360px){.body.with-drawer{grid-template-columns:minmax(0,1fr)}}
+  .main{min-width:0}
+  .tscroll{overflow-x:auto;margin:12px 20px 8px;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+  th,td{padding:5px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line-soft)}
+  th{background:var(--head);color:var(--muted);font-weight:600;font-size:12px;position:sticky;top:0;z-index:1}
+  th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--paper);z-index:2}
+  th:first-child{background:var(--head);z-index:3}
+  thead tr.sub th{font-weight:500;font-size:11px;padding-top:2px;padding-bottom:6px;color:var(--faint)}
+  th.q{border-left:1px solid var(--line)} th.year{border-left:1px solid var(--line)}
+  th.year.q{font-weight:700}
+  td.qs{border-left:1px solid var(--line)} td.year{border-left:1px solid var(--line);font-weight:600}
+  td.cur{background:var(--cur-soft)} td.fut{background:var(--fut-soft)} td.bud{background:var(--bud-soft)}
+  th.cur{box-shadow:inset 0 -2px 0 var(--accent)} th.fut{box-shadow:inset 0 -2px 0 var(--accent-line)}
+
+  tr.brand-first td{border-top:1px solid var(--line)}
+  tr.brand-first td:first-child{font-weight:600}
+  td.lbl{color:var(--muted);font-weight:500;padding-left:18px;font-size:12px}
+  td.lbl.strong{color:var(--ink);font-weight:600}
+  td.lbl .promo-lnk{color:var(--accent-dark);font-size:11px;margin-left:6px;font-weight:500}
+  tr.pct td{font-weight:600}
+  tr.comp td{font-size:12px;color:var(--muted)}
+  tr.comp td.lbl{padding-left:30px}
+  tr.total td{background:#fafbfc;border-top:2px solid var(--line)}
+  tr.total td:first-child{background:#fafbfc;font-weight:700}
+  tr.total.pct td{font-weight:700}
+  tr.net td{font-size:12px;color:var(--muted);background:#fcfcfd}
+  tr.net td:first-child{background:#fcfcfd;padding-left:26px;color:var(--ink)}
+  tr.net td:first-child a{color:var(--accent-dark);text-decoration:none;font-weight:500}
+  tr.net td .tag{font-size:10px;color:var(--faint);margin-left:6px}
+  tr.foot td{color:var(--muted);font-size:11px;font-style:italic;background:#fafbfc}
+  .row-toggle{appearance:none;border:0;background:transparent;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;padding:0;display:inline-flex;gap:6px;align-items:center}
+  .row-toggle::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+  .row-toggle[aria-expanded="true"]::before{transform:rotate(45deg)}
+  .mk{display:inline-block;width:1.1em;text-align:left;color:var(--faint);font-size:11px;margin-left:4px}
+  .mk.paid{color:var(--good)} .mk.part{color:var(--warn)} .mk.fcst{color:var(--accent)}
+  td.pos{color:var(--good)} td.neg{color:var(--bad)} td.neu{color:var(--muted)}
+  td.cmp{font-size:12px}
+  td.editable{cursor:text}
+  td.editable:hover{box-shadow:inset 0 0 0 1px var(--accent-line)}
+  td.promo-cell{cursor:pointer}
+  td.promo-cell:hover{box-shadow:inset 0 0 0 1px var(--accent-line);text-decoration:underline dotted var(--accent)}
+  td.promo-open{box-shadow:inset 0 0 0 2px var(--accent)!important}
+  td.edited{background:var(--edit)!important;box-shadow:inset 3px 0 0 var(--edit-line)}
+  td.edited .pen{color:var(--warn);font-size:11px;margin-left:4px}
+  td.edited .undo{appearance:none;border:0;background:transparent;color:var(--faint);cursor:pointer;font:inherit;font-size:11px;padding:0 2px;margin-left:2px}
+  td.edited .undo:hover{color:var(--ink)}
+  td.locked{cursor:not-allowed}
+  td input.cell{width:92px;font:inherit;font-size:13px;padding:2px 6px;border:1px solid var(--edit-line);border-radius:6px;text-align:right;font-variant-numeric:tabular-nums;background:#fff;color:var(--ink)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:12px;color:var(--muted);padding:6px 20px 16px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:3px;border:1px solid var(--line)}
+  .sw.closed{background:var(--paper)} .sw.cur{background:var(--cur-soft);border-color:var(--accent)} .sw.fut{background:var(--fut-soft);border-color:var(--accent-line)} .sw.bud{background:var(--bud-soft)} .sw.edit{background:var(--edit);border-color:var(--edit-line)}
+
+  /* ── панель промо ── */
+  .drawer{border-left:1px solid var(--line);background:var(--paper);display:flex;flex-direction:column;min-width:0}
+  @media (max-width:1360px){.drawer{border-left:0;border-top:1px solid var(--line)}}
+  .d-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:14px 18px 10px;border-bottom:1px solid var(--line)}
+  .d-head h3{font-size:15px;margin-top:2px}
+  .d-head .conc{font-size:12px;color:var(--muted);margin-top:2px}
+  .d-head .conc b{color:var(--ink);font-weight:600}
+  .iconbtn{appearance:none;border:1px solid var(--line);background:var(--paper);border-radius:8px;width:30px;height:30px;font:inherit;font-size:16px;line-height:1;cursor:pointer;color:var(--muted)}
+  .d-summary{display:flex;flex-wrap:wrap;gap:6px;padding:10px 18px;border-bottom:1px solid var(--line);background:#fafbfc;font-size:12px}
+  .pill{display:inline-flex;gap:6px;align-items:center;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--head);color:var(--muted);white-space:nowrap}
+  .pill b{font-weight:700}
+  .pill.new{background:var(--good-soft);color:var(--good)} .pill.rem{background:var(--bad-soft);color:var(--bad)} .pill.chg{background:var(--warn-soft);color:var(--warn)} .pill.fact{background:var(--accent-soft);color:var(--accent-dark)} .pill.excl{background:#fff7ed;color:#9a3412} .pill.total{background:var(--ink);color:#fff}
+  .d-filters{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:10px 18px;border-bottom:1px solid var(--line)}
+  .d-filters select{min-height:30px;padding:4px 26px 4px 8px;font-size:12px}
+  .d-filters input{font:inherit;font-size:12px;border:1px solid #cbd5e1;border-radius:8px;padding:5px 9px;min-height:30px;width:150px}
+  .d-bulk{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 18px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
+  .d-table{overflow:auto;max-height:520px}
+  .d-table table{font-size:12px}
+  .d-table th,.d-table td{padding:4px 6px}
+  .d-table th:first-child,.d-table td:first-child{position:static}
+  .d-table td.txt{text-align:left;white-space:nowrap;max-width:168px;overflow:hidden;text-overflow:ellipsis}
+  .d-table td.txt a{color:var(--ink);text-decoration:none}
+  .d-table td.txt a:hover{color:var(--accent-dark);text-decoration:underline}
+  .d-table td.c{text-align:center}
+  .d-table tr.excluded td{color:var(--faint)}
+  .d-table tr.excluded td.txt a{color:var(--faint)}
+  .d-table tr.removed td{color:var(--faint);font-style:italic}
+  .d-table input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px;margin:0;cursor:pointer}
+  .st{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;white-space:nowrap}
+  .st.done{background:var(--good-soft);color:var(--good)} .st.approved{background:var(--accent-soft);color:var(--accent-dark)} .st.pending{background:var(--warn-soft);color:var(--warn)} .st.draft{background:var(--head);color:var(--muted)} .st.removed{background:var(--bad-soft);color:var(--bad)}
+  .tg{display:inline-block;font-size:10px;font-weight:600;padding:1px 5px;border-radius:4px;border:1px solid var(--line);color:var(--muted)}
+  .code{font-weight:600;color:var(--ink)}
+  .d-foot{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 18px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}
+  .d-foot a{color:var(--accent-dark);text-decoration:none;font-weight:600}
+  .d-empty{padding:18px;color:var(--muted);font-size:13px}
+
+  .notes{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+  .note{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .note h3{margin-bottom:6px}
+  .note p,.note li{color:var(--muted);font-size:13px}
+  .note ul{margin:0;padding-left:18px}
+  .note li+li{margin-top:4px}
+  .note b{color:var(--ink);font-weight:600}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:var(--line-soft);padding:1px 5px;border-radius:4px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <h1>Экран «Бюджет»</h1>
+  <p class="lede">Один экран: таблица «бренд × квартал» с полосой <b>ТО / Инвестиции / %</b>, версии B · F1 · F2 и сравнение двух версий. Справа — <b>панель промо</b>: открывается кликом по промо-ячейке бренда или строки «Итого» и показывает, какие промо стоят за цифрой. Данные демо-контура 2026, млн ₽, без НДС; прогнозы, оплаты и версия B условные.</p>
+
+  <div class="section-title"><h2>Одна версия · панель промо для «Орион · Q3»</h2><span>F2 — черновик; в панели топ-10 по весу, чекбоксы «в бюджете», массовые действия</span></div>
+  <div id="screen-1"></div>
+
+  <div class="section-title"><h2>Сравнение F2 → B · та же панель</h2><span>у каждого промо F2 | B | Δ и что изменилось: новое, снято, изменено, факт вместо плана, исключено</span></div>
+  <div id="screen-2"></div>
+
+  <div class="notes">
+    <div class="note"><h3>Откуда открывается панель</h3><ul>
+      <li>Клик по ячейке «GTN · промо» / «OPEX · промо» (состав развёрнут) или по «Инвестиции» при источнике «Промо». Из строки бренда — промо бренда за квартал, из «Итого» — весь портфель; бренд и квартал меняются в самой панели.</li>
+      <li>Промо-строки числом не правятся: их сумму меняет только выбор промо. Контрактный GTN и OPEX правятся кликом, как раньше.</li>
+      <li>Ячейка с изменённым составом промо получает ✎; в подсказке — «умолчание → с учётом выбора».</li></ul></div>
+    <div class="note"><h3>Что в панели</h3><ul>
+      <li>Шапка: сумма в бюджете, число промо и <b>концентрация</b> — «10 крупнейших — 51 %, четыре — 38 %» (реальные цифры демо для «Орион · Q3»).</li>
+      <li>Список по весу: сеть, механика (код, полное название в подсказке), месяц, тип, статус, план, факт, <b>в бюджете</b> (факт, если есть, иначе план), доля и накопленная доля. Строка открывает карточку промо, шапка — реестр промо с выставленными фильтрами.</li>
+      <li>Фильтры: бренд, квартал, статус, тип, сеть. «Показать все 250» — постранично.</li></ul></div>
+    <div class="note"><h3>Выбор для бренда</h3><ul>
+      <li>Чекбокс «в бюджете» у каждого промо. Умолчание ставит правило по статусу: проведено, согласовано, на согласовании — да; черновик — нет.</li>
+      <li>Аналитик в черновике версии включает или исключает любое; массово — «исключить все черновики», «включить всё согласованное». Это переопределение версии: попадает в Excel-лист «Параметры».</li>
+      <li>Статусы промо — свободный текст; сведение к четырём состояниям живёт в справочнике, не в коде.</li></ul></div>
+    <div class="note"><h3>Сравнение версий в панели</h3><ul>
+      <li>Версия хранит промо построчно, поэтому у каждого есть F2 | B | Δ и метка: <b>новое</b> (нет в B), <b>снято</b> (было в B), <b>изменено</b>, <b>факт вместо плана</b>, <b>исключено</b>.</li>
+      <li>Итог сверху объясняет дельту промо-строки основной таблицы: сколько новых и на сколько, сколько снято, сколько факт отнял у плана.</li>
+      <li>Сортировка по |Δ|, чтобы крупнейшие изменения были сверху.</li></ul></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const Q=['Q1','Q2','Q3','Q4'];
+  const MONTHS=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+  const fmt=new Intl.NumberFormat('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1});
+  const fmt2=new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const n1=v=>(v==null||isNaN(v))?'—':fmt.format(v);
+  const n2=v=>(v==null||isNaN(v))?'—':fmt2.format(v);
+  const sgn=v=>(v>0?'+':'')+fmt.format(v);
+  const sgn2=v=>(v>0?'+':'')+fmt2.format(v);
+  const sum=a=>a.reduce((s,v)=>s+(v==null?0:v),0);
+  const OLAP_K=1.209; const VAT_K=1.2;
+  const TYPE_SHARE={chain:.774,group:.070,eret:.137,mp:.014,other:.006};
+  const POOL_REST=[-7.9,44.2,44.5,54.0];
+
+  // ── бренды: демо-контур ────────────────────────────────────────────────
+  const B=[
+    {n:'Орион',plan:[5097.0,4377.1,4368.8,5211.6],eac:[5018.6,4486.6,4450.5,4795.0],py:[4360.6,3948.0,3962.9,4702.5],gtnPlan:[421.7,363.1,351.0,427.6],paid26:[554.7,492.7,156.1],paid25:[479.5,425.3,437.0,508.6],opex:118.94,opex25:105.53,pG:[106.90,129.62,164.93,168.88],pO:[2.41,1.70,2.11,2.18],pG25:[58.69,104.75,119.50,117.64],pO25:[2.11,1.27,2.36,2.73],pCnt:[223,238,250,257],ss:[6152.3,5499.7,5457.9,6386.9],sswo:[4653.9,4116.2,4041.9,4683.8],pure:[801.1,738.2,753.9,906.0],omni:[207.5,188.7,192.1,232.3],mp:[489.7,456.6,469.9,564.7],ssPy:[5343.5,4842.4,4861.9,5766.9],sswoPy:[4197.2,3773.9,3754.1,4407.5],
+      nets:[['Демо-сеть 38 «Платформа»','Chain Pharm',.139,1.03],['Демо-сеть 24 «Берег»','Chain Pharm',.105,.98],['Демо-сеть 19 «Север»','Chain Pharm',.093,1.03]]},
+    {n:'Бета',plan:[1317.8,1138.1,1178.2,1370.4],eac:[1318.1,1160.3,1144.3,1260.8],py:[1258.4,1107.1,1083.0,1258.9],gtnPlan:[115.4,99.9,102.7,119.0],paid26:[132.6,118.7,38.4],paid25:[127.1,110.0,109.5,130.5],opex:30.22,opex25:28.99,pG:[41.58,36.63,59.89,62.96],pO:[0.87,0,0.20,0.99],pG25:[61.11,35.04,58.09,48.10],pO25:[1.35,0.45,0.68,1.08],pCnt:[90,72,76,92],ss:[1665.0,1465.2,1448.2,1702.2],sswo:[1333.6,1161.9,1137.5,1325.8],pure:[176.7,161.5,164.7,198.4],omni:[48.7,44.4,45.8,56.0],mp:[106.0,97.4,100.1,122.0],ssPy:[1590.2,1399.4,1369.0,1590.8],sswoPy:[1317.8,1151.3,1117.3,1286.6]},
+    {n:'Дельта',plan:[562.5,484.9,485.2,560.9],eac:[538.9,480.7,477.6,516.0],py:[508.3,449.6,439.0,510.9],gtnPlan:[44.0,38.0,38.1,44.0],paid26:[52.8,48.7,15.3],paid25:[50.3,44.0,42.9,51.2],opex:12.30,opex25:11.51,pG:[6.40,9.98,12.39,9.41],pO:[0.88,1.21,0.27,0.54],pG25:[4.44,4.75,4.71,7.14],pO25:[0.68,0.39,0.26,1.12],pCnt:[72,84,78,75],ss:[622.3,555.2,552.9,646.9],sswo:[403.3,355.9,351.7,408.8],pure:[116.6,104.7,105.4,125.3],omni:[21.7,19.6,19.9,23.9],mp:[80.7,75.1,75.9,88.8],ssPy:[586.2,518.4,506.3,589.6],sswoPy:[390.1,345.0,335.6,387.0]},
+    {n:'Лира',plan:[452.2,418.3,406.1,472.0],eac:[432.2,398.5,402.8,434.2],py:[374.2,321.9,320.9,393.7],gtnPlan:[36.6,33.8,32.6,38.3],paid26:[43.6,39.5,13.1],paid25:[37.5,33.2,31.9,39.8],opex:9.53,opex25:7.81,pG:[13.99,12.04,11.62,13.24],pO:[1.27,0.71,0.49,0.36],pG25:[8.82,7.03,7.30,6.98],pO25:[0.86,0.83,0.60,1.23],pCnt:[88,78,84,96],ss:[545.7,503.2,509.3,598.4],sswo:[352.0,320.0,320.3,373.5],pure:[113.4,106.9,109.8,129.9],omni:[30.9,29.7,31.3,37.5],mp:[49.4,46.5,47.8,57.5],ssPy:[472.6,406.3,404.9,497.0],sswoPy:[314.4,269.8,267.6,324.9]},
+    {n:'Альфа',plan:[407.7,369.5,361.7,420.9],eac:[392.1,359.7,360.0,387.2],py:[339.2,294.4,292.4,356.2],gtnPlan:[28.2,25.6,24.5,29.4],paid26:[34.3,31.4,10.0],paid25:[29.0,25.6,25.1,31.1],opex:7.85,opex25:6.50,pG:[3.36,4.14,2.40,4.91],pO:[0.64,0.08,0.08,0.08],pG25:[2.58,1.92,2.65,3.30],pO25:[0.16,0.47,0.37,0.18],pCnt:[47,46,44,54],ss:[491.0,450.5,449.8,522.6],sswo:[190.1,171.4,167.5,190.6],pure:[174.5,161.1,162.6,191.2],omni:[34.7,31.7,31.8,37.7],mp:[91.7,86.3,87.8,103.1],ssPy:[424.2,368.1,365.7,445.8],sswoPy:[168.4,146.8,145.3,174.9]},
+    {n:'Омега',plan:[314.1,279.7,278.8,325.7],eac:[306.3,270.9,268.2,299.6],py:[267.8,241.8,244.0,289.9],gtnPlan:[24.3,21.2,21.5,24.9],paid26:[30.9,27.0,8.7],paid25:[27.1,24.6,24.7,29.6],opex:6.69,opex25:5.96,pG:[3.95,4.46,4.38,4.54],pO:[0.09,0.09,0.46,0.09],pG25:[3.40,2.48,3.11,4.32],pO25:[0.24,0.07,0.49,0.23],pCnt:[100,115,104,113],ss:[372.3,328.7,325.8,384.7],sswo:[260.1,225.6,220.7,258.6],pure:[54.6,49.8,50.7,61.1],omni:[12.9,11.9,12.3,14.7],mp:[44.7,41.5,42.2,50.3],ssPy:[326.9,294.9,297.3,352.8],sswoPy:[240.9,215.5,214.7,250.8]},
+    {n:'Вега',plan:[231.7,210.7,207.5,246.4],eac:[226.6,201.9,199.7,226.7],py:[194.7,176.8,178.2,212.2],gtnPlan:[17.9,16.4,15.8,19.3],paid26:[22.0,19.5,6.2],paid25:[19.0,17.1,17.6,20.6],opex:5.23,opex25:4.52,pG:[4.06,4.33,4.88,4.02],pO:[0.13,0.76,0.61,0.04],pG25:[2.36,3.55,3.82,5.02],pO25:[0.76,1.30,1.75,1.07],pCnt:[278,288,270,277],ss:[272.8,243.1,240.2,280.8],sswo:[153.1,134.1,130.3,150.4],pure:[57.9,52.7,53.0,62.7],omni:[16.5,15.4,15.7,18.7],mp:[45.3,41.0,41.2,49.0],ssPy:[234.4,212.7,214.4,255.4],sswoPy:[138.6,124.8,124.2,145.7]},
+    {n:'Гамма',plan:[148.7,137.6,122.3,162.4],eac:[136.3,123.3,122.4,149.4],py:[115.4,97.3,98.1,123.4],gtnPlan:[10.7,9.9,8.9,11.8],paid26:[11.5,10.6,3.2],paid25:[9.0,7.9,7.9,10.2],opex:2.85,opex25:2.17,pG:[0.47,0.15,2.68,0.35],pO:[0,0.24,0,0.60],pG25:[0,0,0,0.33],pO25:[0,0,0,0],pCnt:[6,7,6,4],ss:[162.6,147.0,145.4,170.5],sswo:[79.3,71.6,70.9,82.9],pure:[70.8,63.8,62.5,73.0],omni:[4.9,4.3,4.3,5.1],mp:[7.6,7.3,7.7,9.5],ssPy:[137.6,116.2,117.1,147.3],sswoPy:[64.8,55.6,57.2,72.3]},
+  ];
+
+  // ── промо: строки для панели (Q3 2026, без НДС) ────────────────────────
+  // status: done | approved | pending | draft ; removed — было в B, в F2 нет.
+  const PROMO_ROWS=[
+    {id:1,brand:'Орион',q:2,net:'Демо-сеть 24 «Берег»',mech:'Супер-промо',code:'СП',m:7,type:'GTN',status:'done',plan:17.26,fact:16.60,b:15.00},
+    {id:2,brand:'Орион',q:2,net:'Демо-сеть 38 «Платформа»',mech:'Супер-промо',code:'СП',m:8,type:'GTN',status:'approved',plan:13.86,fact:0,b:13.86},
+    {id:3,brand:'Орион',q:2,net:'Демо-сеть 38 «Платформа»',mech:'Супер-промо',code:'СП',m:8,type:'GTN',status:'approved',plan:12.61,fact:0,b:null},
+    {id:4,brand:'Орион',q:2,net:'Демо-сеть 57 «Мотив»',mech:'Супер-промо',code:'СП',m:8,type:'GTN',status:'approved',plan:9.53,fact:0,b:9.53},
+    {id:5,brand:'Орион',q:2,net:'Демо-сеть 24 «Берег»',mech:'Амбассадоры',code:'АБ',m:8,type:'GTN',status:'approved',plan:4.44,fact:0,b:4.44},
+    {id:6,brand:'Орион',q:2,net:'Демо-сеть 31 «Кедр»',mech:'Скидка',code:'СК',m:9,type:'GTN',status:'pending',plan:3.15,fact:0,b:3.15},
+    {id:7,brand:'Орион',q:2,net:'Демо-сеть 01 «Аврора»',mech:'Скидка',code:'СК',m:8,type:'GTN',status:'approved',plan:3.01,fact:0,b:null},
+    {id:8,brand:'Орион',q:2,net:'Демо-сеть 24 «Берег»',mech:'Амбассадоры',code:'АБ',m:8,type:'GTN',status:'approved',plan:2.68,fact:0,b:2.68},
+    {id:9,brand:'Орион',q:2,net:'Демо-сеть 57 «Мотив»',mech:'Скидка',code:'СК',m:9,type:'GTN',status:'draft',plan:2.48,fact:0,b:2.48},
+    {id:10,brand:'Орион',q:2,net:'Демо-сеть 54 «Баланс»',mech:'Супер-промо',code:'СП',m:7,type:'GTN',status:'done',plan:2.18,fact:2.08,b:2.18},
+    {id:11,brand:'Орион',q:2,net:'Демо-сеть 12 «Гранит»',mech:'Скидка',code:'СК',m:9,type:'GTN',status:'removed',plan:0,fact:0,b:3.42},
+    {id:101,brand:'Бета',q:2,net:'Демо-сеть 01 «Аврора»',mech:'Супер-промо',code:'СП',m:9,type:'GTN',status:'pending',plan:10.00,fact:0,b:10.00},
+    {id:102,brand:'Бета',q:2,net:'Демо-сеть 24 «Берег»',mech:'Супер-промо',code:'СП',m:8,type:'GTN',status:'approved',plan:8.28,fact:0,b:8.28},
+    {id:103,brand:'Бета',q:2,net:'Демо-сеть 24 «Берег»',mech:'Супер-промо',code:'СП',m:7,type:'GTN',status:'done',plan:7.76,fact:7.50,b:7.76},
+    {id:104,brand:'Бета',q:2,net:'Демо-сеть 31 «Кедр»',mech:'Супер-промо',code:'СП',m:9,type:'GTN',status:'draft',plan:3.42,fact:0,b:null},
+    {id:105,brand:'Бета',q:2,net:'Демо-сеть 09 «Луч»',mech:'Выкладка',code:'ВК',m:8,type:'OPEX',status:'removed',plan:0,fact:0,b:1.10},
+  ];
+  // Наборы для точек входа: список бренда и портфельный «Итого». Остальные
+  // сочетания «бренд × квартал» в макете списка не имеют — панель это скажет.
+  const PROMO_LISTS={
+    'Орион|2':{ids:[1,2,3,4,5,6,7,8,9,10,11],count:250,conc:'10 крупнейших — <b>51 %</b>, четыре — <b>38 %</b>',cmp:{added:[12,24.6],removed:[5,-5.2],fact:-3.0,excluded:[1,-2.5]}},
+    'Итого|2':{ids:[1,2,3,101,4,102,103,5,104,6,11,105],count:912,conc:'10 крупнейших — <b>40 %</b>, четыре — <b>24 %</b>',cmp:{added:[38,33.4],removed:[11,-6.9],fact:-1.7,excluded:[3,-2.5]}},
+  };
+  const byId=Object.fromEntries(PROMO_ROWS.map(r=>[r.id,r]));
+  const defaultInc=r=>r.status!=='draft'&&r.status!=='removed';
+  const inBudget=r=>r.fact>0?r.fact:r.plan;
+  const ST_LABEL={done:'проведено',approved:'согласовано',pending:'на согласовании',draft:'черновик',removed:'снято'};
+
+  // ── версии ─────────────────────────────────────────────────────────────
+  const VERSIONS={
+    F2:{label:'F2 · черновик',info:'снимок реестра на <b>13.09.2026</b>, не заморожен',states:['closed','closed','cur','fut'],draft:true,
+      get:b=>({to:b.eac.slice(),gtnC:[b.paid26[0]/VAT_K,b.paid26[1]/VAT_K,b.paid26[2]/VAT_K+b.gtnPlan[2]*0.62,b.gtnPlan[3]*0.88],mark:['paid','paid','part','fcst'],
+        opexC:[b.opex,b.opex,b.opex,b.opex],pG:b.pG.map(v=>v/VAT_K),pO:b.pO.map(v=>v/VAT_K),pmark:['paid','paid','part','fcst'],
+        sales:{ss:[b.ss[0],b.ss[1],b.ss[2]*2/3,null],sswo:[b.sswo[0],b.sswo[1],b.sswo[2]*2/3,null],pure:[b.pure[0],b.pure[1],b.pure[2]*2/3,null],omni:[b.omni[0],b.omni[1],b.omni[2]*2/3,null],mp:[b.mp[0],b.mp[1],b.mp[2]*2/3,null]}})},
+    F1:{label:'F1',info:'заморожена <b>14.04.2026</b>, после закрытия Q1',states:['closed','fut','fut','fut'],draft:false,
+      get:b=>({to:[b.eac[0],b.plan[1]*0.985,b.plan[2]*0.985,b.plan[3]*0.985],gtnC:[b.paid26[0]/VAT_K,b.gtnPlan[1]*0.9,b.gtnPlan[2]*0.9,b.gtnPlan[3]*0.9],mark:['paid','fcst','fcst','fcst'],
+        opexC:[b.opex,b.opex,b.opex,b.opex],pG:b.pG.map((v,i)=>i?v*0.95/VAT_K:v/VAT_K),pO:b.pO.map(v=>v/VAT_K),pmark:['paid','fcst','fcst','fcst'],
+        sales:{ss:[b.ss[0],null,null,null],sswo:[b.sswo[0],null,null,null],pure:[b.pure[0],null,null,null],omni:[b.omni[0],null,null,null],mp:[b.mp[0],null,null,null]}})},
+    B:{label:'B · бюджет',info:'заморожена <b>19.12.2025</b>',states:['bud','bud','bud','bud'],draft:false,
+      get:b=>({to:b.plan.slice(),gtnC:b.gtnPlan.slice(),mark:['bud','bud','bud','bud'],opexC:[b.opex,b.opex,b.opex,b.opex],pG:b.pG.map(v=>v*0.9/VAT_K),pO:b.pO.map(v=>v*0.9/VAT_K),pmark:['bud','bud','bud','bud'],
+        sales:{ss:[null,null,null,null],sswo:[null,null,null,null],pure:[null,null,null,null],omni:[null,null,null,null],mp:[null,null,null,null]}})},
+    PY:{label:'Факт 2025',info:'прошлый год, только факт',states:['closed','closed','closed','closed'],draft:false,
+      get:b=>({to:b.py.slice(),gtnC:b.paid25.map(v=>v/VAT_K),mark:['paid','paid','paid','paid'],opexC:[b.opex25,b.opex25,b.opex25,b.opex25],pG:b.pG25.map(v=>v/VAT_K),pO:b.pO25.map(v=>v/VAT_K),pmark:['paid','paid','paid','paid'],
+        sales:{ss:b.ssPy.slice(),sswo:b.sswoPy.slice(),pure:b.pure.map(v=>v*0.88),omni:b.omni.map(v=>v*0.88),mp:b.mp.map(v=>v*0.88)}})},
+  };
+  const BASES={'reg-contract':'ТО реестра · цена контракта','reg-olap':'ТО реестра · цена OLAP','ss':'Продажи · OLAP SS','sswo':'Продажи · OLAP SS wo Ecom','pure':'Продажи · PURE','omni':'Продажи · OMNI','mp':'Продажи · MP'};
+  const COMP=[['gtnC','GTN · контракт'],['opexC','OPEX · контракт'],['pG','GTN · промо'],['pO','OPEX · промо']];
+
+  // ── экран ──────────────────────────────────────────────────────────────
+  function mount(rootId, init){
+    const root=document.getElementById(rootId);
+    const st=Object.assign({version:'F2',compare:'',delta:'abs',types:{chain:true,group:true,eret:true,mp:true,other:true},base:'reg-contract',src:'all',kind:'all',expanded:false,vat:'net',open:{},edits:{},editing:null,
+      promo:null,promoInc:{},pStatus:{done:true,approved:true,pending:true,draft:true},pType:'all'},init);
+    const allTypes=()=>Object.values(st.types).every(Boolean);
+    const typeK=()=>Object.keys(st.types).reduce((s,k)=>s+(st.types[k]?TYPE_SHARE[k]:0),0);
+    const canEdit=()=>VERSIONS[st.version].draft&&allTypes()&&st.base==='reg-contract'&&st.vat==='net';
+    const ekey=(b,q,m)=>`${b}|${q}|${m}`;
+    const incOf=r=>st.promoInc[r.id]!=null?st.promoInc[r.id]:defaultInc(r);
+    // поправка к промо-инвестициям бренда за квартал от ручного выбора промо
+    function promoAdj(brand,q){
+      let g=0,o=0;
+      for(const r of PROMO_ROWS){ if(r.brand!==brand||r.q!==q||r.status==='removed') continue; const d=incOf(r)-defaultInc(r); if(!d) continue; if(r.type==='OPEX') o+=d*inBudget(r); else g+=d*inBudget(r); }
+      return {g,o};
+    }
+
+    function series(vcode,b){
+      const v=VERSIONS[vcode], s=v.get(b), k=typeK();
+      const out={states:v.states,to:[],gtnC:[],opexC:[],pG:[],pO:[],mark:s.mark,pmark:s.pmark,sales:{},edited:{}};
+      for(let q=0;q<4;q++){
+        let to=s.to[q], gtnC=s.gtnC[q], opexC=s.opexC[q], pG=s.pG[q], pO=s.pO[q];
+        if(v.draft){
+          const eTo=st.edits[ekey(b.n,q,'to')];
+          if(eTo){ const rate=to>0?gtnC/to:0; to=eTo.v; gtnC=rate*to; out.edited['to'+q]=eTo; }
+          for(const [m] of COMP){ const e=st.edits[ekey(b.n,q,m)]; if(e){ ({gtnC,opexC,pG,pO}={gtnC,opexC,pG,pO,[m]:e.v}); out.edited[m+q]=e; } }
+          const eInv=st.edits[ekey(b.n,q,'inv')];
+          if(eInv){ gtnC=eInv.v-opexC-pG-pO; out.edited['inv'+q]=eInv; }
+          const adj=promoAdj(b.n,q);
+          if(adj.g){ out.edited['pG'+q]={v:pG+adj.g,base:pG,who:'выбор промо',when:'Иванова А., 13.09.2026'}; pG+=adj.g; }
+          if(adj.o){ out.edited['pO'+q]={v:pO+adj.o,base:pO,who:'выбор промо',when:'Иванова А., 13.09.2026'}; pO+=adj.o; }
+        }
+        const pk=st.base==='reg-olap'?OLAP_K:1, vk=st.vat==='gross'?VAT_K:1;
+        out.to.push(to*k*pk); out.gtnC.push(gtnC*k*vk); out.opexC.push(opexC*k*vk); out.pG.push(pG*k*vk); out.pO.push(pO*k*vk);
+      }
+      for(const c in s.sales) out.sales[c]=s.sales[c].map(x=>x==null?null:x*k);
+      return out;
+    }
+    function invOf(s,q){
+      const useC=st.src!=='promo', useP=st.src!=='contract', useG=st.kind!=='opex', useO=st.kind!=='gtn';
+      return (useC&&useG?s.gtnC[q]:0)+(useC&&useO?s.opexC[q]:0)+(useP&&useG?s.pG[q]:0)+(useP&&useO?s.pO[q]:0);
+    }
+    function baseOf(s,q){ return st.base.startsWith('reg')?s.to[q]:s.sales[st.base][q]; }
+    function invMark(s,q){
+      const useC=st.src!=='promo', useG=st.kind!=='opex';
+      if(useC&&useG) return s.mark[q];
+      if(st.src!=='contract'&&useG) return s.pmark[q];
+      return 'none';
+    }
+    const MK={paid:'<span class="mk paid" title="оплачено по реестру — факт">✓</span>',part:'<span class="mk part" title="оплачено частично — факт + прогноз остатка">◐</span>',fcst:'<span class="mk fcst" title="прогноз">○</span>',bud:'<span class="mk"></span>',none:'<span class="mk"></span>'};
+
+    function td(val,opts){
+      const c=[opts.state||'',opts.cls||''];
+      let inner = opts.kind==='pct' ? (val==null||isNaN(val)?'—':fmt.format(val)+' %') : n1(val);
+      let attrs='';
+      if(opts.editKey){
+        if(st.editing===opts.editKey){
+          return `<td class="${c.join(' ')} qs"><input class="cell" data-key="${opts.editKey}" value="${fmt.format(val)}" aria-label="Новое значение"></td>`;
+        }
+        if(canEdit()){ c.push('editable'); attrs=` data-edit="${opts.editKey}" title="Клик — ввести значение"`; }
+        else if(VERSIONS[st.version].draft){ c.push('locked'); attrs=` title="Правка доступна при всех типах сетей, в цене контракта и без НДС"`; }
+      }
+      if(opts.promoKey){
+        c.push('promo-cell'); attrs=` data-promo="${opts.promoKey}" title="Клик — список промо за этой суммой"`;
+        if(st.promo&&`${st.promo.brand}|${st.promo.q}`===opts.promoKey) c.push('promo-open');
+      }
+      if(opts.edited){
+        c.push('edited');
+        const who=opts.edited.who==='выбор промо'?`умолчание ${n1(opts.edited.base)} → с учётом выбора ${n1(opts.edited.v)} · ${opts.edited.when}`:`Реестр: ${n1(opts.edited.base)} → ${n1(opts.edited.v)} · ${opts.edited.who}, ${opts.edited.when}`;
+        attrs=attrs.replace(/ title="[^"]*"/,'')+` title="${who}"`;
+        inner+=`<span class="pen">✎</span>`+(opts.editKey?`<button class="undo" data-undo="${opts.editKey}" title="Вернуть значение реестра">↺</button>`:'');
+        if(opts.editKey) attrs=attrs.replace(/ data-edit="[^"]*"/,'')+` data-edit="${opts.editKey}"`;
+      } else if(opts.mark){ inner+=MK[opts.mark]; }
+      return `<td class="${c.join(' ')}"${attrs}>${inner}</td>`;
+    }
+    function tdDelta(a,b,kind){
+      if(a==null||b==null||isNaN(a)||isNaN(b)) return `<td class="cmp neu">—</td>`;
+      let text, d;
+      if(kind==='pct'){ d=a-b; text=(d>0?'+':'')+fmt.format(d)+' пп'; }
+      else if(st.delta==='abs'){ d=a-b; text=sgn(d); }
+      else { d=b?(a/b-1)*100:NaN; text=isNaN(d)?'—':(d>0?'+':'')+fmt.format(d)+' %'; }
+      const good = kind==='pct' ? d<0 : d>0;
+      const cls = Math.abs(d)<0.05 ? 'neu' : kind==='inv' ? 'neu' : (good?'pos':'neg');
+      return `<td class="cmp ${cls}">${text}</td>`;
+    }
+    function line(label, brandName, sA, sB, get, kind, o={}){
+      const cells=[];
+      for(let q=0;q<4;q++){
+        const a=get(sA,q);
+        const editKey = o.editM && (sA.states[q]==='cur'||sA.states[q]==='fut') ? ekey(brandName,q,o.editM) : null;
+        cells.push(td(a,{state:sA.states[q],cls:'qs',kind,mark:o.mark?o.mark(sA,q):null,editKey,edited:o.editM?sA.edited[o.editM+q]:(o.editedKey?sA.edited[o.editedKey+q]:null),promoKey:o.promo?`${brandName}|${q}`:null}));
+        if(sB){ const b=get(sB,q); cells.push(td(b,{state:sB.states[q],kind})); cells.push(tdDelta(a,b,kind)); }
+      }
+      const ya=o.year(sA), yb=sB?o.year(sB):null;
+      cells.push(td(ya,{cls:'year',kind}));
+      if(sB){ cells.push(td(yb,{cls:'year',kind})); cells.push(tdDelta(ya,yb,kind)); }
+      return `<tr class="${o.rowCls||''}"><td class="lbl ${o.strong?'strong':''}">${label}${o.promo?'<span class="promo-lnk" title="Клик по ячейке квартала откроет список промо">↗</span>':''}</td>${cells.join('')}</tr>`;
+    }
+    function bandRows(name, sA, sB, o={}){
+      const rows=[];
+      const yr=g=>s=>sum(Q.map((_,q)=>g(s,q)));
+      const ySales=s=>{const v=Q.map((_,q)=>s.sales[st.base][q]).filter(x=>x!=null);return v.length?sum(v):null;};
+      const yPct=s=>{const inv=sum(Q.map((_,q)=>invOf(s,q)));const base=st.base.startsWith('reg')?sum(s.to):ySales(s);return base?inv/base*100:NaN;};
+      const em=o.editable?{to:'to',inv:'inv'}:{};
+      const promoOnly=st.src==='promo';
+      let first=line('ТО',name,sA,sB,(s,q)=>s.to[q],'to',{editM:em.to,year:yr((s,q)=>s.to[q]),strong:true});
+      first=first.replace('<tr class="">',`<tr class="brand-first ${o.rowCls||''}">`).replace(/<td class="lbl strong">ТО<\/td>/,`<td>${o.first}<span style="padding-left:10px;color:var(--muted);font-weight:500;font-size:12px">ТО</span></td>`);
+      rows.push(first);
+      if(!st.base.startsWith('reg')) rows.push(line('Продажи · '+BASES[st.base].split('· ')[1],name,sA,sB,(s,q)=>s.sales[st.base][q],'sales',{year:ySales,mark:(s,q)=>s.states[q]==='cur'&&s.sales[st.base][q]!=null?'part':null}));
+      if(st.expanded){
+        for(const [m,lbl] of COMP){
+          const useC=st.src!=='promo', useP=st.src!=='contract', useG=st.kind!=='opex', useO=st.kind!=='gtn';
+          const show=(m==='gtnC'&&useC&&useG)||(m==='opexC'&&useC&&useO)||(m==='pG'&&useP&&useG)||(m==='pO'&&useP&&useO);
+          if(!show) continue;
+          const isPromo=m==='pG'||m==='pO';
+          rows.push(line(lbl,name,sA,sB,(s,q)=>s[m][q],'inv',{editM:(o.editable&&!isPromo)?m:null,editedKey:isPromo?m:null,promo:isPromo&&o.promoable,year:yr((s,q)=>s[m][q]),rowCls:'comp',mark:(s,q)=>m==='gtnC'?s.mark[q]:m==='pG'?s.pmark[q]:null}));
+        }
+        rows.push(line('Инвестиции всего',name,sA,sB,(s,q)=>invOf(s,q),'inv',{year:yr(invOf),strong:true}));
+      } else {
+        rows.push(line('Инвестиции',name,sA,sB,(s,q)=>invOf(s,q),'inv',{editM:(promoOnly?null:em.inv),editedKey:promoOnly?'pG':null,promo:promoOnly&&o.promoable,year:yr(invOf),strong:true,mark:invMark}));
+      }
+      rows.push(line('%',name,sA,sB,(s,q)=>{const b=baseOf(s,q);return b?invOf(s,q)/b*100:NaN;},'pct',{year:yPct,rowCls:'pct'}));
+      return rows.map(r=>o.rowCls?r.replace('<tr class="',`<tr class="${o.rowCls} `):r).join('');
+    }
+    function aggregate(list, vcode, poolRest){
+      const parts=list.map(b=>series(vcode,b));
+      const z=()=>[0,0,0,0];
+      const agg={states:VERSIONS[vcode].states,to:z(),gtnC:z(),opexC:z(),pG:z(),pO:z(),mark:['none','none','none','none'],pmark:['none','none','none','none'],sales:{},edited:{}};
+      for(const c in BASES){ if(c.startsWith('reg')) continue; agg.sales[c]=z().map((_,q)=>parts.some(p=>p.sales[c][q]!=null)?sum(parts.map(p=>p.sales[c][q])):null); }
+      parts.forEach(p=>Q.forEach((_,q)=>{agg.to[q]+=p.to[q];agg.gtnC[q]+=p.gtnC[q];agg.opexC[q]+=p.opexC[q];agg.pG[q]+=p.pG[q];agg.pO[q]+=p.pO[q];}));
+      if(poolRest&&vcode==='B') Q.forEach((_,q)=>{agg.to[q]+=POOL_REST[q]*typeK()*(st.base==='reg-olap'?OLAP_K:1);});
+      return agg;
+    }
+
+    // ── панель промо ─────────────────────────────────────────────────────
+    function drawerHTML(){
+      const {brand,q}=st.promo; const cmp=!!st.compare; const vA=VERSIONS[st.version], vB=cmp?VERSIONS[st.compare]:null;
+      const scopeBrands = brand==='Итого'?B:B.filter(b=>b.n===brand);
+      const sA=aggregate(scopeBrands,st.version,false), sB=cmp?aggregate(scopeBrands,st.compare,false):null;
+      const totalA=sA.pG[q]+sA.pO[q], totalB=sB?sB.pG[q]+sB.pO[q]:null;
+      const list=PROMO_LISTS[`${brand}|${q}`];
+      const count=list?list.count:(brand==='Итого'?sum(B.map(b=>b.pCnt[q])):B.find(b=>b.n===brand).pCnt[q]);
+      let rows=list?list.ids.map(id=>byId[id]):[];
+      rows=rows.filter(r=>(r.status==='removed'?cmp:st.pStatus[r.status])&&(st.pType==='all'||r.type===st.pType));
+      if(cmp) rows.sort((a,b)=>Math.abs((a.status==='removed'?0:(incOf(a)?inBudget(a):0))-(a.b||0))<Math.abs((b.status==='removed'?0:(incOf(b)?inBudget(b):0))-(b.b||0))?1:-1);
+      let cum=0;
+      const body=rows.map((r,i)=>{
+        const inc=r.status!=='removed'&&incOf(r);
+        const valA=r.status==='removed'?null:(inc?inBudget(r):0);
+        const share=r.status==='removed'?0:inBudget(r)/totalA*100; cum+=share;
+        const cb=r.status==='removed'?'':`<input type="checkbox" data-inc="${r.id}" ${inc?'checked':''} ${vA.draft?'':'disabled'} aria-label="В бюджете">`;
+        let change='';
+        if(cmp){
+          const bv=r.b;
+          if(r.status==='removed') change='<span class="st removed">снято</span>';
+          else if(bv==null) change='<span class="pill new">новое</span>';
+          else if(!inc) change='<span class="pill excl">исключено</span>';
+          else if(r.fact>0&&Math.abs(r.fact-bv)>0.005) change='<span class="pill fact">факт вместо плана</span>';
+          else if(Math.abs(valA-bv)>0.005) change='<span class="pill chg">изменено</span>';
+          else change='<span style="color:var(--faint)">—</span>';
+        }
+        const d=cmp?(valA==null?-(r.b||0):valA-(r.b||0)):0;
+        const dcls=Math.abs(d)<0.005?'neu':'neu';
+        const brandCol=brand==='Итого'?`<td class="txt">${r.brand}</td>`:'';
+        return `<tr class="${inc?'':'excluded'} ${r.status==='removed'?'removed':''}">
+          <td class="c">${cb}</td><td class="c" style="color:var(--faint)">${i+1}</td>
+          <td class="txt"><a href="#" title="Открыть карточку промо">${r.net}</a></td>${brandCol}
+          <td class="txt"><span class="code" title="${r.mech}">${r.code}</span></td>
+          <td class="c">${MONTHS[r.m-1]}</td><td class="c"><span class="tg">${r.type}</span></td>
+          <td class="c"><span class="st ${r.status}">${ST_LABEL[r.status]}</span></td>
+          ${cmp
+            ? `<td>${valA==null?'—':n2(valA)}</td><td style="color:var(--muted)">${r.b==null?'—':n2(r.b)}</td><td class="cmp ${dcls}">${Math.abs(d)<0.005?'—':sgn2(d)}</td><td class="c">${change}</td>`
+            : `<td style="color:var(--muted)">${n2(r.plan)}</td><td>${r.fact>0?n2(r.fact):'—'}</td><td><b>${inc?n2(inBudget(r)):'—'}</b>${inc?(r.fact>0?MK.paid:MK.fcst):''}</td>`}
+          <td style="color:var(--muted)">${r.status==='removed'?'—':fmt.format(share)+' %'}</td><td style="color:var(--faint)">${r.status==='removed'?'':fmt.format(cum)+' %'}</td>
+        </tr>`;
+      }).join('');
+      const head=cmp
+        ? `<tr><th></th><th>#</th><th style="text-align:left">Сеть</th>${brand==='Итого'?'<th style="text-align:left">Бренд</th>':''}<th style="text-align:left">Мех.</th><th>Мес</th><th>Тип</th><th>Статус</th><th>${vA.label.split(' ·')[0]}</th><th>${vB.label.split(' ·')[0]}</th><th>Δ</th><th>Что изменилось</th><th>Доля</th><th>Σ</th></tr>`
+        : `<tr><th title="В бюджете">✓</th><th>#</th><th style="text-align:left">Сеть</th>${brand==='Итого'?'<th style="text-align:left">Бренд</th>':''}<th style="text-align:left">Мех.</th><th>Мес</th><th>Тип</th><th>Статус</th><th>План</th><th>Факт</th><th>В бюджете</th><th>Доля</th><th>Σ</th></tr>`;
+      const c=list?list.cmp:null;
+      const summary=cmp&&c?`<div class="d-summary">
+          <span class="pill new">новых <b>${c.added[0]}</b> · ${sgn(c.added[1])}</span>
+          <span class="pill rem">снято <b>${c.removed[0]}</b> · ${sgn(c.removed[1])}</span>
+          <span class="pill fact">факт вместо плана · ${sgn(c.fact)}</span>
+          <span class="pill excl">исключено вручную <b>${c.excluded[0]}</b> · ${sgn(c.excluded[1])}</span>
+          <span class="pill total">Δ промо ${Q[q]}: ${sgn(totalA-totalB)} млн</span></div>`:'';
+      const brandSel=`<select data-ds="brand"><option value="Итого" ${brand==='Итого'?'selected':''}>Все бренды</option>${B.map(b=>`<option value="${b.n}" ${brand===b.n?'selected':''}>${b.n}</option>`).join('')}</select>`;
+      const qSel=`<select data-ds="q">${Q.map((x,i)=>`<option value="${i}" ${q===i?'selected':''}>${x} 2026</option>`).join('')}</select>`;
+      return `<aside class="drawer" aria-label="Промо за суммой">
+        <div class="d-head">
+          <div><div class="crumbs">Промо · <b>${brand==='Итого'?'все бренды':brand}</b> · ${Q[q]} 2026 · ${vA.label.split(' ·')[0]}${cmp?' → '+vB.label.split(' ·')[0]:''}</div>
+            <h3>В бюджете ${n1(totalA)} млн · ${count} промо</h3>
+            <p class="conc">${list?list.conc:'концентрация считается по всем промо среза'}${cmp?` · в ${vB.label.split(' ·')[0]}: ${n1(totalB)} млн`:''}</p></div>
+          <div class="actions"><a class="btn ghost sm" href="#" title="Реестр промо с фильтрами: бренд, квартал">Открыть в реестре промо ↗</a><button class="iconbtn" data-close title="Закрыть">×</button></div>
+        </div>
+        ${summary}
+        <div class="d-filters">
+          ${brandSel}${qSel}
+          <div class="chips">${['done','approved','pending','draft'].map(s=>`<button class="chip" data-pst="${s}" aria-pressed="${st.pStatus[s]}">${ST_LABEL[s]}</button>`).join('')}</div>
+          <div class="seg sm" data-pseg="pType"><button aria-pressed="${st.pType==='all'}" data-v="all">все</button><button aria-pressed="${st.pType==='GTN'}" data-v="GTN">GTN</button><button aria-pressed="${st.pType==='OPEX'}" data-v="OPEX">OPEX</button></div>
+          <input placeholder="Сеть…" aria-label="Поиск по сети">
+        </div>
+        ${vA.draft?`<div class="d-bulk"><button class="btn sm" data-bulk="excl-drafts">Исключить все черновики</button><button class="btn sm" data-bulk="incl-approved">Включить всё согласованное</button><span>умолчание: проведено, согласовано, на согласовании — в бюджете; черновики — нет</span></div>`:''}
+        ${list?`<div class="d-table"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>
+        <div class="d-foot"><a href="#">Показать все ${count} →</a><span>суммы без НДС, млн ₽ · доля от суммы среза · Σ — накопленная</span></div>`
+        :`<div class="d-empty">В макете список промо приведён для «Орион · Q3» и «Все бренды · Q3». В продукте здесь будет тот же список для любого среза: ${count} промо на ${n1(totalA)} млн.</div>`}
+      </aside>`;
+    }
+
+    function render(){
+      const vA=VERSIONS[st.version], vB=st.compare?VERSIONS[st.compare]:null, cmp=!!vB;
+      const stateLabel={closed:'факт',cur:'факт + прогноз',fut:'прогноз',bud:'бюджет'};
+      let h1=`<tr><th rowspan="2">Бренд</th>`, h2='<tr class="sub">';
+      Q.forEach((q,i)=>{
+        if(cmp){ h1+=`<th class="q ${vA.states[i]}" colspan="3">${q}</th>`; h2+=`<th class="q">${vA.label.split(' ·')[0]} · ${stateLabel[vA.states[i]]}</th><th>${vB.label.split(' ·')[0]} · ${stateLabel[vB.states[i]]}</th><th>Δ</th>`; }
+        else { h1+=`<th class="q ${vA.states[i]}">${q}</th>`; h2+=`<th class="q">${stateLabel[vA.states[i]]}</th>`; }
+      });
+      if(cmp){ h1+=`<th class="year q" colspan="3">Год 2026</th></tr>`; h2+=`<th class="year">${vA.label.split(' ·')[0]}</th><th>${vB.label.split(' ·')[0]}</th><th>Δ</th></tr>`; }
+      else { h1+=`<th class="year q">Год 2026</th></tr>`; h2+=`<th class="year">ожидание</th></tr>`; }
+      const body=[];
+      B.forEach(b=>{
+        const sA=series(st.version,b), sB=cmp?series(st.compare,b):null;
+        const first=`<button class="row-toggle" data-brand="${b.n}" aria-expanded="${st.open[b.n]?'true':'false'}">${b.n}</button>`;
+        body.push(bandRows(b.n,sA,sB,{first,editable:true,promoable:true}));
+        if(st.open[b.n]){
+          if(b.nets){
+            b.nets.forEach(([nm,tp,share,ach])=>{
+              const scale=s=>{const c=JSON.parse(JSON.stringify(s));['to','gtnC','opexC','pG','pO'].forEach(k=>c[k]=c[k].map((v,q)=>v*share*(k==='to'&&(s.states[q]==='closed'||s.states[q]==='cur')?ach:1)));for(const x in c.sales)c.sales[x]=c.sales[x].map(v=>v==null?null:v*share);c.edited={};return c;};
+              body.push(bandRows(nm,scale(sA),sB?scale(sB):null,{first:`<a href="#" title="Открыть карточку сети в реестре">${nm}</a><span class="tag">${tp}</span>`,rowCls:'net'}));
+            });
+            body.push(`<tr class="net"><td><a href="#">ещё 52 сети…</a></td><td colspan="${cmp?15:5}"></td></tr>`);
+          } else body.push(`<tr class="net"><td colspan="${cmp?16:6}" style="text-align:left">Раскрытие по сетям — как у бренда «Орион»; в макете сети приведены только для него.</td></tr>`);
+        }
+      });
+      const tA=aggregate(B,st.version,true), tB=cmp?aggregate(B,st.compare,true):null;
+      body.push(bandRows('Итого',tA,tB,{first:'Итого',rowCls:'total',promoable:true}));
+      if(st.version==='B'||st.compare==='B') body.push(`<tr class="foot"><td colspan="${cmp?16:6}" style="text-align:left">* Итог ТО в версии B — обязательство по контракту: включает нераспределённый остаток валового пула (+134,8 млн за год), которого нет в сумме брендов.</td></tr>`);
+
+      root.innerHTML=`<div class="screen">
+        <div class="screen-head">
+          <div><div class="crumbs">Портал · <b>Бюджет</b></div><h2>Бюджет 2026 <span style="color:var(--muted);font-weight:500;font-size:14px">· ${st.vat==='net'?'без НДС':'с НДС'} · млн ₽</span></h2></div>
+          <div class="actions"><span class="who"><i>ИА</i>Иванова А. · аналитик</span><button class="btn">Excel</button>${vA.draft?'<button class="btn">Заморозить F2</button>':''}<button class="btn primary">Новая версия ▾</button></div>
+        </div>
+        <div class="versions">
+          <div class="f"><label>Версия</label><select data-s="version">${Object.entries(VERSIONS).filter(([c])=>c!=='PY').map(([c,v])=>`<option value="${c}" ${st.version===c?'selected':''}>${v.label}</option>`).join('')}</select></div>
+          <div class="vstate">${vA.info}${vA.draft?' · <b>правится</b>':' · только чтение'}</div>
+          <div class="f"><label>Сравнить с</label><select data-s="compare"><option value="">—</option>${Object.entries(VERSIONS).filter(([c])=>c!==st.version).map(([c,v])=>`<option value="${c}" ${st.compare===c?'selected':''}>${v.label}</option>`).join('')}</select></div>
+          ${cmp?`<div class="f"><label>Δ</label><div class="seg" data-seg="delta"><button aria-pressed="${st.delta==='abs'}" data-v="abs">абсолют</button><button aria-pressed="${st.delta==='pct'}" data-v="pct">%</button></div></div>`:''}
+        </div>
+        <div class="filters">
+          <div class="f"><label>Тип сети</label><div class="chips">${[['chain','Chain Pharm',40],['group','Group Pharm',5],['eret','E-Retailer',6],['mp','Marketplace',1],['other','Аптечная сеть',8]].map(([k,l,n])=>`<button class="chip" data-type="${k}" aria-pressed="${st.types[k]}">${l} <small>${n}</small></button>`).join('')}</div></div>
+          <div class="f"><label>База процента</label><select data-s="base">${Object.entries(BASES).map(([k,l])=>`<option value="${k}" ${st.base===k?'selected':''}>${l}</option>`).join('')}</select></div>
+          <div class="f"><label>Инвестиции · источник</label><div class="seg" data-seg="src"><button aria-pressed="${st.src==='all'}" data-v="all">Всего</button><button aria-pressed="${st.src==='contract'}" data-v="contract">Контракт</button><button aria-pressed="${st.src==='promo'}" data-v="promo">Промо</button></div></div>
+          <div class="f"><label>Инвестиции · тип</label><div class="seg" data-seg="kind"><button aria-pressed="${st.kind==='all'}" data-v="all">Всего</button><button aria-pressed="${st.kind==='gtn'}" data-v="gtn">GTN</button><button aria-pressed="${st.kind==='opex'}" data-v="opex">OPEX</button></div></div>
+          <div class="f"><label>Состав</label><div class="seg" data-seg="expanded"><button aria-pressed="${!st.expanded}" data-v="0">свёрнут</button><button aria-pressed="${st.expanded}" data-v="1">развёрнут</button></div></div>
+          <div class="f"><label>НДС</label><div class="seg" data-seg="vat"><button aria-pressed="${st.vat==='net'}" data-v="net">Без НДС</button><button aria-pressed="${st.vat==='gross'}" data-v="gross">С НДС</button></div></div>
+        </div>
+        ${vA.draft&&!canEdit()?'<div class="hint">Правка ячеек недоступна: верните <b>все типы сетей</b>, базу <b>«ТО реестра · цена контракта»</b> и <b>без НДС</b> — правка ложится в реестр пропорционально по сетям и хранится в цене контракта.</div>':''}
+        <div class="body ${st.promo?'with-drawer':''}">
+          <div class="main">
+            <div class="tscroll"><table><thead>${h1}${h2}</thead><tbody>${body.join('')}</tbody></table></div>
+            <div class="legend">
+              <span><i class="sw closed"></i>закрытый — факт</span><span><i class="sw cur"></i>текущий — факт + прогноз</span><span><i class="sw fut"></i>будущий — прогноз</span><span><i class="sw bud"></i>замороженная версия</span><span><i class="sw edit"></i>ручная правка ✎</span>
+              <span><span class="mk paid" style="margin:0">✓</span> оплачено</span><span><span class="mk part" style="margin:0">◐</span> частично</span><span><span class="mk fcst" style="margin:0">○</span> прогноз</span>
+              <span>↗ промо-строка: клик по ячейке открывает список промо</span>
+            </div>
+          </div>
+          ${st.promo?drawerHTML():''}
+        </div>
+      </div>`;
+      if(st.editing){ const inp=root.querySelector('input.cell'); if(inp){ inp.focus(); inp.select(); } }
+    }
+
+    // ── события ──────────────────────────────────────────────────────────
+    root.addEventListener('change',e=>{
+      const s=e.target.dataset.s;
+      if(s){ st[s]=e.target.value; if(s==='version'&&st.compare===st.version) st.compare=''; st.editing=null; render(); return; }
+      const ds=e.target.dataset.ds;
+      if(ds&&st.promo){ st.promo={...st.promo,[ds]:ds==='q'?+e.target.value:e.target.value}; render(); return; }
+      const inc=e.target.dataset.inc;
+      if(inc){ st.promoInc[inc]=e.target.checked; render(); return; }
+    });
+    root.addEventListener('click',e=>{
+      const seg=e.target.closest('[data-seg] button'); if(seg){ const k=seg.parentElement.dataset.seg; st[k]=k==='expanded'?seg.dataset.v==='1':seg.dataset.v; st.editing=null; render(); return; }
+      const pseg=e.target.closest('[data-pseg] button'); if(pseg){ st[pseg.parentElement.dataset.pseg]=pseg.dataset.v; render(); return; }
+      const pst=e.target.closest('.chip[data-pst]'); if(pst){ st.pStatus[pst.dataset.pst]=!st.pStatus[pst.dataset.pst]; render(); return; }
+      const chip=e.target.closest('.chip[data-type]'); if(chip){ st.types[chip.dataset.type]=!st.types[chip.dataset.type]; st.editing=null; render(); return; }
+      const tg=e.target.closest('.row-toggle'); if(tg){ st.open[tg.dataset.brand]=!st.open[tg.dataset.brand]; render(); return; }
+      const undo=e.target.closest('[data-undo]'); if(undo){ delete st.edits[undo.dataset.undo]; render(); return; }
+      const bulk=e.target.closest('[data-bulk]'); if(bulk&&st.promo){
+        const scope=PROMO_ROWS.filter(r=>r.q===st.promo.q&&(st.promo.brand==='Итого'||r.brand===st.promo.brand)&&r.status!=='removed');
+        if(bulk.dataset.bulk==='excl-drafts') scope.filter(r=>r.status==='draft').forEach(r=>st.promoInc[r.id]=false);
+        else scope.filter(r=>r.status!=='draft').forEach(r=>st.promoInc[r.id]=true);
+        render(); return; }
+      if(e.target.closest('[data-close]')){ st.promo=null; render(); return; }
+      const pc=e.target.closest('td[data-promo]'); if(pc){ const [brand,q]=pc.dataset.promo.split('|'); st.promo={brand,q:+q}; st.editing=null; render(); return; }
+      const cell=e.target.closest('td[data-edit]'); if(cell&&canEdit()&&!e.target.closest('input')){ st.editing=cell.dataset.edit; render(); return; }
+      if(e.target.closest('a[href="#"]')) e.preventDefault();
+    });
+    function commit(inp){
+      const key=inp.dataset.key; if(!key||st.editing!==key) return;
+      const v=parseFloat(inp.value.replace(/\s/g,'').replace(',','.'));
+      st.editing=null;
+      if(isNaN(v)) return render();
+      const [bn,q,m]=key.split('|'); const b=B.find(x=>x.n===bn); const s=VERSIONS[st.version].get(b);
+      const base = m==='to'?s.to[+q] : m==='inv'? s.gtnC[+q]+s.opexC[+q]+s.pG[+q]+s.pO[+q] : s[m][+q];
+      if(Math.abs(v-base)<0.05){ delete st.edits[key]; return render(); }
+      st.edits[key]={v,base,who:'Иванова А.',when:'13.09.2026'}; render();
+    }
+    root.addEventListener('keydown',e=>{
+      if(!e.target.classList.contains('cell')) return;
+      if(e.key==='Enter'){ commit(e.target); }
+      if(e.key==='Escape'){ st.editing=null; render(); }
+    });
+    root.addEventListener('focusout',e=>{ if(e.target.classList&&e.target.classList.contains('cell')) setTimeout(()=>{ if(st.editing) commit(e.target); },0); });
+    render();
+  }
+
+  // экран 1 — одна версия, состав развёрнут, панель промо открыта для «Орион · Q3»
+  mount('screen-1',{version:'F2',expanded:true,promo:{brand:'Орион',q:2},edits:{'Орион|3|to':{v:5000,base:4795.0,who:'Иванова А.',when:'12.09.2026'}}});
+  // экран 2 — сравнение F2 с B, источник «Промо», та же панель в режиме сравнения
+  mount('screen-2',{version:'F2',compare:'B',delta:'abs',src:'promo',promo:{brand:'Орион',q:2},edits:{'Орион|3|to':{v:5000,base:4795.0,who:'Иванова А.',when:'12.09.2026'}}});
+})();
+</script>

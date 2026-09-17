@@ -7,6 +7,7 @@ from create_demo_promo_db import (
     StableSynthetic,
     build_entity_maps,
     canonical_kam,
+    normalize_promo_status,
     require_target_safety,
     transform_promo_row,
 )
@@ -121,6 +122,21 @@ class DemoPromoTransformTests(unittest.TestCase):
         self.assertEqual(transformed["created_by"], "demo_import")
         self.assertLessEqual(transformed["promo_pharmacies"], transformed["total_pharmacies"])
         self.assertNotEqual(transformed["plan_promo_units"], source["plan_promo_units"])
+
+    def test_promo_status_follows_migration_034(self):
+        cases = [
+            ({"status": "проведено", "agreement1_status": None, "agreement2_status": None}, "Проведено"),
+            ({"status": "Финализировано"}, "Финализировано"),
+            ({"status": "проведено", "agreement1_status": "rejected", "agreement2_status": "rejected"}, "Отклонено"),
+            ({"status": None, "actual_promo_sales_units": 10, "actual_investments": 5}, "Проведено"),
+            ({"status": "Планируется", "agreement1_status": "approved", "agreement2_status": "approved"}, "Финализировано"),
+            ({"status": "В процессе", "actual_promo_sales_units": 10}, "В процессе согласования"),
+            ({"status": "в процессе согласования", "agreement1_status": "approved", "agreement2_status": "approved", "actual_promo_sales_units": 10, "actual_investments": 5}, "В процессе согласования"),
+            ({"status": ""}, "В процессе согласования"),
+        ]
+        for row, expected in cases:
+            with self.subTest(row=row):
+                self.assertEqual(normalize_promo_status(row), expected)
 
     def test_transform_is_deterministic(self):
         value = self.synthetic.factor("volume", "network|sku")

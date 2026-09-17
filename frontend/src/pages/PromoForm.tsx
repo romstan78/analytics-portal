@@ -106,7 +106,7 @@ const EMPTY_FORM: PromoFormState = {
   actual_promo_uplift_units: '', actual_promo_uplift_rub: '',
   actual_external_ecom_units: '', actual_corrected_baseline: '',
   key_region: '', top20_segment: '',
-  status: 'Планируется',
+  status: '', // статус назначает сервер: новое промо — «В процессе согласования»
 };
 
 const fmt = (v: string | number | null | undefined) => {

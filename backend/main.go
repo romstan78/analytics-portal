@@ -113,6 +113,7 @@ func main() {
 	// Файлы фоновых выгрузок от прошлого запуска: карта заданий после
 	// перезапуска пуста, и убрать их по ней уже невозможно.
 	handlers.CleanupSalesExportDir()
+	handlers.CleanupReportExportDir()
 	// Фиктивный хеш пароля — до первого запроса, иначе первый вход по
 	// несуществующему логину выдал бы себя временем ответа.
 	handlers.WarmUpPasswordHashing()
@@ -139,8 +140,10 @@ func main() {
 		}
 	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     corsOrigins,
-		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowOrigins: corsOrigins,
+		// PUT нужен бюджету (правка ячейки, состав промо): без него браузер
+		// отклоняет preflight, и запрос до сервера не доходит («Load failed»).
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	}))
@@ -152,6 +155,9 @@ func main() {
 	r.POST("/api/auth/login", loginLimiter.RateLimitMiddleware(), handlers.Login)
 	r.POST("/api/auth/refresh", handlers.RefreshToken)
 	r.POST("/api/auth/logout", handlers.Logout)
+	// Страница печати отчёта: её открывает headless Chromium без сессии,
+	// доступ — по одноразовому токену задания (handlers/reports.go).
+	r.GET("/api/reports/:id/print", handlers.GetReportPrint)
 
 	// ─── Защищённые роуты (требуется JWT) ────────────────────────────────
 	api := r.Group("/api")
@@ -219,7 +225,23 @@ func main() {
 		api.GET("/networks/brands", handlers.GetNetworkBrands)
 		api.GET("/networks/kams", handlers.GetNetworkKAMs)
 		// Витрина реестра: собственная область видимости внутри обработчика.
+		api.GET("/budget", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudget)
+		api.GET("/budget/export", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.ExportBudget)
+		api.GET("/budget/versions", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudgetVersions)
+		api.POST("/budget/versions", middleware.RoleRequired("admin", "analyst"), handlers.CreateBudgetVersion)
+		api.PATCH("/budget/versions/:id/sources", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetSources)
+		api.POST("/budget/versions/:id/freeze", middleware.RoleRequired("admin", "analyst"), handlers.FreezeBudget)
+		api.PUT("/budget/versions/:id/cells", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetCell)
+		api.DELETE("/budget/versions/:id/cells", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetCell)
+		api.GET("/budget/promos", middleware.RoleRequired("admin", "analyst", "agreement1", "agreement2"), handlers.GetBudgetPromos)
+		api.PUT("/budget/versions/:id/promos", middleware.RoleRequired("admin", "analyst"), handlers.SaveBudgetPromos)
+
 		api.GET("/networks/dashboard", handlers.GetNetworkDashboard)
+		// Отчёты PDF/PPTX по витрине: область та же, что у витрины
+		api.GET("/reports/blocks", handlers.GetReportBlocks)
+		api.POST("/reports", handlers.CreateReport)
+		api.GET("/reports/:id", handlers.GetReportJob)
+		api.GET("/reports/:id/download", handlers.DownloadReport)
 		api.GET("/networks/:id/plan", handlers.NetworkAccessRequired(), handlers.GetNetworkPlan)
 		api.GET("/networks/:id/forecast", handlers.NetworkAccessRequired(), handlers.GetNetworkForecast)
 		api.GET("/networks/:id/sku-mix", handlers.NetworkAccessRequired(), handlers.GetNetworkSKUMix)

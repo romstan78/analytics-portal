@@ -4,6 +4,114 @@
 // Пересобрать: make types (из корня проекта).
 // CI проверяет, что файл совпадает с исходниками: make types-check.
 
+export interface BudgetCell {
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  mark: string;
+  editable: boolean;
+  edited: BudgetEdit | null;
+}
+
+export interface BudgetEdit {
+  base: number;
+  value: number;
+  who: string;
+  when: string;
+}
+
+export interface BudgetSources {
+  to: string[];
+  investments: string[];
+}
+
+export interface BudgetVersion {
+  id: number;
+  year: number;
+  code: string;
+  name: string;
+  status: string;
+  frozenAt: string;
+  createdBy: string;
+  updatedAt: string;
+  sources: BudgetSources;
+}
+
+export interface BudgetPromo {
+  id: number;
+  networkId: number;
+  network: string;
+  brand: string;
+  quarter: number;
+  month: number;
+  type: string;
+  status: string;
+  mechanics: string;
+  planRub: number;
+  factRub: number;
+  budgetRub: number;
+  budgetNet: number;
+  included: boolean;
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  change: string;
+}
+
+export interface BudgetPromoResponse {
+  data: BudgetPromo[];
+  total: number;
+  sum: number;
+  top10Pct: number | null;
+  updatedAt: string;
+}
+
+export interface BudgetLine {
+  q: BudgetCell[];
+  year: BudgetCell;
+}
+
+export interface BudgetBrand {
+  vatFactors: number[];
+  olapTo: BudgetLine;
+  sales: BudgetLine;
+  salesSS: BudgetLine;
+  salesSSWO: BudgetLine;
+  salesPURE: BudgetLine;
+  salesOMNI: BudgetLine;
+  salesMP: BudgetLine;
+  brand: string;
+  networkId: number;
+  to: BudgetLine;
+  plan: BudgetLine;
+  fact: BudgetLine;
+  gtnPlan: BudgetLine;
+  gtnContract: BudgetLine;
+  opexContract: BudgetLine;
+  gtnPromo: BudgetLine;
+  opexPromo: BudgetLine;
+  investments: BudgetLine;
+  pct: BudgetLine;
+  networks: BudgetBrand[];
+}
+
+export interface BudgetResponse {
+  typeMembers: Record<string, number[]>;
+  year: number;
+  version: string;
+  brands: BudgetBrand[];
+  total: BudgetBrand;
+  quarterStates: string[];
+  networkTypes: string[];
+  forecastCoveragePct: number | null;
+  versionInfo: BudgetVersion;
+  compareInfo: BudgetVersion;
+  compare: string;
+  compareStates: string[];
+  canEdit: boolean;
+  editReason: string;
+}
+
 export interface SalesRow {
   id: number;
   year: number;
@@ -899,6 +1007,130 @@ export interface NetworkDashboardResponse {
   annualInvestmentCumulative?: NetworkAnnualInvestmentCumulative;
 }
 
+export interface ReportBlock {
+  code: string;
+  title: string;
+  description: string;
+  fixed: boolean;
+  hasTable: boolean;
+  kamScopeOnly: boolean;
+}
+
+export interface ReportRequest {
+  title: string;
+  year: number;
+  quarters: number[];
+  kams: string[];
+  networkIds: number[];
+  unit: string;
+  blocks: string[];
+  formats: string[];
+  tableLimit: number;
+}
+
+export interface ReportJobStatus {
+  id: string;
+  status: string;
+  format: string;
+  title: string;
+  fileName: string;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface ReportCreateResponse {
+  jobs: ReportJobStatus[];
+}
+
+export interface ReportPrintScale {
+  div: number;
+  label: string;
+  digits: number;
+}
+
+export interface ReportPrintBullet {
+  label: string;
+  sub?: string;
+  plan: number;
+  fact: number;
+  eac: number;
+  pctLabel: string;
+  tone: string;
+}
+
+export interface ReportPrintMonth {
+  label: string;
+  plan: number;
+  fact: number;
+  eac: number;
+  prev: number | null;
+  closed: boolean;
+}
+
+export interface ReportPrintStep {
+  label: string;
+  value: number;
+  total: boolean;
+}
+
+export interface ReportPrintChart {
+  title: string;
+  subtitle?: string;
+  scale: ReportPrintScale;
+  bullet?: ReportPrintBullet[];
+  months?: ReportPrintMonth[];
+  steps?: ReportPrintStep[];
+}
+
+export interface ReportPrintCard {
+  label: string;
+  value: string;
+  delta?: string;
+  deltaTone: string;
+  sub?: string;
+  spark?: number[];
+}
+
+export interface ReportPrintColumn {
+  title: string;
+  weight: number;
+  right: boolean;
+}
+
+export interface ReportPrintCell {
+  text: string;
+  tone: string;
+  bar: number | null;
+  bold: boolean;
+}
+
+export interface ReportPrintTable {
+  columns: ReportPrintColumn[];
+  rows: ReportPrintCell[][];
+  total?: ReportPrintCell[];
+}
+
+export interface ReportPrintPage {
+  block: string;
+  title: string;
+  subtitle?: string;
+  lines?: string[];
+  cards?: ReportPrintCard[];
+  chart?: ReportPrintChart;
+  table?: ReportPrintTable;
+  notes?: string[];
+}
+
+export interface ReportPrint {
+  title: string;
+  owner: string;
+  createdAt: string;
+  filterLabels: string[];
+  unit: string;
+  pages: ReportPrintPage[];
+}
+
 export interface NetworkPlanScaleSKUInput {
   sku: string;
   plan_rub: number | null;
@@ -1134,6 +1366,7 @@ export interface ApprovalRow {
   status: string | null;
   historical_count: number;
   avg_historical_roi: number | null;
+  comments_count: number;
   updated_at: string;
 }
 

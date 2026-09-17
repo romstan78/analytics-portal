@@ -8,6 +8,7 @@ import {
 import { Save as SaveIcon, Close as CloseIcon, Delete as DeleteIcon, RestoreOutlined as RestoreIcon } from '@mui/icons-material';
 import { promoAPI } from '../api/promo';
 import { draftSavedAtLabel } from '../utils/formDraft';
+import { isPromoFactEditable, PROMO_FACT_LOCKED_MESSAGE } from '../utils/promoStatus';
 import type { CommentRow } from '../types/promo';
 import type { PromoFormValues } from '../hooks/usePromoForm';
 import type { FilterMeta } from '../hooks/usePromoFilters';
@@ -178,6 +179,9 @@ export default function PromoEditDialog({
 
   const isDeleted = Boolean(form.deleted_at);
   const isLocked = isDeleted || readOnly;
+  // Статус выводит сервер из согласований и факта; факт открывается только
+  // после финализации — сервер отвечает 422 на попытку в обход.
+  const factEditable = isPromoFactEditable(form.status);
 
   const updateField = (field: FormField) => (e: { target: { value: string } }) =>
     setForm(prev => ({ ...prev, [field]: e.target.value }));
@@ -330,9 +334,7 @@ export default function PromoEditDialog({
                     <TextField select size="small" fullWidth label="Тип инвест." value={form.gtn_opex || ''} onChange={updateField('gtn_opex')} disabled={isLocked}>
                       {investmentTypes.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
                     </TextField>
-                    <TextField select size="small" fullWidth label="Статус" value={form.status || ''} onChange={updateField('status')} disabled={isLocked}>
-                      {(() => { const opts = [...(meta.status || [])]; if (form.status && !opts.includes(form.status)) opts.push(form.status); return opts.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>); })()}
-                    </TextField>
+                    <TextField size="small" fullWidth label="Статус" value={form.status || ''} slotProps={{ input: { readOnly: true } }} sx={{ bgcolor: '#f0f0f0' }} />
   
                     <TextField label="Аптек ТОТАЛ" type="number" size="small" fullWidth value={form.total_pharmacies || ''} onChange={updateField('total_pharmacies')} disabled={isLocked} slotProps={{ htmlInput: { min: 0 } }} />
                     <TextField label="Аптек в промо" type="number" size="small" fullWidth value={form.promo_pharmacies || ''} onChange={updateField('promo_pharmacies')} disabled={isLocked} slotProps={{ htmlInput: { min: 0 } }} />
@@ -396,9 +398,12 @@ export default function PromoEditDialog({
                 {/* ─── Блок 3: Фактические показатели ──────────────────── */}
                 <Paper sx={{ ...paperStyles, bgcolor: '#f2fbf4', border: '1px solid #d4ebd9' }}>
                   <Typography variant="subtitle1" sx={{ ...titleStyles, color: '#1b5e20' }}>✅ Фактические показатели</Typography>
+                  {!isLocked && !factEditable && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>{PROMO_FACT_LOCKED_MESSAGE}</Alert>
+                  )}
                   <Box sx={gridStyles}>
                     {ACTUAL_FIELDS.map(({ label, field, editable }) => {
-                      const canEdit = editable && !isLocked;
+                      const canEdit = editable && !isLocked && factEditable;
                       return (
                         <TextField key={field} label={label} type="text" size="small" fullWidth
                           value={getDisplayValue(field, canEdit)}

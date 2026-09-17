@@ -185,7 +185,79 @@ func CreateKAMNetworkReference(input models.KAMNetworkReference, username string
 	if err = auditDictionaryTx(tx, "dictionary_kam_network", input.ID, username, "CREATE", nil, input); err != nil {
 		return input, err
 	}
+	if err = syncNetworkKAMTx(tx, input.NetworkName, username); err != nil {
+		return input, err
+	}
 	return input, tx.Commit()
+}
+
+// syncNetworkKAMTx переносит действующее закрепление в колонки, которые
+// читают остальные разделы: tbl_Networks.kam (реестр сетей, область видимости),
+// tbl_NetworkGeoMapping.kam (интернет-продажи) и tbl_PromoActivities.kam
+// (область видимости и согласование промо). Сам справочник закреплений никто
+// из них не читает, поэтому без переноса правка в нём оставалась невидимой.
+// Действующим считается закрепление с самой поздней датой начала. Промо
+// переезжают только с периодом (год/месяц) не раньше «Действует с» — история
+// прежнего КАМа не переписывается; каждая переведённая карточка получает
+// запись в аудите в формате истории промо.
+func syncNetworkKAMTx(tx *sql.Tx, networkName, username string) error {
+	var kam, validFrom string
+	err := tx.QueryRow(`SELECT TOP 1 kam, CONVERT(NVARCHAR, valid_from, 23) FROM dbo.tbl_KAMNetworkMapping WHERE network_name = ? ORDER BY valid_from DESC, id DESC`, networkName).Scan(&kam, &validFrom)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE dbo.tbl_Networks SET kam = ?, updated_at = GETDATE() WHERE name = ? AND ISNULL(kam,'') <> ?`, kam, networkName, kam); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE dbo.tbl_NetworkGeoMapping SET kam = ? WHERE network_name = ? AND ISNULL(kam,'') <> ?`, kam, networkName, kam); err != nil {
+		return err
+	}
+	return movePromoKAMTx(tx, networkName, kam, validFrom, username)
+}
+
+func movePromoKAMTx(tx *sql.Tx, networkName, kam, validFrom, username string) error {
+	// Период промо — первое число месяца карточки; без года/месяца карточка
+	// остаётся у прежнего КАМа.
+	rows, err := tx.Query(`SELECT id, ISNULL(kam,'') FROM dbo.tbl_PromoActivities
+		WHERE network_name = ? AND deleted_at IS NULL AND ISNULL(kam,'') <> ?
+		  AND year IS NOT NULL AND month IS NOT NULL
+		  AND DATEFROMPARTS(year, month, 1) >= ?`, networkName, kam, validFrom)
+	if err != nil {
+		return err
+	}
+	type promoKAM struct {
+		id  int
+		kam string
+	}
+	var moved []promoKAM
+	for rows.Next() {
+		var p promoKAM
+		if err := rows.Scan(&p.id, &p.kam); err != nil {
+			rows.Close()
+			return err
+		}
+		moved = append(moved, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, p := range moved {
+		if _, err := tx.Exec(`UPDATE dbo.tbl_PromoActivities SET kam = ?, updated_at = GETDATE() WHERE id = ?`, kam, p.id); err != nil {
+			return err
+		}
+		changed, err := json.Marshal(map[string]any{"kam": map[string]any{"old": p.kam, "new": kam}})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO dbo.tbl_AuditLog (entity_type, entity_id, user_name, action_type, changed_fields) VALUES ('promo', ?, ?, 'UPDATE', ?)`, p.id, username, string(changed)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func UpdateKAMNetworkReference(id int, input models.KAMNetworkReference, username string) (models.KAMNetworkReference, error) {
@@ -209,6 +281,14 @@ func UpdateKAMNetworkReference(id int, input models.KAMNetworkReference, usernam
 	}
 	if err = auditDictionaryTx(tx, "dictionary_kam_network", id, username, "UPDATE", old, input); err != nil {
 		return input, err
+	}
+	if err = syncNetworkKAMTx(tx, input.NetworkName, username); err != nil {
+		return input, err
+	}
+	if old.NetworkName != input.NetworkName {
+		if err = syncNetworkKAMTx(tx, old.NetworkName, username); err != nil {
+			return input, err
+		}
 	}
 	return input, tx.Commit()
 }

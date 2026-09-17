@@ -118,6 +118,15 @@ AGREEMENT_TEMPLATES = {
     "pending": "Ожидает демонстрационного согласования.",
 }
 
+# Статусы промо в приложении выводятся сервером (backend/migrations/034,
+# repository.promoStatusCaseSQL). Источник хранит их «сырыми», поэтому копия
+# нормализуется тем же правилом: иначе демо получала бы значения, которых
+# приложение уже не знает.
+PROMO_STATUS_IN_APPROVAL = "В процессе согласования"
+PROMO_STATUS_FINALIZED = "Финализировано"
+PROMO_STATUS_DONE = "Проведено"
+PROMO_STATUS_REJECTED = "Отклонено"
+
 BASE_NUMERIC_FACTORS = {
     "volume": ("0.91", "0.95", "0.98", "1.02", "1.06", "1.10"),
     "period": ("0.98", "1.00", "1.03"),
@@ -436,6 +445,26 @@ def safe_div(numerator: Decimal, denominator: Decimal) -> Decimal:
     return Decimal("0") if denominator == 0 else numerator / denominator
 
 
+def normalize_promo_status(row: dict[str, Any]) -> str:
+    """Правило миграции 034: по названию, для остальных — из согласований и факта."""
+    agreement1 = clean_text(row.get("agreement1_status")).casefold()
+    agreement2 = clean_text(row.get("agreement2_status")).casefold()
+    if agreement1 == "rejected" and agreement2 == "rejected":
+        return PROMO_STATUS_REJECTED
+    raw = clean_text(row.get("status")).casefold()
+    if raw == "проведено":
+        return PROMO_STATUS_DONE
+    if raw == "финализировано":
+        return PROMO_STATUS_FINALIZED
+    if raw == "в процессе согласования":
+        return PROMO_STATUS_IN_APPROVAL
+    if row.get("actual_promo_sales_units") is not None and row.get("actual_investments") is not None:
+        return PROMO_STATUS_DONE
+    if agreement1 == "approved" and agreement2 == "approved":
+        return PROMO_STATUS_FINALIZED
+    return PROMO_STATUS_IN_APPROVAL
+
+
 def transform_promo_row(
     source: dict[str, Any],
     demo_id: int,
@@ -533,6 +562,9 @@ def transform_promo_row(
             row[comment_column] = template
         elif source.get(comment_column) is not None:
             row[comment_column] = None
+
+    if "status" in source:
+        row["status"] = normalize_promo_status(row)
 
     if source.get("created_by") is not None:
         row["created_by"] = "demo_import"

@@ -37,6 +37,7 @@ import {
 import {
   Add as AddIcon,
   ArrowBack as ArrowBackIcon,
+  Description as DescriptionIcon,
   Menu as MenuIcon,
   MenuOpen as MenuOpenIcon,
   Search as SearchIcon,
@@ -55,6 +56,7 @@ import NetworkOpexTab from '../components/NetworkOpexTab';
 import NetworkPlanGrid from '../components/NetworkPlanGrid';
 import NetworkPricesTab from '../components/NetworkPricesTab';
 import NewNetworkDialog from '../components/NewNetworkDialog';
+import ReportExportDialog from '../components/ReportExportDialog';
 import type { NewNetworkValues } from '../components/NewNetworkDialog';
 import type {
   Network,
@@ -289,6 +291,7 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
   // сеть, потому что рядом сравнивают и две-три.
   const [dashboardNetworkIds, setDashboardNetworkIds] = useState<number[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [reportDialogOpen, setReportDialogOpen] = useState(false);
   const [commentTarget, setCommentTarget] = useState<{ quarter: number | null; brand: string | null } | null>(null);
   const [commentText, setCommentText] = useState('');
   const [profile, setProfile] = useState<NetworkProfileDraft>({});
@@ -739,7 +742,32 @@ export default function NetworkRegistry({ role }: NetworkRegistryProps) {
               <Button size="small" onClick={() => setDashboardNetworkIds([])}>Все сети</Button>
             )}
             {dashboardQuery.isFetching && <CircularProgress size={16} />}
+            <Box sx={{ flex: 1 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<DescriptionIcon />}
+              onClick={() => setReportDialogOpen(true)}
+            >
+              Экспорт отчёта
+            </Button>
           </Stack>
+          {/* Конструктор наследует текущие фильтры витрины; окно живёт в
+              странице, чтобы подготовка файлов пережила его закрытие. */}
+          <ReportExportDialog
+            open={reportDialogOpen}
+            onClose={() => setReportDialogOpen(false)}
+            initial={{
+              year: effectiveDashboardYear,
+              quarters: quarters.length === 4 ? [] : quarters,
+              kams: kam ? [kam] : [],
+              networkIds: dashboardNetworkIds,
+            }}
+            yearOptions={dashboardYearOptions}
+            kamOptions={kamsQuery.data?.data ?? []}
+            showKamFilter={(kamsQuery.data?.data ?? []).length > 1}
+            networkOptions={networkFilterOptions}
+          />
 
           {dashboardNetworkIds.length === 1 ? (
             <NetworkDetailView

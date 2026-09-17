@@ -39,6 +39,7 @@ const blocks: HomeBlock[] = [
     color: '#10b981',
     ready: true,
   },
+  { title: 'Бюджет', path: '/budget', icon: <BarChartIcon sx={{ fontSize: 48 }} />, desc: 'Версии ТО и инвестиций по брендам', color: '#6366f1', ready: true },
   {
     title: 'Анализ промо',
     path: '/promo-analysis',
@@ -117,7 +118,7 @@ export default function Home({ onLogout, role }: HomeProps) {
         mt: 1.5,
         mb: 6,
       }}>
-        {readyBlocks.map((block) => (
+        {readyBlocks.filter(b => b.path !== '/budget' || ['admin', 'analyst', 'agreement1', 'agreement2'].includes(role ?? '')).map((block) => (
           <Card
             key={block.path}
             elevation={1}

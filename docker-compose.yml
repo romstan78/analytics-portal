@@ -14,6 +14,10 @@ x-backend-environment: &backend-environment
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-5173}}
   TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
   PORT: "8080"
+  # Отчёты PDF/PPTX печатает headless Chromium (сервис chromium) со страницы
+  # фронтенда /print/report/:id; без него задания отчётов падают с текстом.
+  CHROME_WS_URL: ws://chromium:9222
+  REPORT_PRINT_BASE_URL: http://frontend/print/report
 
 x-backend-service: &backend-service
   build:
@@ -51,6 +55,11 @@ services:
       - "${BACKEND_PORT:-8080}:8080"
     volumes:
       - backend_logs:/app/logs
+    depends_on:
+      mssql_db:
+        condition: service_healthy
+      chromium:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/ready"]
       interval: 10s
@@ -75,6 +84,18 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # Headless Chromium для печати отчётов. Наружу не публикуется: доступ только
+  # из сети compose. Entrypoint образа сам задаёт --no-sandbox и порт 9222
+  # (через socat), свои флаги только добавляются. Один рендер за раз, лимит
+  # памяти с запасом от пика 560 МБ на снимке страницы в 2×. В образе нет
+  # wget/curl для healthcheck; backend проверяет доступность при каждом задании.
+  chromium:
+    image: chromedp/headless-shell:latest
+    command: ["--disable-dev-shm-usage", "--disable-gpu", "--hide-scrollbars"]
+    shm_size: 512m
+    mem_limit: 1g
     restart: unless-stopped
 
   bootstrap-user:
