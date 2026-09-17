@@ -602,7 +602,8 @@ Dev-seed находится в `backend/cmd/seed_dev/dev.sql`, не содерж
 MUI), поэтому PDF выглядит как экран. Устройство:
 
 - `docker-compose.yml` и `docker-compose.demo.yml` поднимают сервис `chromium`
-  (`chromedp/headless-shell`, ≈150 МБ, наружу не публикуется); backend ходит в
+  (`chromedp/headless-shell`, ≈150 МБ, наружу не публикуется; production
+  override закрепляет версию образа — `CHROMIUM_IMAGE_TAG`); backend ходит в
   него по `CHROME_WS_URL` (`ws://chromium:9222`) через `chromedp`, открывает
   `REPORT_PRINT_BASE_URL` (`http://frontend/print/report`) и ждёт флага
   `window.__reportReady`, а не таймера. Один рендер за раз; страница — 60 с,
@@ -752,7 +753,7 @@ make test-e2e
 
 ## Production
 
-Production override отключает автоматическое создание БД, требует явные HTTPS-адреса и скрывает порт SQL Server от хоста:
+Production override отключает автоматическое создание БД, требует явные HTTPS-адреса, скрывает порт SQL Server от хоста и закрепляет версию образа Chromium для печати отчётов (`CHROMIUM_IMAGE_TAG`, по умолчанию та, на которой приняты PDF/PPTX):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet

@@ -322,6 +322,7 @@ frontend/           backend/
   `go.mod`, флаг `REPORT_RENDERER`); типы страничной модели — `reports/spec.go`,
   `RenderPPTX(snapshot, images)` — единственный писатель PPTX, блок без снимка
   получает только текст и таблицу. Без `CHROME_WS_URL` задание падает с
-  `failed` и текстом в логе. Сервис `chromium` добавлен и в основной
-  `docker-compose.yml`; `docker-compose.production.yml` по договорённости не
-  тронут — без сервиса `chromium` и переменных отчёты там работать не будут.
+  `failed` и текстом в логе. Сервис `chromium` добавлен в основной
+  `docker-compose.yml`; production override наследует его и переменные, а сам
+  закрепляет версию образа (`CHROMIUM_IMAGE_TAG`, по умолчанию 151.0.7922.109 —
+  на ней приняты PDF/PPTX).

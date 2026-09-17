@@ -266,6 +266,6 @@ POST /api/reports ──► снимок (как сейчас) ──► ReportJ
 Этапы 0–4 выполнены: спайк, печатный маршрут, backend-рендер, приёмка PDF/PPTX
 в Acrobat/PowerPoint, удаление векторного рендера. Векторного запасного пути
 больше нет: без Chromium задание отчёта падает с `failed`. Сервис `chromium`
-есть в основном и демо-compose; `docker-compose.production.yml` не тронут —
-перед выкладкой туда нужны сервис `chromium`, `CHROME_WS_URL`,
-`REPORT_PRINT_BASE_URL` и пересборка образа фронтенда (nginx-прокси).
+есть в основном и демо-compose; production override наследует его из основного
+и закрепляет версию образа (`CHROMIUM_IMAGE_TAG`). Перед выкладкой нужна
+пересборка образа фронтенда (nginx-прокси `/api/reports/*/print`).
